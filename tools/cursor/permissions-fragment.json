@@ -1,0 +1,38 @@
+{
+  "$doc": "RENDERED from core/policy/policy-data.json into Cursor CLI's cli-config.json vocabulary. Merged into ~/.cursor/cli-config.json by bin/leos-merge.py (NOT symlinked — Cursor CLI itself writes allowlist entries into this file). deny > allow. This static deny list is the RELIABLE secret-read + catastrophic-shell guard for Cursor (the hook may be unreliable headless).",
+  "permissions": {
+    "deny": [
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(**/.envrc)",
+      "Read(**/.netrc)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Read(~/.gnupg/**)",
+      "Read(~/.npmrc)",
+      "Read(~/.config/gh/hosts.yml)",
+      "Read(~/.docker/config.json)",
+      "Read(**/id_rsa*)",
+      "Read(**/id_ed25519*)",
+      "Read(**/id_ecdsa*)",
+      "Read(**/credentials.json)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)"
+    ],
+    "allow": [
+      "Shell(git status)",
+      "Shell(git diff)",
+      "Shell(git log)",
+      "Shell(git show)",
+      "Shell(git branch)",
+      "Shell(git add)",
+      "Shell(git commit)",
+      "Shell(gh pr view)",
+      "Shell(gh pr list)",
+      "Shell(gh issue view)",
+      "Shell(gh issue list)",
+      "Shell(gh run view)",
+      "Shell(gh run list)"
+    ]
+  }
+}

@@ -1,0 +1,90 @@
+{
+  "$doc": "COMMITTED reference roster for the review council. It is NOT the runtime config: at setup, the installer resolves each provider role to its CURRENT flagship model slug and the transport chosen for this machine, then writes local/seats.<host>.json (gitignored). Model slugs are NEVER committed here — recipes use the {MODEL} placeholder so this file never goes stale. {EFFORT} = efforts.default below the critical tier, efforts.max at critical. {PROMPT_TEXT} = the review prompt content (arg transport); stdin transport omits it and pipes the prompt file.",
+
+  "roster": [
+    {
+      "role": "opus", "provider": "anthropic",
+      "modelGuidance": "The Anthropic OPUS line specifically. Use the `opus` alias (tracks the latest Opus) or a concrete claude-opus-* id. NEVER Fable or Mythos (the Claude-5 / Mythos-class line) — setup must confirm the resolved slug is an Opus id.",
+      "recursionDisable": "--safe-mode (mechanically disables CLAUDE.md, skills, plugins, hooks, MCP)",
+      "asNative": { "mode": "subagent", "model": "{MODEL}" },
+      "asExternal": {
+        "transport": "stdin",
+        "argv": ["claude", "--safe-mode", "--print", "--permission-mode", "plan", "--model", "{MODEL}", "--effort", "{EFFORT}"],
+        "efforts": { "default": "high", "max": "xhigh" }
+      }
+    },
+    {
+      "role": "gpt", "provider": "openai",
+      "modelGuidance": "The latest Codex/GPT flagship (e.g. gpt-5.5, then gpt-5.6, ...). Resolve at setup.",
+      "recursionDisable": "isolated neutral CODEX_HOME (empty dir: no hooks.json, skills, or global AGENTS.md) + --sandbox read-only",
+      "asNative": {
+        "mode": "exec", "transport": "stdin",
+        "argv": ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort={EFFORT}", "-"],
+        "efforts": { "default": "high", "max": "xhigh" },
+        "note": "native pass uses the host's own configured model (no -m); it IS the host's model by definition"
+      },
+      "asExternal": {
+        "transport": "stdin",
+        "argv": ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort={EFFORT}", "-m", "{MODEL}", "-"],
+        "efforts": { "default": "high", "max": "xhigh" },
+        "env": { "CODEX_HOME": "{ISOLATED_CODEX_HOME}" }
+      }
+    },
+    {
+      "role": "glm", "provider": "zhipu",
+      "modelGuidance": "Latest GLM (e.g. z-ai/glm-5.2) via OpenRouter. Resolve at setup.",
+      "recursionDisable": "opencode --agent plan (read-only) + clean config dir; opencode does not load CLAUDE.md-style council mandates",
+      "asExternal": {
+        "transport": "arg",
+        "argv": ["opencode", "run", "--agent", "plan", "-m", "openrouter/{MODEL}", "--variant", "{EFFORT}", "{PROMPT_TEXT}"],
+        "efforts": { "default": "high", "max": "max" }
+      }
+    },
+    {
+      "role": "gemini", "provider": "google",
+      "modelGuidance": "Latest Gemini flagship (e.g. google/gemini-3.1-pro) via OpenRouter. Native Gemini-CLI plan mode is experimental, so OpenCode+OpenRouter is the firm read-only route. Resolve at setup.",
+      "recursionDisable": "opencode --agent plan (read-only) + clean config dir",
+      "asExternal": {
+        "transport": "arg",
+        "argv": ["opencode", "run", "--agent", "plan", "-m", "openrouter/{MODEL}", "--variant", "{EFFORT}", "{PROMPT_TEXT}"],
+        "efforts": { "default": "xhigh", "max": "max" }
+      }
+    },
+    {
+      "role": "grok", "provider": "xai",
+      "modelGuidance": "Latest Grok flagship (e.g. grok-4.5 in Cursor, or x-ai/grok-4.5 via OpenRouter). For cursor-agent, confirm the exact slug with `cursor-agent --list-models`. Resolve at setup.",
+      "recursionDisable": "cursor-agent --mode plan (read-only) in a clean project dir; or opencode --agent plan via OpenRouter",
+      "asExternalCursor": {
+        "transport": "arg",
+        "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
+        "efforts": { "default": "{EFFORT}", "max": "{EFFORT}" }
+      },
+      "asExternalOpencode": {
+        "transport": "arg",
+        "argv": ["opencode", "run", "--agent", "plan", "-m", "openrouter/{MODEL}", "--variant", "{EFFORT}", "{PROMPT_TEXT}"],
+        "efforts": { "default": "high", "max": "max" }
+      }
+    }
+  ],
+
+  "$runtimeSchema": {
+    "$doc": "Shape of the machine-local local/seats.<host>.json the installer writes and the council skill reads. `native` describes how THIS host runs its own-model read-only review pass; `seats` are the EXTERNAL seats = roster minus this host's own provider, strongest-first, with {MODEL} already resolved to a concrete slug.",
+    "host": "claude | codex | opencode | cursor",
+    "native": {
+      "mode": "subagent | exec",
+      "model": "(subagent only) resolved model, e.g. opus",
+      "transport": "(exec only) stdin | arg",
+      "argv": "(exec only) resolved command array",
+      "efforts": { "default": "high", "max": "xhigh" }
+    },
+    "seats": [
+      {
+        "name": "gpt", "provider": "openai", "transport": "stdin",
+        "argv": ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort={EFFORT}", "-m", "gpt-5.5", "-"],
+        "efforts": { "default": "high", "max": "xhigh" },
+        "env": { "CODEX_HOME": "/Users/you/.leos-agent/local/isolated-codex-home" },
+        "timeoutSeconds": 600
+      }
+    ]
+  }
+}

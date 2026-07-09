@@ -1,0 +1,11 @@
+# Machine-local config + state (never committed): seats.<host>.json, guard-config.json,
+# council/config.json, merge-state.json, backups, isolated-codex-home, setup answers.
+/local/*
+!/local/.gitkeep
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# OS cruft
+.DS_Store

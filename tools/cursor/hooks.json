@@ -1,0 +1,12 @@
+{
+  "$doc": "Cursor CLI hook registration (~/.cursor/hooks.json), symlinked from the clone. beforeShellExecution runs the guard-adapter shim; failClosed:true means a hook crash blocks. NOTE: whether cursor-agent fires this hook in headless -p mode is UNCERTAIN across versions — the static Shell(...) deny list in permissions-fragment.json (cli-config.json) is the reliable enforcement surface; this hook is defence-in-depth. Verify with the SETUP-DELTA smoke test.",
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      {
+        "command": "python3 \"$HOME\"/.cursor/hooks/guard-adapter.py",
+        "failClosed": true
+      }
+    ]
+  }
+}

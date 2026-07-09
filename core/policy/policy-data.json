@@ -1,0 +1,54 @@
+{
+  "$doc": "SINGLE SOURCE for the permission surface across all hosts. This file holds DATA only. Each host's adapter (tools/<host>/) renders it into that host's own vocabulary at setup — one data set, N labeled renderers. Never hand-edit a rendered fragment; edit here and re-render. The `renderers` block records, per host, WHETHER each surface is actually ENFORCED so the enforced-vs-advisory boundary is explicit and can never be silently crossed.",
+
+  "secretReadPatterns": [
+    "**/.env",
+    "**/.env.*",
+    "**/.envrc",
+    "**/.netrc",
+    "~/.ssh/**",
+    "~/.aws/**",
+    "~/.gnupg/**",
+    "~/.npmrc",
+    "~/.config/gh/hosts.yml",
+    "~/.docker/config.json",
+    "**/id_rsa*",
+    "**/id_ed25519*",
+    "**/id_ecdsa*",
+    "**/credentials.json",
+    "**/*.pem",
+    "**/*.key"
+  ],
+
+  "commandAllow": {
+    "$doc": "Fixed-subcommand allow rules by package manager. Setup merges 'universal' + the machine's chosen PM into the host's allow surface. Reviewed tradeoff (keep): fixed subcommands only — NO run:*/exec:*/dlx:* (arbitrary script execution) and NO ls/cat-style readers that could bypass the secret-read denies via the shell.",
+    "universal": [
+      "git status", "git diff", "git log", "git show", "git branch", "git add", "git commit",
+      "gh pr view", "gh pr list", "gh issue view", "gh issue list", "gh run view", "gh run list"
+    ],
+    "pnpm": ["pnpm test", "pnpm lint", "pnpm typecheck", "pnpm build", "pnpm install"],
+    "yarn": ["yarn test", "yarn lint", "yarn typecheck", "yarn build", "yarn install"],
+    "npm": ["npm test", "npm run lint", "npm run typecheck", "npm run build", "npm install"]
+  },
+
+  "renderers": {
+    "claude": {
+      "secretReads": { "surface": "permissions.deny Read(<glob>)", "enforcement": "enforced" },
+      "commandAllow": { "surface": "permissions.allow Bash(<cmd>:*)", "enforcement": "enforced" }
+    },
+    "codex": {
+      "secretReads": { "surface": "advisory command-policy-notes only (no declarative read-deny)", "enforcement": "ADVISORY — coverage is hook/sandbox-mediated, NOT pattern-enforced; do NOT imply parity" },
+      "commandAllow": { "surface": "advisory notes; command guarding is via the PreToolUse hook + sandbox", "enforcement": "advisory (notes) / enforced (hook+sandbox for the catastrophic-rm class only)" }
+    },
+    "opencode": {
+      "secretReads": { "surface": "opencode.json permission.read deny patterns", "enforcement": "enforced (deny survives auto mode)" },
+      "commandAllow": { "surface": "opencode.json permission.bash allow patterns", "enforcement": "enforced" }
+    },
+    "cursor": {
+      "secretReads": { "surface": "cli-config.json permissions.deny Read(<glob>)", "enforcement": "enforced (static deny is the reliable surface; the hook may be unreliable headless)" },
+      "commandAllow": { "surface": "cli-config.json permissions.allow Shell(<cmd>)", "enforcement": "enforced" }
+    }
+  },
+
+  "$contamination_guard": "NEVER paste Claude `permissions.allow`/`permissions.deny` strings into Codex or Cursor config verbatim — the vocabularies differ and Codex's secret-read coverage is advisory. CI asserts rendered Codex/Cursor config never contains a literal Claude permission string."
+}

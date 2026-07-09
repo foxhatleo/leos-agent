@@ -1,0 +1,38 @@
+{
+  "$doc": "RENDERED from core/policy/policy-data.json into OpenCode's enforced permission vocabulary. Merged into ~/.config/opencode/opencode.json by bin/leos-merge.py (user-owned file; never symlinked). `read` deny patterns block secret reads (deny is enforced even in auto mode); `bash` allow patterns pre-approve the fixed-subcommand set, everything else falls through to OpenCode's default. Schema is version-sensitive — verify keys against the installed opencode at setup.",
+  "permission": {
+    "read": {
+      "**/.env": "deny",
+      "**/.env.*": "deny",
+      "**/.envrc": "deny",
+      "**/.netrc": "deny",
+      "~/.ssh/**": "deny",
+      "~/.aws/**": "deny",
+      "~/.gnupg/**": "deny",
+      "~/.npmrc": "deny",
+      "~/.config/gh/hosts.yml": "deny",
+      "~/.docker/config.json": "deny",
+      "**/id_rsa*": "deny",
+      "**/id_ed25519*": "deny",
+      "**/id_ecdsa*": "deny",
+      "**/credentials.json": "deny",
+      "**/*.pem": "deny",
+      "**/*.key": "deny"
+    },
+    "bash": {
+      "git status *": "allow",
+      "git diff *": "allow",
+      "git log *": "allow",
+      "git show *": "allow",
+      "git branch *": "allow",
+      "git add *": "allow",
+      "git commit *": "allow",
+      "gh pr view *": "allow",
+      "gh pr list *": "allow",
+      "gh issue view *": "allow",
+      "gh issue list *": "allow",
+      "gh run view *": "allow",
+      "gh run list *": "allow"
+    }
+  }
+}

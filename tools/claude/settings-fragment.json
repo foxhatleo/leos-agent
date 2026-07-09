@@ -1,0 +1,75 @@
+{
+  "$doc": "RENDERED from core/policy/policy-data.json into Claude Code's vocabulary + hook registration. Merged into ~/.claude/settings.json by bin/leos-merge.py (never symlinked — Claude Code rewrites settings.json). permissions.deny = enforced secret-read guard; permissions.allow ships the 'universal' git/gh set only — setup appends the machine's package-manager allow (machine-local). Hook wrappers are FAIL-CLOSED: a missing/dangling script exits 2 (blocks) instead of silently passing.",
+  "permissions": {
+    "deny": [
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(**/.envrc)",
+      "Read(**/.netrc)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Read(~/.gnupg/**)",
+      "Read(~/.npmrc)",
+      "Read(~/.config/gh/hosts.yml)",
+      "Read(~/.docker/config.json)",
+      "Read(**/id_rsa*)",
+      "Read(**/id_ed25519*)",
+      "Read(**/id_ecdsa*)",
+      "Read(**/credentials.json)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)"
+    ],
+    "allow": [
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh issue view:*)",
+      "Bash(gh issue list:*)",
+      "Bash(gh run view:*)",
+      "Bash(gh run list:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'S=\"$HOME\"/.claude/hooks/bash-guard.py; [ -f \"$S\" ] || exit 2; python3 \"$S\"; ec=$?; [ \"$ec\" = 43 ] && exit 2; exit 0'",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'S=\"$HOME\"/.claude/hooks/format-on-edit.py; [ -f \"$S\" ] || exit 0; python3 \"$S\"; ec=$?; [ \"$ec\" = 44 ] && exit 2; exit 0'",
+            "timeout": 45
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'S=\"$HOME\"/.claude/council/bin/council.py; [ -f \"$S\" ] || exit 0; python3 \"$S\" hook; ec=$?; [ \"$ec\" = 42 ] && exit 2; exit 0'",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

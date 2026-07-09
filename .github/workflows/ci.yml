@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test batteries + policy boundary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"   # tomllib needs 3.11+
+      - name: Compile all Python
+        run: |
+          find . -name '*.py' -not -path './.git/*' -print0 | xargs -0 -n1 python3 -m py_compile
+      - name: Validate JSON
+        run: |
+          find . -name '*.json' -not -path './.git/*' -not -path './local/*' -print0 \
+            | xargs -0 -n1 python3 -c 'import json,sys; json.load(open(sys.argv[1]))'
+      - name: Test batteries (all must pass)
+        run: |
+          for t in guard fmt council merge link; do python3 tests/$t-tests.py; done
+      - name: Policy enforced-vs-advisory boundary
+        run: python3 tests/contamination-check.py

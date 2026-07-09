@@ -1,0 +1,19 @@
+{
+  "$doc": "Claude Code delivery map for bin/leos-link.py (symlinks) + bin/leos-merge.py (fragments). 'links' are file/dir symlinks from the tool home into the leos-agent clone; 'merges' are files Claude Code rewrites, so they are merged not linked. Paths under `src` are clone-relative; `dest` is under $HOME.",
+  "toolHome": "~/.claude",
+  "links": [
+    { "dest": "~/.claude/hooks/bash-guard.py", "src": "core/hooks/bash-guard.py" },
+    { "dest": "~/.claude/hooks/format-on-edit.py", "src": "core/hooks/format-on-edit.py" },
+    { "dest": "~/.claude/council/bin/council.py", "src": "core/council/bin/council.py" },
+    { "dest": "~/.claude/skills/council", "src": "core/skills/council", "type": "dir", "note": "Claude follows symlinked skill dirs (docs-confirmed)" },
+    { "dest": "~/.claude/CLAUDE.md", "src": "global/AGENTS.md", "note": "bare symlink; Claude reads it as CLAUDE.md" }
+  ],
+  "merges": [
+    { "dest": "~/.claude/settings.json", "fragment": "tools/claude/settings-fragment.json", "strategy": "merge-json" }
+  ],
+  "machineLocal": [
+    { "path": "local/guard-config.json", "note": "optional {\"homeToplevel\":[...]}; generated at setup" },
+    { "path": "local/council/config.json", "note": "{\"disabledProjects\":[]}; generated at setup" },
+    { "path": "local/seats.claude.json", "note": "native=Opus subagent + external roster {GPT,GLM,Gemini,Grok}; written at setup" }
+  ]
+}

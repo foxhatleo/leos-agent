@@ -1,0 +1,18 @@
+{
+  "$doc": "OpenCode delivery map. The guard is a plugin (tool.execute.before), not an exit-2 hook. Skills go to ~/.agents/skills (OpenCode reads it natively). opencode.json is merged. NOTE: OpenCode has no documented Stop-event hook, so the council Stop-nudge is NOT wired here — the council still runs via the skill + global AGENTS.md mandate.",
+  "toolHome": "~/.config/opencode",
+  "links": [
+    { "dest": "~/.config/opencode/plugin/leos-guard.ts", "src": "tools/opencode/plugin/leos-guard.ts", "note": "Node resolves the symlink; plugin self-locates core/hooks/bash-guard.py" },
+    { "dest": "~/.config/opencode/council/bin/council.py", "src": "core/council/bin/council.py", "note": "BIN for the council skill on OpenCode host" },
+    { "dest": "~/.agents/skills/council", "src": "core/skills/council", "type": "dir", "note": "OpenCode reads ~/.agents/skills natively; shared symlink" },
+    { "dest": "~/.config/opencode/AGENTS.md", "src": "global/AGENTS.md" }
+  ],
+  "merges": [
+    { "dest": "~/.config/opencode/opencode.json", "fragment": "tools/opencode/opencode-fragment.json", "strategy": "merge-json" }
+  ],
+  "machineLocal": [
+    { "path": "local/guard-config.json", "note": "shared optional guard extras" },
+    { "path": "local/council/config.json", "note": "shared disabledProjects" },
+    { "path": "local/seats.opencode.json", "note": "native=opencode --agent plan (host model) + external roster minus this host's model" }
+  ]
+}

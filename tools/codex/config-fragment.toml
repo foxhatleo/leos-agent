@@ -1,0 +1,7 @@
+# Merged into ~/.codex/config.toml by bin/leos-merge.py (merge-toml, round-trip checked,
+# backs up first). NOT symlinked — Codex rewrites config.toml (trust/plugin state, mode 0600).
+# Keep this fragment minimal: taste/behaviour keys only, never secrets.
+
+# Enable the lifecycle hooks registered in ~/.codex/hooks.json.
+[features]
+hooks = true
