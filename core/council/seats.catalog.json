@@ -9,36 +9,36 @@
       "asNative": { "mode": "subagent", "model": "{MODEL}" },
       "asExternal": {
         "transport": "stdin",
-        "argv": ["claude", "--safe-mode", "--print", "--permission-mode", "plan", "--model", "{MODEL}", "--effort", "{EFFORT}"],
+        "argv": ["claude", "--safe-mode", "--print", "--no-session-persistence", "--permission-mode", "plan", "--model", "{MODEL}", "--effort", "{EFFORT}"],
         "efforts": { "default": "high", "max": "xhigh" }
       },
       "asExternalCursor": {
         "transport": "arg",
         "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
-        "efforts": { "default": "{EFFORT}", "max": "{EFFORT}" },
+        "efforts": { "default": "high", "max": "xhigh" },
         "note": "Opus-line model via Cursor when the claude CLI is absent (confirm the Cursor slug is an Opus id with `cursor-agent --list-models`). Isolation = read-only `--mode plan` in a clean dir — weaker than native `--safe-mode`; acceptable fallback."
       }
     },
     {
       "role": "gpt", "provider": "openai",
       "modelGuidance": "The latest Codex/GPT flagship. Resolve its transport-specific slug at setup; never commit it.",
-      "recursionDisable": "isolated neutral CODEX_HOME (empty dir: no hooks.json, skills, or global AGENTS.md) + --sandbox read-only",
+      "recursionDisable": "LEOS_COUNCIL_SEAT sentinel + --ephemeral + --sandbox read-only; normal CODEX_HOME is retained for authentication",
       "asNative": {
         "mode": "exec", "transport": "stdin",
-        "argv": ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort={EFFORT}", "-"],
+        "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort={EFFORT}", "-"],
         "efforts": { "default": "high", "max": "xhigh" },
         "note": "native pass uses the host's own configured model (no -m); it IS the host's model by definition"
       },
       "asExternal": {
         "transport": "stdin",
-        "argv": ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort={EFFORT}", "-m", "{MODEL}", "-"],
+        "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort={EFFORT}", "-m", "{MODEL}", "-"],
         "efforts": { "default": "high", "max": "xhigh" },
-        "env": { "CODEX_HOME": "{ISOLATED_CODEX_HOME}" }
+        "note": "Uses the host's normal authentication. --ephemeral prevents session files; the inherited LEOS_COUNCIL_SEAT sentinel mechanically refuses nested Leo councils."
       },
       "asExternalCursor": {
         "transport": "arg",
         "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
-        "efforts": { "default": "{EFFORT}", "max": "{EFFORT}" },
+        "efforts": { "default": "high", "max": "xhigh" },
         "note": "GPT/OpenAI model via Cursor when the codex CLI is absent (confirm the Cursor slug with `cursor-agent --list-models`). Isolation = read-only `--mode plan` in a clean dir instead of an isolated CODEX_HOME."
       }
     },
@@ -54,7 +54,7 @@
       "asExternalCursor": {
         "transport": "arg",
         "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
-        "efforts": { "default": "{EFFORT}", "max": "{EFFORT}" },
+        "efforts": { "default": "high", "max": "xhigh" },
         "note": "GLM via Cursor when opencode is absent — only if `cursor-agent --list-models` lists a GLM slug; {MODEL} is the Cursor slug, not the OpenRouter one."
       }
     },
@@ -70,7 +70,7 @@
       "asExternalCursor": {
         "transport": "arg",
         "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
-        "efforts": { "default": "{EFFORT}", "max": "{EFFORT}" },
+        "efforts": { "default": "high", "max": "xhigh" },
         "note": "Gemini via Cursor when opencode is absent — only if `cursor-agent --list-models` lists a Gemini slug; {MODEL} is the Cursor slug, not the OpenRouter one."
       }
     },
@@ -81,7 +81,7 @@
       "asExternalCursor": {
         "transport": "arg",
         "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
-        "efforts": { "default": "{EFFORT}", "max": "{EFFORT}" }
+        "efforts": { "default": "high", "max": "xhigh" }
       },
       "asExternalOpencode": {
         "transport": "arg",
@@ -106,9 +106,8 @@
     "seats": [
       {
         "name": "gpt", "provider": "openai", "transport": "stdin",
-        "argv": ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort={EFFORT}", "-m", "{MODEL}", "-"],
+        "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort={EFFORT}", "-m", "{MODEL}", "-"],
         "efforts": { "default": "high", "max": "xhigh" },
-        "env": { "CODEX_HOME": "/Users/you/.leos-agent/local/isolated-codex-home" },
         "adapter": "codex",
         "timeoutSeconds": 300
       }

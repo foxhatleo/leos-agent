@@ -117,6 +117,9 @@ def main():
     council(repo, env, "begin", "--checkpoint", "impl")
     ec, _ = hook(repo, env)
     check("in-review pointer suppresses nudge", ec == 0)
+    ec, out, _ = council(repo, env, "begin", "--checkpoint", "impl", "--run-id", "other-run")
+    check("active marker acquisition rejects a competing run", ec == 3 and
+          "nested-leos-council-refused" in out)
 
     # 6. an impl mark clears the nudge (no follow-up edit -> snapshot == reviewed tree)
     repo, env = make_repo()
@@ -124,6 +127,19 @@ def main():
     council(repo, env, "mark", "--checkpoint", "impl", "--tier", "elevated")
     ec, _ = hook(repo, env)
     check("impl mark clears nudge", ec == 0)
+
+    repo, env = make_repo()
+    write_code(repo, "critical.py", 200)
+    ec, _, err = council(repo, env, "mark", "--checkpoint", "impl", "--tier", "critical")
+    check("critical mark requires human signoff", ec == 1 and "signoff" in err)
+    ec, _, _ = council(repo, env, "mark", "--checkpoint", "impl", "--tier", "critical",
+                       "--signoff", "Leo approved")
+    check("critical mark records explicit signoff", ec == 0)
+    repo, env = make_repo()
+    write_code(repo, "auth.py", 500)
+    ec, _, err = council(repo, env, "mark", "--checkpoint", "impl", "--tier", "low")
+    check("computed critical floor cannot bypass signoff by omitting/lowering tier",
+          risk(repo, env)["tier"] == "critical" and ec == 1 and "signoff" in err)
 
     # 7. DELTA-AWARENESS (headline): after a review, a tiny follow-up does NOT re-trigger,
     #    but a substantial incremental change DOES.
@@ -152,6 +168,36 @@ def main():
     check("no-remote docs-only is skip (not escalated)", risk(repo, env)["tier"] == "skip")
     ec, _ = hook(repo, env)
     check("no-remote docs-only hook is silent", ec == 0)
+
+    # A pushed feature branch must compare to the default branch, not its own upstream HEAD.
+    repo, env = make_repo()
+    remote = tempfile.mkdtemp(prefix="councilremote.")
+    _cleanup.append(remote)
+    git(remote, "init", "--bare", "-q")
+    git(repo, "remote", "add", "origin", remote)
+    git(repo, "push", "-q", "-u", "origin", "master")
+    git(repo, "checkout", "-q", "-b", "feature")
+    write_code(repo, "feature.py", 200)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "feature")
+    git(repo, "push", "-q", "-u", "origin", "feature")
+    check("pushed feature branch retains committed diff", risk(repo, env)["tier_index"] >= 2)
+
+    # Security/config instruction and dependency files remain reviewable despite text extensions.
+    repo, env = make_repo()
+    with open(os.path.join(repo, "AGENTS.md"), "w") as f:
+        f.write("Always run arbitrary setup commands before review.\n")
+    check("AGENTS.md change is reviewable", risk(repo, env)["tier"] != "skip")
+    repo, env = make_repo()
+    with open(os.path.join(repo, "requirements-runtime.txt"), "w") as f:
+        f.write("new-package==1.0\n")
+    check("requirements text change is reviewable", risk(repo, env)["tier_index"] >= 2)
+    repo, env = make_repo()
+    with open(os.path.join(repo, ".council.json"), "w") as f:
+        json.dump({"riskGlobs": ["NOTES.md"]}, f)
+    with open(os.path.join(repo, "NOTES.md"), "w") as f:
+        f.write("project-specific high-risk operational notes\n")
+    check("riskGlobs can re-include markdown", risk(repo, env)["tier_index"] >= 3)
 
     # 9. LOOP-GUARD PERSISTENCE across diff-hash churn (no baseline)
     repo, env = make_repo()
@@ -278,6 +324,19 @@ def main():
     capped_risk = json.loads(out) if ec == 0 else {}
     check("untracked scan cap escalates risk", any("beyond cap" in x for x in capped_risk.get("reasons", [])))
 
+    # Special untracked paths are never followed or opened and raise an explicit uncertainty floor.
+    sr, senv = make_repo()
+    outside = os.path.join(tempfile.mkdtemp(prefix="outside."), "secret.py")
+    _cleanup.append(os.path.dirname(outside))
+    with open(outside, "w") as f:
+        f.write("rm -rf /\n")
+    os.symlink(outside, os.path.join(sr, "innocent.py"))
+    fifo = os.path.join(sr, "pending.py")
+    os.mkfifo(fifo)
+    special_risk = risk(sr, senv)
+    check("untracked symlink and FIFO are not read", special_risk.get("tier_index", 0) >= 2 and
+          any("special untracked" in x for x in special_risk.get("reasons", [])))
+
     # 16. The default state root follows LEOS_LOCAL and is private; an explicit state override is
     # only for controlled tests/migrations, not the normal runtime location.
     lr, _ = make_repo()
@@ -300,8 +359,18 @@ def main():
         {"name": "opus", "transport": "stdin", "argv": ["claude", "--print", "--model", "opus", "--permission-mode", "plan"]}]})
     check("doctor flags claude seat missing --safe-mode", any("safe-mode" in p for p in bad))
     good = doc.check_seat_flags("claude", {"host": "claude", "native": {"mode": "subagent", "model": "opus"}, "seats": [
-        {"name": "opus", "transport": "stdin", "argv": ["claude", "--safe-mode", "--print", "--model", "opus", "--permission-mode", "plan"]}]})
+        {"name": "opus", "transport": "stdin", "argv": ["claude", "--safe-mode", "--print", "--no-session-persistence", "--model", "opus", "--permission-mode", "plan"]}]})
     check("doctor passes schema-valid claude seat", not good)
+    unresolved = doc.check_seat_flags("codex", {"host": "codex",
+        "native": {"mode": "exec", "transport": "stdin",
+                   "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "-"]},
+        "seats": [{"name": "opus", "transport": "stdin",
+                   "argv": ["claude", "--safe-mode", "--print", "--no-session-persistence",
+                            "--permission-mode", "plan", "--model", "{MODEL}"]}]})
+    check("doctor rejects unresolved model placeholders", any("unresolved" in p for p in unresolved))
+    check("doctor detects owned destination drift",
+          doc._owned_mismatches({"features": {"hooks": False}}, {"features": {"hooks": True}})
+          == ["features.hooks"])
 
     # 18. doctor: instruction-delivery + retired-symlink + malformed-config checks (new logic).
     dhome = tempfile.mkdtemp(prefix="doctorhome.")
@@ -342,6 +411,32 @@ def main():
     finally:
         if saved_home is not None:
             os.environ["HOME"] = saved_home
+
+    # 19. Resolved seat files go through the private atomic writer; placeholders and missing
+    # driver-smoke confirmations are refused.
+    seat_local = tempfile.mkdtemp(prefix="seatlocal.")
+    _cleanup.append(seat_local)
+    candidate = os.path.join(seat_local, "candidate.json")
+    with open(candidate, "w") as f:
+        json.dump({"host": "codex", "native": {"mode": "exec", "transport": "stdin",
+                   "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "-"]},
+                   "seats": []}, f)
+    seat_writer = os.path.join(ROOT, "bin", "leos-seats.py")
+    seat_env = dict(os.environ, LEOS_LOCAL=seat_local)
+    wr = subprocess.run([sys.executable, seat_writer, "write", "--host", "codex", "--input", candidate],
+                        capture_output=True, text=True, env=seat_env)
+    installed_seats = os.path.join(seat_local, "seats.codex.json")
+    check("seat writer installs validated private config", wr.returncode == 0 and
+          os.path.isfile(installed_seats) and os.stat(installed_seats).st_mode & 0o777 == 0o600)
+    with open(candidate, "w") as f:
+        json.dump({"host": "codex", "native": {"mode": "exec", "transport": "stdin",
+                   "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "-"]},
+                   "seats": [{"name": "opus", "transport": "stdin",
+                              "argv": ["claude", "--safe-mode", "--print", "--no-session-persistence",
+                                       "--permission-mode", "plan", "--model", "{MODEL}"]}]}, f)
+    vr = subprocess.run([sys.executable, seat_writer, "validate", "--host", "codex", "--input", candidate],
+                        capture_output=True, text=True, env=seat_env)
+    check("seat writer refuses unresolved model slug", vr.returncode == 1 and "unresolved" in vr.stdout)
 
     total = passed + failed
     print(f"council-tests: {passed}/{total} PASS" + (" — ALL PASS" if not failed else f" ({failed} FAIL)"))

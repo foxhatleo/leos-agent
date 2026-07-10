@@ -31,5 +31,6 @@ jobs:
           bin/leos-python tests/link-tests.py
           bin/leos-python tests/block-tests.py
           bin/leos-python tests/inject-tests.py
+          bin/leos-python tests/uninstall-tests.py
           bin/leos-python tests/contamination-check.py
           bin/leos-python bin/leos-doctor.py

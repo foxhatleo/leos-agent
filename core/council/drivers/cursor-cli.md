@@ -37,3 +37,6 @@ instead (the current Grok OpenRouter slug resolved at setup).
 
 **Native use (host IS Cursor):** `cursor-agent -p --mode plan {PROMPT_TEXT}` with no `--model`
 (host's own model).
+
+**Session privacy:** no non-persistence flag is assumed without an installed-version contract test.
+External dispatch requires explicit project-send approval; setup discloses possible session retention.

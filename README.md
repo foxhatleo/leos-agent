@@ -7,12 +7,13 @@ Cursor** — from one repo, one source of truth. It installs a small, shared lay
   homes / recursive `chmod` of system paths on each host's documented hook/plugin surface. Codex
   interception is necessarily partial for some shell execution paths; it is a safety backstop, not
   a complete command-policy sandbox.
-- **A format-on-edit hook** (auto-format + lint feedback for JS/TS, Python, Go, Rust).
+- **A trust-gated format-on-edit hook** (auto-format + lint feedback for JS/TS, Python, Go, Rust
+  only after the project root is explicitly listed in gitignored `local/format-trust.json`).
 - **A multi-model review council**: your host's own model reviews your work alongside other-lineage
   flagships (Opus, GPT, GLM, Gemini, Grok), at plan and implementation checkpoints. An explicit
   runner records every CLI seat's completed/empty/invalid/error/timeout result and prevents nested
   Leo's Agents councils; seats may still use ordinary subagents.
-- **A shared permission layer** (secret-read denies + a fixed-subcommand allowlist), rendered into
+- **A shared permission layer** (secret-read denies + a read-only fixed-subcommand allowlist), rendered into
   each tool's own enforcement vocabulary.
 
 One `AGENTS.md` serves every tool for instructions; one `SKILL.md` for the council; one
@@ -50,9 +51,10 @@ host-hook `python3`.
 ```sh
 git -C ~/.leos-agent pull
 ```
-Because payloads are **symlinked** from each tool home into the clone, `git pull` updates hooks,
-the council engine, the skill, and prompts instantly. Then refresh/check the private runtime and
-run doctor:
+Because executable payloads are symlinked from each tool home into the clone, `git pull` updates
+them instantly. Host-owned JSON/TOML files—including Codex/Cursor hook registries—are additive
+ownership-tracked merges and must be refreshed after a fragment changes. Refresh the runtime,
+reapply the configured-host merges reported by doctor, then check again:
 ```sh
 python3 ~/.leos-agent/bin/leos-runtime.py setup --refresh
 ~/.leos-agent/bin/leos-python ~/.leos-agent/bin/leos-doctor.py
@@ -67,15 +69,20 @@ It only checks hosts recorded during Leo setup, not every config directory that 
 | `core/` | The single source of truth — guard, formatter, council engine + skill + prompts, shared policy data. Everything here is symlink-target material. |
 | `global/AGENTS.md` | Canonical instructions, delivered additively where a host supports it; Cursor remains per-project. |
 | `tools/<host>/` | Thin per-host adapters: the settings/permission fragment, the symlink map, and setup deltas. No logic or prose forks. |
-| `bin/` | `leos-runtime` (private venv), `leos-python` (launcher), `leos-link`, `leos-merge`, `leos-render-policy`, and `leos-doctor`. |
+| `bin/` | Private runtime/launcher, link/merge/block tools, validated seat writer, ownership-safe uninstaller, policy renderer, and doctor. |
 | `local/` | **Gitignored** machine-local config and all Leo runtime data: venv, resolved seats, guard extras, merge state/backups, council state/work/results. |
-| `tests/` | Guard / formatter / council / merge / link batteries. |
+| `tests/` | Guard / formatter / council / runner / merge / link / block / inject / uninstall batteries. |
 
 ## Uninstall
 
-Remove the symlinks a host owns and restore its config from the backups `leos-merge` wrote to
-`local/backups/`. (A dedicated uninstaller may come later; for now the links are visible with
-`ls -l` and safe to remove.)
+Run the ownership-safe uninstaller for each configured host:
+
+```sh
+bin/leos-python bin/leos-uninstall.py --tool <claude|codex|opencode|cursor>
+```
+
+It removes only Leo-owned links, merge values, and managed instruction blocks; later user edits
+are preserved. Whole-file backups under `local/backups/` are disaster recovery, not uninstall state.
 
 ## License
 

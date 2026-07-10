@@ -2,9 +2,8 @@
 """Render the policy-owned portions of host fragments from core/policy/policy-data.json.
 
 The host files still carry host-specific hooks and explanatory `$doc` fields, but their permission
-surfaces are generated here.  Use ``--check`` in CI/review and ``--write`` only when intentionally
-changing the single policy source.  Setup-time package-manager permissions stay machine-local and
-are applied by ``leos-merge --tool claude --package-manager …``.
+surfaces are generated here. Use ``--check`` in CI/review and ``--write`` only when intentionally
+changing the single policy source. Package-manager lifecycle commands are deliberately absent.
 """
 
 import argparse
@@ -20,6 +19,7 @@ TARGETS = {
     "claude": os.path.join(ROOT, "tools", "claude", "settings-fragment.json"),
     "opencode": os.path.join(ROOT, "tools", "opencode", "opencode-fragment.json"),
     "cursor": os.path.join(ROOT, "tools", "cursor", "permissions-fragment.json"),
+    "codex": os.path.join(ROOT, "tools", "codex", "command-policy-notes.json"),
 }
 
 
@@ -44,6 +44,10 @@ def expected(policy):
             "deny": [f"Read({p})" for p in patterns],
             "allow": [f"Shell({c})" for c in commands],
         }},
+        "codex": {"allowGuidance": {
+            "universal": commands,
+            "pnpm": [], "yarn": [], "npm": [],
+        }, "secretReadGuidance": patterns},
     }
 
 
@@ -51,6 +55,9 @@ def replace_policy_fields(host, doc, want):
     out = copy.deepcopy(doc)
     if host == "opencode":
         out["permission"] = want["permission"]
+    elif host == "codex":
+        out["allowGuidance"] = want["allowGuidance"]
+        out["secretReadGuidance"] = want["secretReadGuidance"]
     else:
         out["permissions"] = want["permissions"]
     return out

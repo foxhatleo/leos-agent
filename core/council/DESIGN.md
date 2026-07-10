@@ -17,8 +17,8 @@ machine-local `local/seats.<host>.json`.
 
 ## 1. Design principles
 
-1. **The author must not decide how hard it gets checked.** The primary gate is objective
-   (diff-derived), not self-assessed confidence. Confidence may only *escalate*, never lower.
+1. **The author must not decide how hard it gets checked.** The gate is the diff-derived risk
+   floor. Reviewer confidence is finding metadata, not an author control that rewrites the tier.
 2. **Capability first on the common path; diversity where stakes are high.** The strong native
    model is the everyday baseline; foreign lineages are added as stakes rise, where their different
    failure distributions earn their cost.
@@ -43,8 +43,8 @@ committed (recipes carry a `{MODEL}` placeholder; see `seats.catalog.json`):
 
 | Role | Provider | Transport (default) | Read-only | Recursion isolation |
 |---|---|---|---|---|
-| **Opus** | Anthropic | `claude --safe-mode --print --permission-mode plan` | plan mode | `--safe-mode` (real) |
-| **GPT** | OpenAI | `codex exec --sandbox read-only -m {MODEL}` | sandbox read-only | isolated neutral `CODEX_HOME` |
+| **Opus** | Anthropic | `claude --safe-mode --no-session-persistence --print` | plan mode | `--safe-mode` (real) |
+| **GPT** | OpenAI | `codex exec --ephemeral --sandbox read-only -m {MODEL}` | sandbox read-only | sentinel + ephemeral session |
 | **GLM** | Zhipu | `opencode run --agent plan -m openrouter/{MODEL}` | plan agent | clean config dir |
 | **Gemini** | Google | `opencode run --agent plan -m openrouter/{MODEL}` | plan agent | clean config dir |
 | **Grok** | xAI | `cursor-agent -p --mode plan` *or* `opencode … openrouter/{MODEL}` | plan mode | clean project dir |
@@ -68,12 +68,10 @@ committed (recipes carry a `{MODEL}` placeholder; see `seats.catalog.json`):
 
 ## 3. The gate (hybrid, capped + logged)
 
-**Final tier = max(risk_floor, min(confidence_tier, risk_floor + 1)).** `risk_floor` is computed by
-`council.py risk` from the diff (path/shape + semantic signals — risk-path globs, blast radius,
-deletions, new deps/env, exported-API changes, removed assertions, security symbols, config
-surface). The author's self-assessed confidence may escalate **at most one tier**, never below the
-floor; every escalation is logged. The floor is a *proxy*, not tamper-proof — the ledger + sampled
-audit are the compensating controls.
+The final tier is the risk floor computed by `council.py risk` from the diff (path/shape + semantic
+signals—risk-path globs, blast radius, deletions, new deps/env, exported-API changes, removed
+assertions, security symbols, and config surface). The floor is a proxy, not tamper-proof; the
+ledger and sampled audit are the compensating controls.
 
 **Escalate only on a genuinely undeterminable base** (a git-diff failure or a diff past the parse
 cap) — a repo with no upstream/remote is NOT undeterminable: diffing against HEAD is a legitimate
@@ -157,8 +155,9 @@ back to a single strong reviewer and record `fallback-fired`.
 ## 7. Scope & configuration
 
 Global but risk-gated (dormant on trivial work). Per-project off-switch: `.council-off`. Machine
-config: `local/council/config.json` (`disabledProjects`). Per-project `.council.json`: fast/slow
-check commands, default branch, thresholds, budget.
+config: `local/council/config.json` (`disabledProjects`). Valid per-project `.council.json` fields
+are `riskGlobs`, `defaultBranch`, and the four documented `thresholds`. Deterministic checks are
+orchestrator-owned prompt inputs; the engine never executes repository commands from config.
 
 ---
 

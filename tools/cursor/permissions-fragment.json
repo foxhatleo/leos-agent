@@ -1,5 +1,5 @@
 {
-  "$doc": "RENDERED from core/policy/policy-data.json into Cursor CLI's cli-config.json vocabulary. Merged into ~/.cursor/cli-config.json by bin/leos-merge.py (NOT symlinked — Cursor CLI itself writes allowlist entries into this file). deny > allow. This static deny list is the RELIABLE secret-read + catastrophic-shell guard for Cursor (the hook may be unreliable headless).",
+  "$doc": "RENDERED from core/policy/policy-data.json into Cursor CLI's cli-config.json vocabulary. Merged into ~/.cursor/cli-config.json by bin/leos-merge.py (NOT symlinked \u2014 Cursor CLI itself writes allowlist entries into this file). The static deny list covers secret reads only. Catastrophic-shell protection is provided by beforeShellExecution when the installed Cursor build fires that hook; setup must smoke-test it and report the limitation when headless hooks are unavailable.",
   "permissions": {
     "deny": [
       "Read(**/.env)",
@@ -25,8 +25,6 @@
       "Shell(git log)",
       "Shell(git show)",
       "Shell(git branch)",
-      "Shell(git add)",
-      "Shell(git commit)",
       "Shell(gh pr view)",
       "Shell(gh pr list)",
       "Shell(gh issue view)",

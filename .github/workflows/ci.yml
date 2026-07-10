@@ -17,15 +17,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"   # tomllib needs 3.11+
+      - name: Create private runtime
+        run: python3 bin/leos-runtime.py setup --python python3
       - name: Compile all Python
         run: |
-          find . -name '*.py' -not -path './.git/*' -print0 | xargs -0 -n1 python3 -m py_compile
+          find . -name '*.py' -not -path './.git/*' -not -path './local/*' -print0 \
+            | xargs -0 -n1 bin/leos-python -m py_compile
       - name: Validate JSON
         run: |
           find . -name '*.json' -not -path './.git/*' -not -path './local/*' -print0 \
-            | xargs -0 -n1 python3 -c 'import json,sys; json.load(open(sys.argv[1]))'
+            | xargs -0 -n1 bin/leos-python -c 'import json,sys; json.load(open(sys.argv[1]))'
+      - name: Validate rendered policy
+        run: bin/leos-python bin/leos-render-policy.py --check
       - name: Test batteries (all must pass)
         run: |
-          for t in guard fmt council merge link block inject; do python3 tests/$t-tests.py; done
+          for t in guard fmt council runner merge link block inject uninstall; do bin/leos-python tests/$t-tests.py; done
       - name: Policy enforced-vs-advisory boundary
-        run: python3 tests/contamination-check.py
+        run: bin/leos-python tests/contamination-check.py
+      - name: Doctor
+        run: bin/leos-python bin/leos-doctor.py

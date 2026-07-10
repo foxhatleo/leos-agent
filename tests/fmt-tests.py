@@ -44,7 +44,8 @@ def shim(binpath, exit_code, stderr=""):
 
 def run_hook(home, payload):
     r = subprocess.run([sys.executable, FMT], input=json.dumps(payload), capture_output=True, text=True,
-                       env=dict(os.environ, HOME=home, PATH=os.path.join(home, "bin") + ":" + os.environ["PATH"]))
+                       env=dict(os.environ, HOME=home, PATH=os.path.join(home, "bin") + ":" + os.environ["PATH"],
+                                LEOS_FORMAT_TRUST=os.path.join(home, "format-trust.json")))
     return r.returncode, r.stderr
 
 
@@ -70,6 +71,10 @@ def main():
         f.write("const x = 1\n")
     shim(os.path.join(home, "bin", "eslint"), 1, stderr="a.js:1:1 error no-unused-vars")
     ec, err = run_hook(home, {"tool_name": "Edit", "tool_input": {"file_path": jsfile}})
+    check("untrusted project executes no formatter", ec == 0 and not err)
+    with open(os.path.join(home, "format-trust.json"), "w") as f:
+        json.dump({"projects": [proj]}, f)
+    ec, err = run_hook(home, {"tool_name": "Edit", "tool_input": {"file_path": jsfile}})
     check("eslint lint feedback -> exit 44", ec == 44)
     check("feedback mentions the tool", "eslint" in err)
 
@@ -87,6 +92,20 @@ def main():
     shim(os.path.join(home, "bin", "ruff"), 1, stderr="b.py:1:1 F401")
     ec, err = run_hook(home, {"tool_name": "Edit", "tool_input": {"file_path": pyfile}})
     check("ruff feedback -> exit 44", ec == 44)
+
+    # Rust edits may run rustfmt after trust, but never cargo/clippy (which can execute build.rs).
+    rsfile = os.path.join(proj, "lib.rs")
+    with open(rsfile, "w") as f:
+        f.write("fn main() {}\n")
+    with open(os.path.join(proj, "Cargo.toml"), "w") as f:
+        f.write('[package]\nname = "test"\nversion = "0.1.0"\n')
+    marker = os.path.join(home, "cargo-ran")
+    with open(os.path.join(home, "bin", "cargo"), "w") as f:
+        f.write(f"#!/bin/sh\ntouch '{marker}'\nexit 1\n")
+    os.chmod(os.path.join(home, "bin", "cargo"), 0o755)
+    shim(os.path.join(home, "bin", "rustfmt"), 0)
+    ec, err = run_hook(home, {"tool_name": "Edit", "tool_input": {"file_path": rsfile}})
+    check("Rust edit never invokes cargo clippy", ec == 0 and not os.path.exists(marker))
 
     # unknown extension -> no-op (exit 0)
     other = os.path.join(proj, "c.txt")

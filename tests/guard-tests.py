@@ -45,6 +45,11 @@ BLOCK = [
     "dd if=/dev/zero of=/dev/disk0",   # raw device write
     "mkfs.ext4 /dev/sda1",             # filesystem format
     "rm -Rf /System",
+    "if true; then rm -rf /; fi",
+    "while true; do rm -rf /usr; done",
+    "for x in one; do rm -rf ~/Documents; done",
+    "if rm -rf /etc; then true; fi",
+    "cleanup(){ rm -rf /var; }",
 ]
 
 ALLOW = [
@@ -62,6 +67,7 @@ ALLOW = [
     "echo rm -rf /",                   # not actually rm (echo)
     "chmod +x ./script.sh",            # non-recursive chmod
     "chmod -R 755 ./mydir",            # recursive chmod of a project dir
+    "echo then rm -rf /",              # shell keywords as data are not executable positions
 ]
 
 

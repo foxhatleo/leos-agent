@@ -35,3 +35,7 @@ absolute OS-level containment guarantee.
 
 **Native use (host IS OpenCode):** `opencode run --agent plan {PROMPT_TEXT}` with no `-m` (host's
 own model).
+
+**Session privacy:** the supported CLI contract has no verified non-persistence switch. External
+dispatch therefore requires explicit project-send approval, and setup discloses possible retained
+provider session metadata.

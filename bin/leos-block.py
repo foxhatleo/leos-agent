@@ -62,6 +62,23 @@ def ensure_in_text(text, marker, import_abs):
     return text.rstrip("\n") + "\n\n" + blk + "\n"
 
 
+def remove_from_text(text, marker):
+    """Remove exactly the managed marker block while preserving all foreign content."""
+    begin = f"<!-- {marker} BEGIN -->"
+    end = f"<!-- {marker} END -->"
+    if begin not in text or end not in text:
+        return text
+    i = text.index(begin)
+    j = text.index(end, i) + len(end)
+    before = text[:i].rstrip("\n")
+    after = text[j:].lstrip("\n")
+    if before and after:
+        return before + "\n\n" + after
+    if before:
+        return before + "\n"
+    return after
+
+
 def _backup(path):
     if not os.path.exists(path):
         return None
@@ -182,6 +199,26 @@ def ensure_block(dest_key, marker, import_abs, do_write):
     return _ensure_realfile(dest, marker, import_abs, do_write, dest_key)
 
 
+def remove_block(dest_key, marker):
+    dest = _resolve(dest_key)
+    target = os.path.realpath(dest) if os.path.islink(dest) else dest
+    if not (target == HOME or target.startswith(HOME + os.sep)):
+        return {"dest": dest_key, "ok": False, "state": "target outside HOME"}
+    try:
+        with open(target, encoding="utf-8") as f:
+            current = f.read()
+    except FileNotFoundError:
+        return {"dest": dest_key, "ok": True, "action": "absent"}
+    except OSError as e:
+        return {"dest": dest_key, "ok": False, "state": f"unreadable: {e}"}
+    updated = remove_from_text(current, marker)
+    if updated == current:
+        return {"dest": dest_key, "ok": True, "action": "absent"}
+    _backup(target)
+    _write(target, updated)
+    return {"dest": dest_key, "ok": True, "action": "removed"}
+
+
 def blocks_for(tool):
     with open(os.path.join(REPO_ROOT, "tools", tool, "linkmap.json")) as f:
         lm = json.load(f)
@@ -192,13 +229,15 @@ def main():
     ap = argparse.ArgumentParser(prog="leos-block.py")
     ap.add_argument("--tool", required=True, choices=["claude", "codex", "opencode", "cursor"])
     ap.add_argument("--check", action="store_true")
+    ap.add_argument("--remove", action="store_true")
     args = ap.parse_args()
 
     results, problems = [], False
     with _block_lock():
         for b in blocks_for(args.tool):
             import_abs = os.path.join(REPO_ROOT, b["import"])
-            r = ensure_block(b["dest"], b["marker"], import_abs, not args.check)
+            r = remove_block(b["dest"], b["marker"]) if args.remove else \
+                ensure_block(b["dest"], b["marker"], import_abs, not args.check)
             if not r.get("ok"):
                 problems = True
             results.append(r)

@@ -51,8 +51,10 @@ def sha_text(text):
 
 def expand(dest):
     """Expand a dest and REFUSE anything outside $HOME (all host homes live under it).
-    realpath kills ../ traversal and symlink tricks."""
-    path = os.path.realpath(os.path.expanduser(_expand_home_token(dest)))
+    Resolve parents but not the final component so a legacy fragment symlink can be classified and
+    replaced instead of following it into the clone."""
+    raw = os.path.abspath(os.path.expanduser(_expand_home_token(dest)))
+    path = os.path.join(os.path.realpath(os.path.dirname(raw)), os.path.basename(raw))
     if not (path == HOME or path.startswith(HOME + os.sep)):
         raise SystemExit(f"refusing dest outside HOME: {dest}")
     return path
@@ -143,6 +145,106 @@ def dump_toml(data):
     if tomllib.loads(text) != data:
         raise ValueError("TOML serialization round-trip mismatch — refusing to write")
     return text
+
+
+def _toml_inline_comment(line):
+    quote = None
+    escaped = False
+    for index, char in enumerate(line):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\" and quote == '"':
+            escaped = True
+        elif char in ("'", '"'):
+            quote = None if quote == char else (char if quote is None else quote)
+        elif char == "#" and quote is None:
+            return line[index:].rstrip("\n")
+    return ""
+
+
+def _value_at(data, path):
+    node = data
+    for key in path:
+        node = node[key]
+    return node
+
+
+def patch_toml_text(original, merged, actions):
+    """Apply owned leaf actions to TOML text, preserving unrelated comments/order when possible."""
+    if not original.strip():
+        return dump_toml(merged)
+    expanded = []
+    for action in actions:
+        if action["op"] != "retire":
+            try:
+                value = _value_at(merged, action["path"])
+            except (KeyError, TypeError):
+                value = None
+            if isinstance(value, dict):
+                def add_leaves(node, prefix):
+                    for key, child in node.items():
+                        if isinstance(child, dict):
+                            add_leaves(child, prefix + [key])
+                        else:
+                            expanded.append({"op": "set", "path": prefix + [key]})
+                add_leaves(value, action["path"])
+                continue
+        expanded.append(action)
+    actions = expanded
+    lines = original.splitlines(keepends=True)
+    for action in actions:
+        path = action["path"]
+        if action["op"] == "retire":
+            owned_header = "[" + ".".join(_toml_key(key) for key in path) + "]"
+            header_index = next((i for i, line in enumerate(lines) if line.strip() == owned_header), None)
+            if header_index is not None:
+                section_end = next((i for i in range(header_index + 1, len(lines))
+                                    if lines[i].lstrip().startswith("[")), len(lines))
+                del lines[header_index:section_end]
+                continue
+        section = ".".join(_toml_key(key) for key in path[:-1])
+        header = f"[{section}]" if section else None
+        start = 0
+        if header:
+            header_index = next((i for i, line in enumerate(lines) if line.strip() == header), None)
+            if header_index is None:
+                if action["op"] == "retire":
+                    continue
+                if lines and lines[-1].strip():
+                    lines.append("\n")
+                lines.extend([header + "\n", f"{_toml_key(path[-1])} = {_toml_value(_value_at(merged, path))}\n"])
+                continue
+            start = header_index + 1
+        end = next((i for i in range(start, len(lines)) if lines[i].lstrip().startswith("[")), len(lines))
+        key_text = _toml_key(path[-1])
+        found = None
+        for i in range(start, end):
+            stripped = lines[i].lstrip()
+            if stripped.startswith("#") or "=" not in stripped:
+                continue
+            if stripped.split("=", 1)[0].strip() in (key_text, str(path[-1])):
+                found = i
+                break
+        if action["op"] == "retire":
+            if found is not None:
+                lines.pop(found)
+            continue
+        rendered = _toml_value(_value_at(merged, path))
+        if found is not None:
+            indent = lines[found][:len(lines[found]) - len(lines[found].lstrip())]
+            comment = _toml_inline_comment(lines[found].split("=", 1)[1])
+            suffix = f"  {comment}" if comment else ""
+            lines[found] = f"{indent}{key_text} = {rendered}{suffix}\n"
+        else:
+            lines.insert(end, f"{key_text} = {rendered}\n")
+    candidate = "".join(lines)
+    try:
+        if tomllib.loads(candidate) == merged:
+            return candidate
+    except Exception:
+        pass
+    return dump_toml(merged)
 
 
 # --- merge engine (from apply.py) --------------------------------------------
@@ -338,8 +440,7 @@ def _package_manager_extras(package_manager):
 
 
 def _recorded_package_manager():
-    """Keep a prior Claude choice on ordinary upgrade merges.  Without this, doctor could tell a
-    user to re-run --tool claude and silently retire their package-manager allowances."""
+    """Retain legacy package-manager metadata without reintroducing lifecycle approvals."""
     try:
         state = load_state()
         entry = state.get("merges", {}).get("~/.claude/settings.json", {})
@@ -370,6 +471,10 @@ def do_merge(dest_key, fragment_path, strategy, force, extra_values=None, extra_
     fragment = _deep_union(_copy(fragment), extra_values)
 
     dest = expand(dest_key)
+    legacy_fragment_link = os.path.islink(dest) and os.path.realpath(dest) == os.path.realpath(fragment_path)
+    if os.path.islink(dest) and not legacy_fragment_link:
+        return {"applied": False, "dest": dest_key,
+                "reason": "foreign destination symlink refused; merge its target only after explicit approval"}
     try:
         current = load_toml(dest, {}) if strategy == "merge-toml" else load_json(dest, {})
     except (OSError, json.JSONDecodeError, ValueError) as e:
@@ -389,7 +494,7 @@ def do_merge(dest_key, fragment_path, strategy, force, extra_values=None, extra_
                                        retire_snapshot=entry.get("values", {}))
     if conflicts and not force:
         return {"applied": False, "dest": dest_key, "conflicts": conflicts}
-    if not actions and not conflicts:
+    if not actions and not conflicts and not legacy_fragment_link:
         # No-op: keep the drift snapshot honest without rewriting the dest.
         state["merges"][dest_key] = {"values": _deep_union(_copy(fragment), {}), "extraValues": extra_values,
                                       "fragmentSha": template_sha, "strategy": strategy, **extra_meta}
@@ -403,7 +508,15 @@ def do_merge(dest_key, fragment_path, strategy, force, extra_values=None, extra_
             {"op": "retire", "path": c["path"]} if c["ours"] == "<retired in new version>"
             else {"op": "set", "path": c["path"], "value": c["ours"]} for c in conflicts])
     try:
-        text = dump_toml(merged) if strategy == "merge-toml" else json.dumps(merged, indent=2)
+        if strategy == "merge-toml":
+            try:
+                with open(dest, encoding="utf-8") as f:
+                    original_text = f.read()
+            except FileNotFoundError:
+                original_text = ""
+            text = patch_toml_text(original_text, merged, actions)
+        else:
+            text = json.dumps(merged, indent=2)
         backup = snapshot_dest(dest, dest_key)
         old_mode = stat.S_IMODE(os.stat(dest).st_mode) if os.path.exists(dest) else 0o600
         _atomic_write(dest, text, mode=old_mode)
@@ -415,7 +528,44 @@ def do_merge(dest_key, fragment_path, strategy, force, extra_values=None, extra_
     if legacy_key != dest_key:
         state["merges"].pop(legacy_key, None)
     save_state(state)
-    return {"applied": True, "dest": dest_key, "actions": actions, "backup": backup}
+    return {"applied": True, "dest": dest_key, "actions": actions, "backup": backup,
+            "migratedLegacyFragmentLink": legacy_fragment_link}
+
+
+def do_remove(dest_key, strategy):
+    """Remove only values still equal to Leo's ownership snapshot; never restore a whole backup."""
+    dest = expand(dest_key)
+    try:
+        state = load_state()
+        legacy_key = dest_key.replace("{{CODEX_HOME}}", "~/.codex")
+        entry = state.get("merges", {}).get(dest_key, state.get("merges", {}).get(legacy_key))
+        if not isinstance(entry, dict):
+            return {"applied": True, "dest": dest_key, "actions": [], "note": "not owned"}
+        current = load_toml(dest, {}) if strategy == "merge-toml" else load_json(dest, {})
+    except (OSError, json.JSONDecodeError, ValueError) as e:
+        return {"applied": False, "dest": dest_key, "reason": f"cannot prepare removal: {e}"}
+    owned = _deep_union(_copy(entry.get("values", {})), entry.get("extraValues", {}))
+    actions, conflicts = merge_preview({}, current, owned)
+    if conflicts:
+        return {"applied": False, "dest": dest_key, "conflicts": conflicts,
+                "reason": "owned values were modified; preserving destination"}
+    merged = apply_actions(current, actions)
+    try:
+        if actions:
+            if strategy == "merge-toml":
+                with open(dest, encoding="utf-8") as f:
+                    text = patch_toml_text(f.read(), merged, actions)
+            else:
+                text = json.dumps(merged, indent=2)
+            snapshot_dest(dest, dest_key)
+            old_mode = stat.S_IMODE(os.stat(dest).st_mode) if os.path.exists(dest) else 0o600
+            _atomic_write(dest, text, mode=old_mode)
+        state["merges"].pop(dest_key, None)
+        state["merges"].pop(legacy_key, None)
+        save_state(state)
+    except (OSError, TypeError, ValueError) as e:
+        return {"applied": False, "dest": dest_key, "reason": f"removal write failed: {e}"}
+    return {"applied": True, "dest": dest_key, "actions": actions}
 
 
 def main():
@@ -425,8 +575,9 @@ def main():
     ap.add_argument("--fragment")
     ap.add_argument("--strategy", choices=["merge-json", "merge-toml"])
     ap.add_argument("--package-manager", choices=["pnpm", "yarn", "npm"],
-                    help="Claude only: render this machine's safe package-manager allow rules")
+                    help="legacy Claude metadata compatibility; package scripts are not pre-approved")
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--remove", action="store_true", help="with --tool, remove only Leo-owned values")
     args = ap.parse_args()
 
     results = []
@@ -446,8 +597,11 @@ def main():
                 except ValueError as e:
                     ap.error(str(e))
             for m in linkmap.get("merges", []):
-                frag = os.path.join(REPO_ROOT, m["fragment"])
-                results.append(do_merge(m["dest"], frag, m["strategy"], args.force, extras, extra_meta))
+                if args.remove:
+                    results.append(do_remove(m["dest"], m["strategy"]))
+                else:
+                    frag = os.path.join(REPO_ROOT, m["fragment"])
+                    results.append(do_merge(m["dest"], frag, m["strategy"], args.force, extras, extra_meta))
         elif args.dest and args.fragment and args.strategy:
             results.append(do_merge(args.dest, args.fragment, args.strategy, args.force))
         else:

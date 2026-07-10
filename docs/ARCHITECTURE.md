@@ -37,23 +37,31 @@ adapters, not forks.
 Symlinks retire the copy/ownership/migration machinery for everything a host does NOT rewrite. The
 gains and the guardrails:
 
-- **`git pull` updates payload.** The symlinked payload updates live; refresh the private runtime
-  with `leos-runtime.py setup --refresh` and let doctor report a changed lock/fragment. There is no
-  destructive migration system.
+- **`git pull` updates linked payload immediately.** Stable installations should point links at a
+  release worktree; a development-clone install explicitly accepts that checkout/rebase/pull swaps
+  active hooks. Refresh the private runtime and reapply every merge drift reported by doctor.
 - **Self-location.** Hooks/engine find `<clone>/local/` via `realpath(__file__)`, so one symlinked
   script serves any tool home.
 - **Everything machine-local lives in the clone, gitignored** (`local/`) — including the council
   seats. This is Leo's explicit choice: config is asked at setup and saved in the clone (never in a
   tool home, never committed), which also sidesteps the "don't symlink a machine-local file into the
   repo" hazard.
-- **Merge survives for the 4 host-rewritten files** (`settings.json`, `config.toml`, `opencode.json`,
-  `cli-config.json`). `leos-merge` snapshots first, refuses on conflict, and records a fragment hash
-  so `leos-doctor` can flag drift — the only thing `git pull` can't auto-apply.
+- **Merge protects host-owned registries/config.** Claude settings, Codex config/hooks, OpenCode
+  config, and Cursor config/hooks use ownership-aware merges. `leos-merge` preserves unrelated TOML
+  comments/order, snapshots first, refuses conflicts, and records drift. `leos-uninstall` removes
+  only values still matching that ownership snapshot; backups are recovery, never rollback state.
 - **Fail-closed guard wrapper.** A dangling guard symlink exits 2 (blocks) rather than silently
   passing; the formatter/council hooks fail open (availability over safety, since they aren't
   tripwires).
-- **Release worktree (optional, hardened).** Symlink from a `git worktree` pinned to a release tag,
-  not the dev clone, so a `git checkout`/rebase in dev can't silently downgrade live hooks.
+- **Release worktree (recommended).** Create a separate worktree at a reviewed tag/commit, run the
+  full batteries there, configure hosts from that path, and advance it only after validating the
+  next release. Pointing at the development clone is explicit live-update mode.
+
+  A concrete stable rollout is: `git worktree add --detach ~/.leos-agent-release <reviewed-sha>`,
+  bootstrap that worktree's `local/.venv`, run every setup battery there, then run its link/merge
+  commands. For an upgrade, create and validate a second release worktree first, repoint links with
+  its `leos-link --force` only after approval, reapply merges, run doctor, and remove the old
+  worktree only after live host checks pass. Never move a host-facing worktree while tests run.
 
 ## Council: host = native, roster minus host = external
 
@@ -72,8 +80,9 @@ Deterministic first, tool-agnostic:
    host subagents; this is a recursion boundary, not a ban on delegation.
 4. One shared clone-local `STATE_ROOT` under `local/council/state` + an owned in-review marker
    cover env-stripping CLIs and cross-tool visibility without using `/tmp` or `~/.local/state`.
-5. Per-seat mechanical isolation (`claude --safe-mode` is the only true one; others use read-only +
-   dir/env hygiene).
+5. Per-seat controls: Claude uses `--safe-mode --no-session-persistence`; Codex uses `--ephemeral`
+   and read-only sandbox while retaining normal authentication; other transports use documented
+   plan/read-only modes and disclose when session persistence cannot be disabled.
 
 The runner creates its owned marker before dispatch and records bounded stdout/stderr, exit code,
 elapsed time, and a typed terminal state. A blank/invalid/nonzero/timed-out CLI call is never
@@ -87,9 +96,9 @@ hook-nudged. Backstops retained: 2-nudge loop guard, read-only seats, per-seat t
 - **Codex secret-reads are advisory**, not pattern-enforced (no declarative read-deny surface);
   coverage is hook/sandbox-mediated. The policy renderer labels this; a CI contamination check
   asserts Codex/Cursor config never contains a literal Claude permission string.
-- **Cursor CLI headless hooks/skills are UNCERTAIN** across versions. The static `Shell(...)`/`Read(...)`
-  deny list in `cli-config.json` is Cursor's reliable surface; the `beforeShellExecution` shim is
-  defence-in-depth. Verify with the smoke test before claiming the hook is active.
+- **Cursor CLI headless hooks/skills are version-sensitive.** Static config covers the secret-read
+  denies verified by setup; it is not advertised as a catastrophic-shell guard. Smoke-test
+  `beforeShellExecution`; if it does not fire, report reduced shell protection.
 - **OpenCode has no Stop-event hook**, so there is no automatic council nudge there — the council
   runs via the skill + the global `AGENTS.md` mandate.
 - **Model slugs and Cursor's Grok slug** must be resolved at setup (`cursor-agent --list-models`);

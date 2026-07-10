@@ -21,8 +21,9 @@ OpenCode and Cursor support.
   committed; the Anthropic seat is always the Opus line (never Fable/Mythos).
 - `[all]` **Deterministic anti-recursion**: a `LEOS_COUNCIL_SEAT` env sentinel (checked by the Stop
   hook, the skill, and both prompts), a shared council `STATE_ROOT` (now clone-local under `local/`), an
-  in-review marker, and per-seat mechanical isolation (`claude --safe-mode`, isolated `CODEX_HOME`,
-  `--agent plan`, `--mode plan`). A council seat can never convene its own council.
+  atomically owned in-review marker, and per-seat controls (`claude --safe-mode
+  --no-session-persistence`, `codex --ephemeral`, `--agent plan`, `--mode plan`). A council seat
+  can never convene its own council.
 - `[all]` **Shared `policy-data.json`** (secret-read denies + fixed-subcommand allowlist) rendered
   per host, with explicit enforced-vs-advisory labels (Codex secret-reads are advisory).
 - `[claude] [codex] [opencode] [cursor]` Per-host adapters: enforced hooks/permissions for Claude &
@@ -31,9 +32,18 @@ OpenCode and Cursor support.
 - `[all]` **Symlink delivery** (`leos-link`) + **fragment merge** (`leos-merge`, ported hardened
   engine with a wider ownership-aware array merge) + **`leos-doctor`** (linkcheck, fragment-drift,
   seat-flag assertions). No ownership-sha, no `MIGRATE`/`RECONCILE`-as-reinstall.
-- `[all]` Five test batteries (guard, fmt, council, merge, link) — the actual counts, not "90+".
+- `[all]` Nine test batteries (guard, fmt, council, runner, merge, link, block, inject, uninstall).
 
 ### Changed (setup & council robustness — from second-machine install feedback)
+- `[all]` **Audit remediation.** Fixed arg-transport brace rejection, pushed-feature base collapse,
+  documentation/instruction risk filtering, shell control-flow guard bypasses, special untracked
+  file reads, vacuous council completion, plan fallback, structured findings validation, and
+  critical sign-off. Formatting is now explicit-project-trust-only and never invokes Cargo.
+- `[all]` **Ownership-safe lifecycle.** Codex/Cursor hook registries now merge additively; TOML
+  merges preserve unrelated comments/order; `leos-seats.py` validates and privately installs
+  resolved seat files; `leos-uninstall.py` removes only Leo-owned state and preserves later edits.
+- `[all]` **Safer execution policy.** Package scripts and mutating Git commands are no longer
+  pre-approved. Runtime health checks validate imports, interpreter identity, and `pip check`.
 - `[all]` **Private Python runtime + portable TOML support.** Setup now bootstraps CPython 3.9+
   into `local/.venv`, installs hash-locked `tomli`, and launches every Leo script through
   `bin/leos-python`; no host hook relies on ambient `python3`. GitHub Actions covers Python 3.9,

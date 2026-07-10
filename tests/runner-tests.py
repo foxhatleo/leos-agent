@@ -9,10 +9,12 @@ a seat cannot recursively start Leo's council.
 import json
 import os
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -103,9 +105,17 @@ def write_cursor_external(local, native_argv, cursor_argv, response_path="result
         }, f)
 
 
-def run(repo, prompt, env, tier="elevated", cwd=None, checkpoint="impl"):
-    return subprocess.run([sys.executable, RUNNER, "run", "--host", "codex", "--checkpoint", checkpoint,
-                           "--tier", tier, "--prompt", prompt, "--cwd", cwd or repo],
+def run(repo, prompt, env, tier="elevated", cwd=None, checkpoint="impl", external_only=False,
+        approve_external=True, redact_sensitive=False):
+    argv = [sys.executable, RUNNER, "run", "--host", "codex", "--checkpoint", checkpoint,
+            "--tier", tier, "--prompt", prompt, "--cwd", cwd or repo]
+    if external_only:
+        argv.append("--external-only")
+    if approve_external:
+        argv.append("--approve-external")
+    if redact_sensitive:
+        argv.append("--redact-sensitive")
+    return subprocess.run(argv,
                           capture_output=True, text=True, env=env)
 
 
@@ -133,6 +143,9 @@ def main():
     result = run(repo, prompt, env, tier="low")
     data = json.loads(result.stdout)
     check("empty CLI output is classified", result.returncode == 1 and data["results"][0]["status"] == "empty-output")
+    retry = run(repo, prompt, env, tier="low")
+    check("failed dispatch releases active marker for retry", retry.returncode == 1 and
+          "nested-leos-council-refused" not in retry.stdout)
 
     # JSONL bookkeeping without an agent message is not a completed review.
     _, repo, local, bindir, prompt, env = fresh()
@@ -144,6 +157,31 @@ def main():
     check("event-only Codex output lacks reviewer content", result.returncode == 1 and
           data["results"][0]["status"] == "missing-review-content")
 
+    # Runner cancellation terminates the whole seat process group and records a typed failure.
+    _, repo, local, bindir, prompt, env = fresh()
+    sleeper = os.path.join(bindir, "codex")
+    executable(sleeper, "cat >/dev/null\nsleep 30")
+    write_seats(local, [sleeper, "exec", "-"])
+    proc = subprocess.Popen([sys.executable, RUNNER, "run", "--host", "codex", "--checkpoint", "impl",
+                             "--tier", "low", "--prompt", prompt, "--cwd", repo, "--approve-external"],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    time.sleep(0.5)
+    proc.send_signal(signal.SIGTERM)
+    stdout, _ = proc.communicate(timeout=10)
+    cancelled = json.loads(stdout)
+    check("runner cancellation is typed and bounded", proc.returncode == 1 and
+          cancelled["results"][0]["status"] == "cancelled")
+
+    # Nonempty reviewer prose is not enough: the committed prompts require a JSON findings array.
+    _, repo, local, bindir, prompt, env = fresh()
+    invalid = os.path.join(bindir, "codex")
+    executable(invalid, "cat >/dev/null\nprintf '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"Looks good\"}}\\n'")
+    write_seats(local, [invalid, "exec", "-"])
+    result = run(repo, prompt, env, tier="low")
+    data = json.loads(result.stdout)
+    check("non-schema reviewer prose is rejected", result.returncode == 1 and
+          data["results"][0]["status"] == "invalid-review-findings")
+
     # OpenCode --format json emits JSONL text parts, not one JSON document.
     _, repo, local, bindir, prompt, env = fresh()
     codex = os.path.join(bindir, "codex")
@@ -151,6 +189,8 @@ def main():
     executable(codex, "cat >/dev/null\nprintf '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"[]\"}}\\n'")
     executable(opencode, "printf '{\"type\":\"step_start\"}\\n{\"type\":\"text\",\"part\":{\"type\":\"text\",\"text\":\"[]\"}}\\n'")
     write_opencode_external(local, [codex, "exec", "-"], [opencode, "run", "--agent", "plan"])
+    with open(prompt, "w") as f:
+        f.write('Review JSON-shaped code: const value = {"nested": {"ok": true}};\n')
     result = run(repo, prompt, env, tier="elevated")
     data = json.loads(result.stdout)
     check("OpenCode JSONL text output completes", result.returncode == 0 and
@@ -177,6 +217,15 @@ def main():
     result = run(repo, prompt, env, tier="low")
     check("sensitive prompt is refused before dispatch", result.returncode == 2 and "sensitive-prompt-refused" in result.stdout)
 
+    # Sensitive fixtures can proceed only through deterministic redaction; raw material never reaches stdin.
+    received = os.path.join(local, "received.txt")
+    redactor = os.path.join(bindir, "codex")
+    executable(redactor, f"cat >'{received}'\nprintf '{{\"type\":\"item.completed\",\"item\":{{\"type\":\"agent_message\",\"text\":\"[]\"}}}}\\n'")
+    write_seats(local, [redactor, "exec", "-"])
+    result = run(repo, prompt, env, tier="low", redact_sensitive=True)
+    check("sensitive fixture is redacted before dispatch", result.returncode == 0 and
+          "password" not in open(received).read() and "REDACTED" in open(received).read())
+
     # A seat inherits the sentinel and cannot start a nested Leo council.
     _, repo, local, bindir, prompt, env = fresh()
     executable(os.path.join(bindir, "codex"), "exit 99")
@@ -193,6 +242,16 @@ def main():
     check("native subagent remains orchestrator-owned", result.returncode == 0 and
           data.get("dispatchOk") is True and data.get("reviewComplete") is False and
           data.get("requiresOrchestratorNative") is True)
+    native_review = os.path.join(os.path.dirname(data["resultPath"]), "native-review.json")
+    with open(native_review, "w") as f:
+        f.write("[]\n")
+    collected = subprocess.run([sys.executable, RUNNER, "collect-native", "--result", data["resultPath"],
+                                "--seat", "native", "--review-file", native_review],
+                               capture_output=True, text=True, env=env)
+    collected_data = json.loads(collected.stdout)
+    check("native subagent result can be collected mechanically", collected.returncode == 0 and
+          collected_data["reviewComplete"] is True and
+          collected_data["results"][0]["transportResult"]["findings"] == [])
 
     # Native-only fallback preserves independent-pass depth at higher tiers.
     _, repo, local, bindir, prompt, env = fresh()
@@ -213,6 +272,30 @@ def main():
     data = json.loads(result.stdout)
     check("plan checkpoint uses configured external before native", result.returncode == 0 and
           [item["seat"] for item in data["results"]] == ["opus"])
+    result = run(repo, prompt, env, tier="low", checkpoint="plan", approve_external=False)
+    check("external dispatch requires explicit project approval", result.returncode == 2 and
+          "external-send-approval-required" in result.stdout)
+
+    # A failed plan external triggers a native fallback, but the failed council remains incomplete.
+    _, repo, local, bindir, prompt, env = fresh()
+    native = os.path.join(bindir, "codex")
+    external = os.path.join(bindir, "claude")
+    executable(native, "cat >/dev/null\nprintf '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"[]\"}}\\n'")
+    executable(external, "cat >/dev/null\nexit 7")
+    write_seats(local, [native, "exec", "-"], [external, "--print"])
+    result = run(repo, prompt, env, tier="low", checkpoint="plan")
+    data = json.loads(result.stdout)
+    check("failed plan external triggers native fallback", result.returncode == 1 and
+          [item["seat"] for item in data["results"]] == ["opus", "native"] and
+          data["results"][1]["status"] == "completed" and data["reviewComplete"] is False)
+
+    # Vacuous selection is never a successful review.
+    _, repo, local, _, prompt, env = fresh()
+    write_subagent_native(local)
+    result = run(repo, prompt, env, tier="low", external_only=True)
+    data = json.loads(result.stdout)
+    check("zero selected seats is incomplete", result.returncode == 1 and
+          data["dispatchOk"] is False and data["reviewComplete"] is False)
 
     # A runner launched from a package directory normalizes to the git root, so the engine's
     # active marker blocks a second root-level council instead of permitting recursion by path.

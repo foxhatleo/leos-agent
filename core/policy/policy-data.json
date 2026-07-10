@@ -21,14 +21,14 @@
   ],
 
   "commandAllow": {
-    "$doc": "Fixed-subcommand allow rules by package manager. Setup merges 'universal' + the machine's chosen PM into the host's allow surface. Reviewed tradeoff (keep): fixed subcommands only — NO run:*/exec:*/dlx:* (arbitrary script execution) and NO ls/cat-style readers that could bypass the secret-read denies via the shell.",
+    "$doc": "Only read-only commands that do not execute repository hooks or package scripts are pre-approved. Mutating git commands and every package-manager lifecycle command fall through to the host's normal confirmation policy.",
     "universal": [
-      "git status", "git diff", "git log", "git show", "git branch", "git add", "git commit",
+      "git status", "git diff", "git log", "git show", "git branch",
       "gh pr view", "gh pr list", "gh issue view", "gh issue list", "gh run view", "gh run list"
     ],
-    "pnpm": ["pnpm test", "pnpm lint", "pnpm typecheck", "pnpm build", "pnpm install"],
-    "yarn": ["yarn test", "yarn lint", "yarn typecheck", "yarn build", "yarn install"],
-    "npm": ["npm test", "npm run lint", "npm run typecheck", "npm run build", "npm install"]
+    "pnpm": [],
+    "yarn": [],
+    "npm": []
   },
 
   "renderers": {
@@ -46,7 +46,7 @@
     },
     "cursor": {
       "secretReads": { "surface": "cli-config.json permissions.deny Read(<glob>)", "enforcement": "enforced (static deny is the reliable surface; the hook may be unreliable headless)" },
-      "commandAllow": { "surface": "cli-config.json permissions.allow Shell(<cmd>)", "enforcement": "enforced" }
+      "commandAllow": { "surface": "cli-config.json permissions.allow Shell(<cmd>)", "enforcement": "version-sensitive; setup smoke test required" }
     }
   },
 

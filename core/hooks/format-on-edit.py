@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PostToolUse hook: auto-detect the edited file's project toolchain, then
+"""PostToolUse hook: for an explicitly trusted project, detect the edited file's toolchain, then
 (1) FORMAT/FIX silently (write-mode), and (2) report remaining LINT errors back
 to the agent so they get fixed in the same turn.
 
@@ -7,11 +7,11 @@ Tool-neutral: one script serves Claude Code, Codex, OpenCode, and Cursor. It rea
 both Claude-style payloads (tool_input.file_path) and Codex apply_patch envelopes
 (tool_input.command), so a single hook covers every host.
 
-Supported (all config-gated except gofmt/rustfmt, which are universal conventions):
+Supported (all execution is project-trust-gated; lint tools are additionally config-gated):
   JS/TS : oxfmt > biome > eslint --fix   (first config found wins; lint feedback from biome/eslint)
   Python: ruff format + ruff check --fix ; pylint -E feedback
   Go    : gofmt -w ; golangci-lint feedback
-  Rust  : rustfmt ; cargo clippy feedback (incremental cache makes repeat runs fast)
+  Rust  : rustfmt
 
 Exit 0 = silent. Exit 44 = lint feedback for the agent — the host's hook wrapper maps
 44 -> 2 (stderr shown to the model) and everything else -> 0, so interpreter/script
@@ -51,6 +51,35 @@ def walk_up(start_dir):
         if parent == d or not d.startswith(HOME):
             return
         d = parent
+
+
+def project_root(start_dir):
+    """Nearest repository root, or None for a standalone non-git tree."""
+    for d in walk_up(start_dir):
+        if os.path.isdir(os.path.join(d, ".git")) or os.path.isfile(os.path.join(d, ".git")):
+            return os.path.realpath(d)
+    return None
+
+
+def trusted_project(start_dir):
+    """Formatting can execute project binaries/config/plugins, so require an explicit local grant."""
+    trust_path = os.environ.get("LEOS_FORMAT_TRUST")
+    if not trust_path:
+        here = os.path.realpath(__file__)
+        trust_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(here))),
+                                  "local", "format-trust.json")
+    try:
+        with open(trust_path, encoding="utf-8") as f:
+            raw = json.load(f)
+        projects = raw.get("projects", []) if isinstance(raw, dict) else []
+        allowed = {os.path.realpath(os.path.expanduser(p)) for p in projects if isinstance(p, str)}
+        root = project_root(start_dir)
+        if root is not None:
+            return root in allowed
+        start = os.path.realpath(start_dir)
+        return any(start == project or start.startswith(project + os.sep) for project in allowed)
+    except Exception:
+        return False
 
 
 def find_config(start_dir, names, pyproject_key=None):
@@ -164,16 +193,6 @@ def handle_rs(fp, fdir):
     b = find_bin(fdir, "rustfmt")
     if b:
         run([b, fp], fdir, 15)  # edition read from the crate's rustfmt.toml/Cargo.toml
-    crate = find_config(fdir, ("Cargo.toml",))
-    if crate:
-        b = find_bin(fdir, "cargo")
-        if b:
-            r = run([b, "clippy", "--message-format", "short"], crate, 25)
-            if r and r.returncode != 0:
-                rel = os.path.relpath(fp, crate)
-                mine = [l for l in (r.stderr or "").splitlines() if rel in l]
-                if mine:
-                    return condense("\n".join(mine), f"clippy issues in {rel}:")
     return None
 
 
@@ -220,6 +239,8 @@ def main():
                 continue  # never format outside the home tree
             ext = os.path.splitext(fp)[1].lower()
             fdir = os.path.dirname(fp)
+            if not trusted_project(fdir):
+                continue
 
             if ext in JS_EXTS:
                 feedback = handle_js(fp, fdir)

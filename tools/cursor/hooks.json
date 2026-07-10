@@ -1,5 +1,5 @@
 {
-  "$doc": "Cursor CLI hook registration (~/.cursor/hooks.json), symlinked from the clone. beforeShellExecution runs the guard-adapter shim; failClosed:true means a hook crash blocks. NOTE: whether cursor-agent fires this hook in headless -p mode is UNCERTAIN across versions — the static Shell(...) deny list in permissions-fragment.json (cli-config.json) is the reliable enforcement surface; this hook is defence-in-depth. Verify with the SETUP-DELTA smoke test.",
+  "$doc": "Cursor CLI hook registration fragment, ownership-merged into ~/.cursor/hooks.json so user hooks coexist. beforeShellExecution runs the guard adapter and failClosed:true blocks on hook failure. Headless hook behavior is version-sensitive; setup must smoke-test it. The static cli-config fragment covers secret reads, not catastrophic shell commands.",
   "version": 1,
   "hooks": {
     "beforeShellExecution": [

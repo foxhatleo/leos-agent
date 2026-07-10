@@ -36,6 +36,7 @@ def _repo_local(name):
 
 
 WRAPPERS = {"sudo", "command", "env", "nice", "nohup", "time", "doas"}
+CONTROL_PREFIXES = {"if", "then", "elif", "else", "while", "until", "for", "select", "do", "case"}
 RECURSIVE_SHORT = re.compile(r"^-[a-zA-Z]*[rR]")
 FORCEABLE = re.compile(r"^-[a-zA-Z]*f")
 
@@ -112,7 +113,9 @@ def strip_wrappers(tokens):
     tokens = tokens[i:]
     if not tokens:
         return []
-    if os.path.basename(tokens[0]) in WRAPPERS:
+    first = os.path.basename(tokens[0])
+    function_prefix = bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*\(\)\{?", tokens[0]))
+    if first in WRAPPERS or first in CONTROL_PREFIXES or function_prefix:
         for j in range(1, len(tokens)):
             if os.path.basename(tokens[j]) in WATCHED or tokens[j].startswith("mkfs"):
                 return tokens[j:]

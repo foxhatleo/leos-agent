@@ -12,6 +12,10 @@ import os
 import subprocess
 import sys
 import tempfile
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 TEST_TMP = os.path.join(ROOT, "local", "test-work")
@@ -135,16 +139,15 @@ def main():
     except Exception:
         policy_settings = {}
     check("package-manager merge applies", pr.returncode == 0)
-    check("package-manager allow is rendered", "Bash(pnpm test:*)" in
+    check("package-manager scripts are not pre-approved", "Bash(pnpm test:*)" not in
           policy_settings.get("permissions", {}).get("allow", []))
     pmstate = json.load(open(os.path.join(pmlocal, "merge-state.json")))
     check("package-manager policy fingerprint recorded", next(iter(pmstate["merges"].values())).get("packageManager") == "pnpm")
-    # Doctor's ordinary upgrade command is intentionally allowed to omit --package-manager; the
-    # merge state must preserve the established choice rather than retiring those allowances.
+    # An ordinary re-merge must not reintroduce package-manager lifecycle approvals.
     rerun = subprocess.run([sys.executable, MERGE, "--tool", "claude"], capture_output=True, text=True, env=pmenv)
     retained = json.load(open(os.path.join(pmhome, ".claude", "settings.json")))
-    check("ordinary Claude re-merge retains package-manager allow", rerun.returncode == 0 and
-          "Bash(pnpm test:*)" in retained.get("permissions", {}).get("allow", []))
+    check("ordinary Claude re-merge keeps package scripts unapproved", rerun.returncode == 0 and
+          "Bash(pnpm test:*)" not in retained.get("permissions", {}).get("allow", []))
     import shutil
     shutil.rmtree(pmhome, ignore_errors=True)
     shutil.rmtree(pmlocal, ignore_errors=True)
@@ -154,6 +157,9 @@ def main():
     host_local = tempfile.mkdtemp(prefix="hostlocal.")
     codex_home = os.path.join(host_home, "relocated-codex")
     host_env = dict(os.environ, HOME=host_home, LEOS_LOCAL=host_local, CODEX_HOME=codex_home)
+    os.makedirs(codex_home)
+    with open(os.path.join(codex_home, "config.toml"), "w") as f:
+        f.write('# user comment\n[user]\nkeep = "yes" # inline preference\n')
     codex_merge = subprocess.run([sys.executable, MERGE, "--tool", "codex"], capture_output=True, text=True, env=host_env)
     opencode_merge = subprocess.run([sys.executable, MERGE, "--tool", "opencode"], capture_output=True, text=True, env=host_env)
     cursor_merge = subprocess.run([sys.executable, MERGE, "--tool", "cursor"], capture_output=True, text=True, env=host_env)
@@ -164,10 +170,54 @@ def main():
         ocfg, cursor_cfg = {}, {}
     check("Codex merge honors CODEX_HOME", codex_merge.returncode == 0 and
           os.path.isfile(os.path.join(codex_home, "config.toml")))
+    check("Codex TOML merge preserves comments", "# user comment" in open(os.path.join(codex_home, "config.toml")).read() and
+          "# inline preference" in open(os.path.join(codex_home, "config.toml")).read())
     check("OpenCode merge writes additive instructions", opencode_merge.returncode == 0 and
           os.path.join(ROOT, "global", "AGENTS.md") in ocfg.get("instructions", []))
     check("Cursor merge writes its native permission schema", cursor_merge.returncode == 0 and
           "Read(**/.env)" in cursor_cfg.get("permissions", {}).get("deny", []))
+    codex_cfg_path = os.path.join(codex_home, "config.toml")
+    hooks_path = os.path.join(codex_home, "hooks.json")
+    hooks = json.load(open(hooks_path)); hooks["userOwned"] = True; json.dump(hooks, open(hooks_path, "w"))
+    removed = subprocess.run([sys.executable, MERGE, "--tool", "codex", "--remove"],
+                             capture_output=True, text=True, env=host_env)
+    with open(codex_cfg_path, "rb") as f:
+        removed_cfg = tomllib.load(f)
+    removed_hooks = json.load(open(hooks_path))
+    check("ownership uninstall preserves later user config", removed.returncode == 0 and
+          removed_cfg.get("user", {}).get("keep") == "yes" and "hooks" not in removed_cfg.get("features", {}))
+    check("ownership uninstall preserves TOML comments", "# user comment" in open(codex_cfg_path).read() and
+          "# inline preference" in open(codex_cfg_path).read())
+    check("ownership uninstall removes Leo hooks but preserves user JSON", removed.returncode == 0 and
+          removed_hooks.get("userOwned") is True and "hooks" not in removed_hooks)
+
+    # Upgrade migrates the prior whole-file hooks symlink into a real additive merge destination.
+    legacy_home = tempfile.mkdtemp(prefix="legacyhooks.")
+    legacy_local = tempfile.mkdtemp(prefix="legacylocal.")
+    legacy_codex = os.path.join(legacy_home, ".codex")
+    os.makedirs(legacy_codex)
+    os.symlink(os.path.join(ROOT, "tools", "codex", "hooks.json"), os.path.join(legacy_codex, "hooks.json"))
+    legacy_env = dict(os.environ, HOME=legacy_home, LEOS_LOCAL=legacy_local, CODEX_HOME=legacy_codex)
+    legacy_merge = subprocess.run([sys.executable, MERGE, "--tool", "codex"],
+                                  capture_output=True, text=True, env=legacy_env)
+    check("legacy hooks symlink migrates to additive real file", legacy_merge.returncode == 0 and
+          not os.path.islink(os.path.join(legacy_codex, "hooks.json")))
+    shutil.rmtree(legacy_home, ignore_errors=True); shutil.rmtree(legacy_local, ignore_errors=True)
+
+    foreign_home = tempfile.mkdtemp(prefix="foreignmerge.")
+    foreign_local = tempfile.mkdtemp(prefix="foreignlocal.")
+    foreign_codex = os.path.join(foreign_home, ".codex"); os.makedirs(foreign_codex)
+    foreign_target = os.path.join(foreign_home, "dotfiles-config.toml")
+    with open(foreign_target, "w") as f:
+        f.write('[user]\nkeep = "yes"\n')
+    os.symlink(foreign_target, os.path.join(foreign_codex, "config.toml"))
+    foreign_env = dict(os.environ, HOME=foreign_home, LEOS_LOCAL=foreign_local, CODEX_HOME=foreign_codex)
+    foreign_merge = subprocess.run([sys.executable, MERGE, "--tool", "codex"],
+                                   capture_output=True, text=True, env=foreign_env)
+    check("foreign config symlink is refused without changing its target", foreign_merge.returncode == 1 and
+          os.path.islink(os.path.join(foreign_codex, "config.toml")) and
+          'keep = "yes"' in open(foreign_target).read())
+    shutil.rmtree(foreign_home, ignore_errors=True); shutil.rmtree(foreign_local, ignore_errors=True)
     shutil.rmtree(host_home, ignore_errors=True)
     shutil.rmtree(host_local, ignore_errors=True)
 

@@ -10,22 +10,20 @@ IS Codex.
 
 **Seat argv (stdin transport):**
 ```
-codex exec --sandbox read-only --skip-git-repo-check -c model_reasoning_effort={EFFORT} -m {MODEL} -
+codex exec --ephemeral --sandbox read-only --skip-git-repo-check -c model_reasoning_effort={EFFORT} -m {MODEL} -
 ```
 - `--sandbox read-only` (default for `codex exec`) = no writes.
-- Codex has **no `--safe-mode`**. Recursion isolation = run the seat with an **isolated neutral
-  `CODEX_HOME`** (an empty dir with no `hooks.json`, no `skills/`, no global `AGENTS.md`), passed via
-  the seat's `env` map. Setup creates it at `local/isolated-codex-home/` (gitignored). Without this,
-  a codex seat could inherit the machine's council Stop hook.
+- Codex has no `--safe-mode`. It retains normal `CODEX_HOME` authentication; `--ephemeral` prevents
+  session-file persistence, the inherited `LEOS_COUNCIL_SEAT=1` suppresses council hooks, and the
+  runner refuses any nested council attempt.
 - efforts: `{ "default": "high", "max": "xhigh" }`.
 
 **Smoke test:**
 ```
-env LEOS_COUNCIL_SEAT=1 CODEX_HOME=<clone>/local/isolated-codex-home \
-  codex exec --sandbox read-only --skip-git-repo-check --json -m {MODEL} - <<<'Reply with the single word OK.'
+env LEOS_COUNCIL_SEAT=1 codex exec --ephemeral --sandbox read-only \
+  --skip-git-repo-check --json -m {MODEL} - <<<'Reply with the single word OK.'
 ```
 Expect JSONL events with a final response. Never use `codex review` (its output contract differs
 from the findings JSON); the runner classifies missing/invalid JSONL explicitly.
 
-**Native use (host IS Codex):** same argv without `-m` (uses the host's own model) and without the
-isolated `CODEX_HOME` env (it is already the host).
+**Native use (host IS Codex):** same argv without `-m` (uses the host's own model).

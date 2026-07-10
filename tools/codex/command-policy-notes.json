@@ -1,11 +1,40 @@
 {
   "$doc": "ADVISORY render of core/policy/policy-data.json for Codex. These are NOT enforced permission rules and must NOT be pasted into Codex config as Claude-style permissions.allow/deny strings. Codex's real command guarding is the PreToolUse bash-guard hook + sandbox; there is no declarative secret-READ deny surface, so the secretReadPatterns below are guidance for the model, NOT an enforced block. If a future Codex version exposes a compatible exec-policy surface, translate the fixed-subcommand patterns there. This file is reference (not deployed as an enforced fragment).",
-  "enforcement": "ADVISORY — commands: hook+sandbox enforced for the catastrophic-rm class only; secret-reads: NOT pattern-enforced (model guidance).",
+  "enforcement": "ADVISORY \u2014 commands: hook+sandbox enforced for the catastrophic-rm class only; secret-reads: NOT pattern-enforced (model guidance).",
   "allowGuidance": {
-    "universal": ["git status", "git diff", "git log", "git show", "git branch", "git add", "git commit", "gh pr view", "gh pr list", "gh issue view", "gh issue list", "gh run view", "gh run list"],
-    "pnpm": ["pnpm test", "pnpm lint", "pnpm typecheck", "pnpm build", "pnpm install"],
-    "yarn": ["yarn test", "yarn lint", "yarn typecheck", "yarn build", "yarn install"],
-    "npm": ["npm test", "npm run lint", "npm run typecheck", "npm run build", "npm install"]
+    "universal": [
+      "git status",
+      "git diff",
+      "git log",
+      "git show",
+      "git branch",
+      "gh pr view",
+      "gh pr list",
+      "gh issue view",
+      "gh issue list",
+      "gh run view",
+      "gh run list"
+    ],
+    "pnpm": [],
+    "yarn": [],
+    "npm": []
   },
-  "secretReadGuidance": ["**/.env", "**/.env.*", "**/.envrc", "**/.netrc", "~/.ssh/**", "~/.aws/**", "~/.gnupg/**", "~/.npmrc", "~/.config/gh/hosts.yml", "~/.docker/config.json", "**/id_rsa*", "**/id_ed25519*", "**/id_ecdsa*", "**/credentials.json", "**/*.pem", "**/*.key"]
+  "secretReadGuidance": [
+    "**/.env",
+    "**/.env.*",
+    "**/.envrc",
+    "**/.netrc",
+    "~/.ssh/**",
+    "~/.aws/**",
+    "~/.gnupg/**",
+    "~/.npmrc",
+    "~/.config/gh/hosts.yml",
+    "~/.docker/config.json",
+    "**/id_rsa*",
+    "**/id_ed25519*",
+    "**/id_ecdsa*",
+    "**/credentials.json",
+    "**/*.pem",
+    "**/*.key"
+  ]
 }

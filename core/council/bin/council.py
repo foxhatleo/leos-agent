@@ -28,6 +28,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -85,6 +86,11 @@ IGNORE_PATH_RE = re.compile(
     r"\.(md|mdx|txt|rst|adoc|svg|png|jpe?g|gif|webp|ico|lock)$"
     r"|(^|/)(LICENSE|NOTICE|CHANGELOG)[^/]*$"
     r"|(^|/)(pnpm-lock\.yaml|package-lock\.json|yarn\.lock|Cargo\.lock|poetry\.lock|uv\.lock|go\.sum)$",
+    re.IGNORECASE,
+)
+
+INSTRUCTION_PATH_RE = re.compile(
+    r"(^|/)(AGENTS|CLAUDE)\.md$|(^|/)SKILL\.md$|(^|/)(prompts?|policy)/.*\.md$",
     re.IGNORECASE,
 )
 
@@ -151,31 +157,39 @@ def resolve_base(cwd):
     try:
         with open(_base_cache_path(cwd)) as f:
             cached = json.load(f)
-        if cached.get("head") == head and cached.get("base"):
+        if cached.get("head") == head and cached.get("base") \
+                and int(time.time()) - int(cached.get("ts", 0)) < RISK_CACHE_TTL:
             return cached["base"]
     except Exception:
         pass
     base = None
-    code, out, _ = _git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], cwd)
+    cfg = load_project_config(cwd)
+    default_branch = cfg.get("defaultBranch")
+    code, out, _ = _git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd)
+    cands = []
+    if default_branch:
+        cands += [f"origin/{default_branch}", default_branch]
     if code == 0 and out.strip():
-        code2, mb, _ = _git(["merge-base", "HEAD", out.strip()], cwd)
-        if code2 == 0 and mb.strip():
+        cands.append(out.strip())
+    cands += ["origin/main", "origin/master", "origin/develop", "origin/trunk",
+              "main", "master", "develop", "trunk"]
+    for cand in dict.fromkeys(cands):
+        code, mb, _ = _git(["merge-base", "HEAD", cand], cwd)
+        if code == 0 and mb.strip():
             base = mb.strip()
+            break
     if base is None:
-        # Remote default branch (origin/HEAD), then common names (remote and local).
-        code, out, _ = _git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd)
-        cands = [out.strip()] if code == 0 and out.strip() else []
-        cands += ["origin/main", "origin/master", "origin/develop", "origin/trunk",
-                  "main", "master", "develop", "trunk"]
-        for cand in cands:
-            code, mb, _ = _git(["merge-base", "HEAD", cand], cwd)
-            if code == 0 and mb.strip():
+        # A non-default upstream is useful only when it contains a distinct base. A pushed feature
+        # branch's upstream commonly resolves to HEAD; accepting it would erase the feature diff.
+        code, out, _ = _git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], cwd)
+        if code == 0 and out.strip():
+            code2, mb, _ = _git(["merge-base", "HEAD", out.strip()], cwd)
+            if code2 == 0 and mb.strip() and mb.strip() != head:
                 base = mb.strip()
-                break
     if base is None:
         base = "HEAD"  # no upstream/default branch — score uncommitted changes; NOT escalated
     try:
-        _atomic_json(_base_cache_path(cwd), {"head": head, "base": base})
+        _atomic_json(_base_cache_path(cwd), {"head": head, "base": base, "ts": int(time.time())})
     except Exception:
         pass
     return base
@@ -241,15 +255,24 @@ def _read_untracked(cwd, untracked):
     for p in sorted(untracked)[:MAX_UNTRACKED_FILES]:
         try:
             fp = os.path.join(cwd, p)
+            before = os.lstat(fp)
+            if not stat.S_ISREG(before.st_mode):
+                contents[p] = (-1, b"")
+                continue
             if SENSITIVE_UNTRACKED_RE.search(p):
                 # Never read probable secrets merely to score risk.  Hash stable metadata so edits
                 # still invalidate a marker, and let _score surface the omitted-review risk.
-                st = os.stat(fp)
-                contents[p] = (MAX_UNTRACKED_READ, f"sensitive:{st.st_size}:{st.st_mtime_ns}".encode())
+                contents[p] = (MAX_UNTRACKED_READ,
+                               f"sensitive:{before.st_size}:{before.st_mtime_ns}".encode())
                 continue
-            size = os.path.getsize(fp)
-            with open(fp, "rb") as f:
-                contents[p] = (size, f.read(MAX_UNTRACKED_READ))
+            flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(fp, flags)
+            with os.fdopen(fd, "rb") as f:
+                after = os.fstat(f.fileno())
+                if not stat.S_ISREG(after.st_mode) or (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino):
+                    contents[p] = (-1, b"")
+                else:
+                    contents[p] = (after.st_size, f.read(MAX_UNTRACKED_READ))
         except Exception:
             contents[p] = None
     return contents
@@ -352,6 +375,9 @@ def load_project_config(cwd):
             if isinstance(v, int) and 0 < v < 1_000_000:
                 clean[k] = v
     cfg["thresholds"] = clean
+    default_branch = cfg.get("defaultBranch")
+    cfg["defaultBranch"] = default_branch if isinstance(default_branch, str) \
+        and re.fullmatch(r"[A-Za-z0-9._/-]{1,200}", default_branch) else None
     return cfg
 
 
@@ -410,7 +436,7 @@ def _score(diff_text, name_status, untracked, untracked_contents, undeterminable
             c = untracked_contents.get(p)
             if c is not None:
                 size, raw = c
-                if size < MAX_UNTRACKED_READ:
+                if 0 <= size < MAX_UNTRACKED_READ:
                     entry["added"] = raw.decode("utf-8", "replace").splitlines()
             files[p] = entry
 
@@ -421,12 +447,18 @@ def _score(diff_text, name_status, untracked, untracked_contents, undeterminable
     large_lines = th.get("largeLines", 400)
     large_files = th.get("largeFiles", 10)
 
-    code_files = {p: v for p, v in files.items() if not IGNORE_PATH_RE.search(p)}
+    def reviewable(path):
+        return not IGNORE_PATH_RE.search(path) or DEP_FILE_RE.search(path) \
+            or RISK_PATH_RE.search(path) or INSTRUCTION_PATH_RE.search(path) \
+            or any(fnmatch.fnmatch(path, glob) for glob in extra_globs)
+
+    code_files = {p: v for p, v in files.items() if reviewable(p)}
     sensitive_untracked = [p for p in untracked if SENSITIVE_UNTRACKED_RE.search(p)]
     oversized_untracked = [p for p, c in untracked_contents.items()
                            if c is not None and c[0] >= MAX_UNTRACKED_READ and p not in sensitive_untracked]
+    special_untracked = [p for p, c in untracked_contents.items() if c is not None and c[0] < 0]
     unscanned_count = max(0, len(untracked) - MAX_UNTRACKED_FILES)
-    unknown_untracked = bool(sensitive_untracked or oversized_untracked or unscanned_count)
+    unknown_untracked = bool(sensitive_untracked or oversized_untracked or special_untracked or unscanned_count)
     if not code_files:
         if unknown_untracked:
             details = []
@@ -434,6 +466,8 @@ def _score(diff_text, name_status, untracked, untracked_contents, undeterminable
                 details.append(f"{len(sensitive_untracked)} sensitive untracked path(s) not read")
             if oversized_untracked:
                 details.append(f"{len(oversized_untracked)} oversized untracked file(s) not read")
+            if special_untracked:
+                details.append(f"{len(special_untracked)} special untracked path(s) not read")
             if unscanned_count:
                 details.append(f"{unscanned_count} untracked file(s) beyond scan cap")
             return {"tier": "elevated", "tier_index": 2,
@@ -536,6 +570,8 @@ def _score(diff_text, name_status, untracked, untracked_contents, undeterminable
             details.append(f"{len(sensitive_untracked)} sensitive untracked path(s) omitted")
         if oversized_untracked:
             details.append(f"{len(oversized_untracked)} oversized untracked file(s) omitted")
+        if special_untracked:
+            details.append(f"{len(special_untracked)} special untracked path(s) omitted")
         if unscanned_count:
             details.append(f"{unscanned_count} untracked file(s) beyond cap")
         reasons.append("unknown untracked content: " + "; ".join(details))
@@ -646,6 +682,23 @@ def _remove_pointer(cwd, name):
         os.unlink(os.path.join(state_dir(cwd), name))
     except OSError:
         pass
+
+
+def _acquire_in_review(cwd, checkpoint, run_id):
+    """Serialize active-run ownership so two runners cannot both pass a check-then-write race."""
+    import fcntl
+    directory = state_dir(cwd)
+    lock_path = os.path.join(directory, "in-review.lock")
+    with open(lock_path, "a+", encoding="utf-8") as lock:
+        os.chmod(lock_path, 0o600)
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        active = _read_pointer(cwd, "in-review.json") or {}
+        fresh = int(time.time()) - int(active.get("ts", 0)) < IN_REVIEW_TTL
+        if fresh and active.get("run_id") != run_id:
+            return False, active
+        data = {"checkpoint": checkpoint, "ts": int(time.time()), "run_id": run_id}
+        _atomic_json(os.path.join(directory, "in-review.json"), data)
+        return True, data
 
 
 def _secure_mkdir(path):
@@ -763,11 +816,33 @@ def cmd_begin(args):
     cwd = os.getcwd()
     diff_text, _, untracked, uc, _ = get_diff(cwd)
     h = _hash_all(cwd, diff_text, untracked, uc)
+    run_id = getattr(args, "run_id", "")
+    acquired, active = _acquire_in_review(cwd, args.checkpoint, run_id)
+    if not acquired:
+        print(json.dumps({"ok": False, "status": "nested-leos-council-refused",
+                          "activeRun": active.get("run_id", "")}, indent=2))
+        return 3
     data = write_marker(cwd, h, {"status": "in-review", "checkpoint": args.checkpoint})  # legacy
-    _write_pointer(cwd, "in-review.json", {"checkpoint": args.checkpoint, "ts": int(time.time()),
-                                              "run_id": getattr(args, "run_id", "")})
     append_ledger(cwd, {"type": "begin", **data})
     print(f"in-review: {h}")
+    return 0
+
+
+def cmd_end(args):
+    """Release an active marker only when the caller owns its run id."""
+    import fcntl
+    cwd = os.getcwd()
+    lock_path = os.path.join(state_dir(cwd), "in-review.lock")
+    with open(lock_path, "a+", encoding="utf-8") as lock:
+        os.chmod(lock_path, 0o600)
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        active = _read_pointer(cwd, "in-review.json") or {}
+        if active.get("run_id") != args.run_id:
+            print(json.dumps({"ok": False, "status": "active-run-not-owned"}, indent=2))
+            return 3
+        _remove_pointer(cwd, "in-review.json")
+        append_ledger(cwd, {"type": "end", "run_id": args.run_id, "status": args.status})
+    print(json.dumps({"ok": True, "run_id": args.run_id, "status": args.status}, indent=2))
     return 0
 
 
@@ -776,20 +851,28 @@ def cmd_mark(args):
     diff_text, _, untracked, uc, _ = get_diff(cwd)
     h = _hash_all(cwd, diff_text, untracked, uc)
     status = "overridden" if args.override else "reviewed"
+    risk = cached_risk(cwd)
+    requested_tier = args.tier if args.tier in TIERS else "skip"
+    effective_tier = TIERS[max(risk.get("tier_index", 0), TIERS.index(requested_tier))]
     if args.override and not args.reason:
         print("--override requires --reason", file=sys.stderr)
+        return 1
+    if effective_tier == "critical" and not args.signoff.strip():
+        print("critical tier requires explicit human --signoff", file=sys.stderr)
         return 1
     data = write_marker(cwd, h, {  # legacy hash marker (cross-tool / back-compat)
         "status": status,
         "checkpoint": args.checkpoint,
-        "tier": args.tier,
+        "tier": effective_tier,
         "reason": args.reason or "",
+        "signoff": args.signoff or "",
     })
     # Reviewed-tree baseline pointer: what the hook diffs against to score follow-up deltas.
     code, head, _ = _git(["rev-parse", "HEAD"], cwd)
     _write_pointer(cwd, f"baseline-{args.checkpoint}.json", {
-        "checkpoint": args.checkpoint, "status": status, "tier": args.tier,
-        "reason": args.reason or "", "reviewed_tree": snapshot_tree(cwd),
+        "checkpoint": args.checkpoint, "status": status, "tier": effective_tier,
+        "reason": args.reason or "", "signoff": args.signoff or "",
+        "reviewed_tree": snapshot_tree(cwd),
         "head": head.strip() if code == 0 else "", "hash": h, "ts": int(time.time())})
     # A real review re-arms nothing: clear the persistent nudge guard for this checkpoint.
     ns = _read_pointer(cwd, "nudge-state.json") or {}
@@ -962,11 +1045,17 @@ def main():
     p.add_argument("--run-id", default="", help="runner-owned id; prevents a nested Leo council")
     p.set_defaults(fn=cmd_begin)
 
+    p = sub.add_parser("end")
+    p.add_argument("--run-id", required=True)
+    p.add_argument("--status", default="incomplete")
+    p.set_defaults(fn=cmd_end)
+
     p = sub.add_parser("mark")
     p.add_argument("--checkpoint", choices=["impl", "plan"], required=True)
     p.add_argument("--tier", default="")
     p.add_argument("--override", action="store_true")
     p.add_argument("--reason", default="")
+    p.add_argument("--signoff", default="", help="required human acknowledgement for critical tier")
     p.set_defaults(fn=cmd_mark)
 
     p = sub.add_parser("ledger")

@@ -16,7 +16,6 @@ Ask Leo (skip a question if the answer is obvious from the machine):
   OpenCode session `opencode`, a Cursor session `cursor`. Detect the *other* installed hosts and
   **offer** them, but configure another host only if Leo explicitly asks for it. (Identify your own
   host from your runtime; if you genuinely can't tell, ask Leo rather than defaulting to all.)
-- **Package manager** for the command allowlist: pnpm / yarn / npm.
 - **Council reviewer transports** (per external seat) — see Step 5. Default recommendation: Opus via
   `claude --safe-mode`, GPT via `codex exec`, GLM/Gemini/Grok via OpenCode + OpenRouter. But a seat
   is **available whenever ANY installed transport can reach its provider** — `cursor-agent` can also
@@ -55,11 +54,10 @@ For EACH chosen host `<H>`, read `tools/<H>/SETUP-DELTA.md` and do:
 1. **Symlinks:** `bin/leos-python bin/leos-link.py --tool <H>`. It creates the links in
    `tools/<H>/linkmap.json` and refuses to clobber a foreign regular file (back it up and re-run
    with `--force` if Leo approves).
-2. **Merge fragment(s):** `bin/leos-python bin/leos-merge.py --tool <H>` (backs up the dest first).
-   For Claude use `bin/leos-python bin/leos-merge.py --tool claude --package-manager <pm>` so the
-   chosen package-manager allow rules are rendered from policy data and tracked as machine-local
-   merge ownership. For
-   OpenCode this merge also writes the `instructions[]` global-instruction reference (the
+2. **Merge fragment(s):** `bin/leos-python bin/leos-merge.py --tool <H>` (backs up the dest first,
+   preserves unrelated TOML comments/order, and records ownership for safe upgrades/uninstall).
+   Codex and Cursor hook registries are merges, not whole-file symlinks. For OpenCode this merge
+   also writes the `instructions[]` global-instruction reference (the
    `{{CLONE_ROOT}}` token is expanded to the clone path).
 3. **Global instructions (additive — never clobber):** delivered per host. **Claude** →
    `bin/leos-python bin/leos-block.py --tool claude` (the managed `@import` block; auto-migrates a legacy
@@ -85,23 +83,34 @@ If Leo keeps project roots directly under `$HOME` (e.g. `~/workspace`), add them
 `local/guard-config.json` `homeToplevel` so the guard treats them as home-level (blocks a bare
 recursive delete of them) — otherwise the defaults (Desktop/Documents/… ) are enough.
 
+Formatting/lint tools can execute repository binaries and configuration plugins, so the edit hook
+is inert until Leo explicitly trusts a canonical project root. Write only approved roots to:
+
+```json
+{"projects":["/absolute/path/to/project"]}
+```
+
+in `local/format-trust.json`. Never trust a project merely because it is below `$HOME`. Rust edits
+run `rustfmt` only; the hook never runs `cargo clippy`, builds, package scripts, or lifecycle hooks.
+
 ## Step 5 — council seats (asked here, stored gitignored)
 
-For each host, write `local/seats.<host>.json` — this is where the roster is resolved. It is NOT
-committed (it holds machine-local transport choices + resolved model slugs).
+For each host, prepare a candidate JSON under `local/`, then install it only through
+`bin/leos-seats.py`. The destination `local/seats.<host>.json` is mode 0600 and gitignored.
 
 1. **Native seat** = this host's own model:
    - Claude Code → `{"native":{"mode":"subagent","model":"opus","efforts":{"default":"high","max":"xhigh"}}}`
      (Opus line only — confirm the resolved slug is an Opus id, never Fable/Mythos).
-   - Codex → `{"native":{"mode":"exec","transport":"stdin","argv":["codex","exec","--sandbox","read-only","--skip-git-repo-check","-c","model_reasoning_effort={EFFORT}","-"],"efforts":{...}}}`.
+   - Codex → `{"native":{"mode":"exec","transport":"stdin","argv":["codex","exec","--ephemeral","--sandbox","read-only","--skip-git-repo-check","-c","model_reasoning_effort={EFFORT}","-"],"efforts":{...}}}`.
    - OpenCode/Cursor → the `--agent plan` / `--mode plan` self-pass with no `-m`.
 2. **External seats** = the roster in `core/council/seats.catalog.json` **minus this host's own
    provider**, strongest-first. For each: enumerate its transport variants (`asExternal`,
    `asExternalCursor`, `asExternalOpencode`), pick one whose CLI is installed (ask Leo only when
    more than one is available), resolve the provider's CURRENT flagship slug for that transport,
-   substitute it into the argv template, and add the per-seat `env` (e.g. an isolated `CODEX_HOME`
-   for a codex seat on a non-Codex host — create `local/isolated-codex-home/` empty). A seat is
-   dropped only if NONE of its transports have an installed CLI. The runner recognizes Claude,
+   substitute it into the argv template, and add only non-secret per-seat environment values.
+   Codex seats retain normal `CODEX_HOME` authentication and use `--ephemeral`; recursion is
+   mechanically refused by `LEOS_COUNCIL_SEAT`. A seat is dropped only if NONE of its transports
+   have an installed CLI. The runner recognizes Claude,
    Codex, and OpenCode adapters automatically. A Cursor seat is added only after its smoke test
    proves a JSON output contract; record `"adapter":"cursor-json"` and its verified nonempty
    string `"responsePath"` in that seat.
@@ -109,7 +118,18 @@ committed (it holds machine-local transport choices + resolved model slugs).
    command). Require the structured-output form for Claude/Codex/OpenCode. Drop any seat whose
    smoke test fails; note native-only fallback if none remain. The runner is invoked only by an
    orchestrator review decision; it never starts a council by itself.
-4. Never commit this file. Re-running setup re-resolves slugs (that's how you refresh models later —
+   Claude and Codex transports must use their non-persistence flags. The documented OpenCode and
+   Cursor transports do not expose an equivalent verified flag; disclose that limitation when
+   offering them. Every external runner dispatch also requires explicit `--approve-external`
+   project-send acknowledgement.
+4. Validate, then atomically write after every external smoke test passed:
+   ```sh
+   bin/leos-python bin/leos-seats.py validate --host <H> --input local/seats-candidate.<H>.json
+   bin/leos-python bin/leos-seats.py write --host <H> --input local/seats-candidate.<H>.json \
+     --confirm-smoke <seat1> --confirm-smoke <seat2>
+   ```
+   Repeat `--confirm-smoke` for every external seat; native-only configs need none.
+5. Never commit this file. Re-running setup re-resolves slugs (that's how you refresh models later —
    no committed version goes stale).
 
 ## Step 6 — verify everything
@@ -120,6 +140,7 @@ bin/leos-python tests/guard-tests.py && bin/leos-python tests/fmt-tests.py \
   && bin/leos-python tests/council-tests.py && bin/leos-python tests/runner-tests.py \
   && bin/leos-python tests/merge-tests.py && bin/leos-python tests/link-tests.py \
   && bin/leos-python tests/block-tests.py && bin/leos-python tests/inject-tests.py \
+  && bin/leos-python tests/uninstall-tests.py \
   && bin/leos-python tests/contamination-check.py && bin/leos-python bin/leos-render-policy.py --check
 bin/leos-python bin/leos-doctor.py
 ```

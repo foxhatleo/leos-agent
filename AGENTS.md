@@ -18,16 +18,14 @@ live in [`global/AGENTS.md`](global/AGENTS.md).)
    state/backups). Never commit anything under `local/`. Never write a token/key into a tracked file.
 4. **Resolve model slugs at setup, never commit them.** The council roster (`core/council/seats.catalog.json`)
    uses `{MODEL}` placeholders. You resolve each provider's CURRENT flagship at setup and write the
-   concrete slug into `local/seats.<host>.json`. **The Anthropic seat is always the Opus line — never
+   concrete slug into a gitignored candidate and install it with `bin/leos-seats.py`. **The Anthropic seat is always the Opus line — never
    Fable or Mythos.**
 
 ## The model
 
-- **Delivery = symlinks + a few merges.** Hooks, the council engine, skill, prompts, and private
-  runtime launcher are
-  symlinked from each tool home into this clone (so `git pull` upgrades them live). The handful of
-  files a host rewrites itself (`settings.json`, `config.toml`, `opencode.json`, `cli-config.json`)
-  are merged, not linked.
+- **Delivery = executable symlinks + ownership merges.** Scripts, council engine, skill, prompts,
+  and launcher are linked. Host registries/config—including Codex/Cursor `hooks.json`—are merged
+  additively so user entries coexist and uninstall removes only values Leo still owns.
 - **Self-location.** The hook scripts and council engine find their machine-local config in
   `<clone>/local/` via `realpath(__file__)`, so they work through the symlink from any tool home.
 - **Private runtime.** Bootstrap an approved CPython 3.9+ into `local/.venv` with
@@ -44,10 +42,10 @@ before any link/merge operation. It detects the installed hosts
 (Claude Code / Codex / OpenCode / Cursor) but **by default configures only your own host** — the
 one you (the installing agent) are running on (Claude→`claude`, Codex→`codex`, etc.); the other
 detected hosts are offered, not auto-configured, and only added when Leo explicitly asks. For each
-host you do configure: `leos-link` → `leos-merge` → `leos-block` (Claude's `@import` block) → write
-`local/seats.<host>.json` (asking the council transport questions + resolving slugs) → verify. The
+host you configure: `leos-link` → `leos-merge` → `leos-block` (Claude only) → validated
+`leos-seats.py write` after driver smokes → verify. The
 per-host specifics live in `tools/<host>/SETUP-DELTA.md`. Before declaring done, run **all test
-batteries** (`tests/{guard,fmt,council,runner,merge,link,block,inject}-tests.py`, contamination,
+batteries** (`tests/{guard,fmt,council,runner,merge,link,block,inject,uninstall}-tests.py`, contamination,
 and policy checks) and `bin/leos-doctor.py`
 — all must pass.
 

@@ -1,12 +1,11 @@
 {
-  "$doc": "Codex delivery map. hooks.json is symlinked whole-file (Codex doesn't rewrite it; doctor asserts it stays a symlink) and carries the SessionStart injector that delivers global/AGENTS.md as additionalContext (additive — NOT a symlink over ~/.codex/AGENTS.md, which would clobber the user's own global instructions). Skills go to ~/.agents/skills (Codex reads it natively). config.toml is merged, not linked.",
+  "$doc": "Codex delivery map. hooks.json and config.toml are ownership-tracked merges so Leo hook registrations coexist with user hooks. SessionStart injects global/AGENTS.md as additionalContext without replacing the user's global instructions. Skills are shared through ~/.agents/skills.",
   "toolHome": "{{CODEX_HOME}}",
   "links": [
     { "dest": "{{CODEX_HOME}}/leos-python", "src": "bin/leos-python", "note": "private-runtime launcher for every Leo Python hook" },
     { "dest": "{{CODEX_HOME}}/hooks/bash-guard.py", "src": "core/hooks/bash-guard.py" },
     { "dest": "{{CODEX_HOME}}/hooks/format-on-edit.py", "src": "core/hooks/format-on-edit.py" },
     { "dest": "{{CODEX_HOME}}/council/bin/council.py", "src": "core/council/bin/council.py" },
-    { "dest": "{{CODEX_HOME}}/hooks.json", "src": "tools/codex/hooks.json", "note": "whole-file symlink; doctor asserts still-a-symlink" },
     { "dest": "~/.agents/skills/council", "src": "core/skills/council", "type": "dir", "note": "Codex reads ~/.agents/skills natively; shared with OpenCode/Cursor" },
     { "dest": "{{CODEX_HOME}}/hooks/inject-instructions.py", "src": "core/hooks/inject-instructions.py", "note": "SessionStart injector — emits global/AGENTS.md as additionalContext (additive; the user's ~/.codex/AGENTS.md is untouched and still loads)" }
   ],
@@ -14,12 +13,12 @@
     { "dest": "{{CODEX_HOME}}/AGENTS.md", "was": "global/AGENTS.md", "note": "REMOVED: the whole-file symlink clobbered the user's global instructions and Codex has no @import — replaced by the SessionStart injector hook. leos-doctor flags a leftover clone-symlink here." }
   ],
   "merges": [
+    { "dest": "{{CODEX_HOME}}/hooks.json", "fragment": "tools/codex/hooks.json", "strategy": "merge-json" },
     { "dest": "{{CODEX_HOME}}/config.toml", "fragment": "tools/codex/config-fragment.toml", "strategy": "merge-toml" }
   ],
   "machineLocal": [
     { "path": "local/guard-config.json", "note": "shared optional guard extras" },
     { "path": "local/council/config.json", "note": "shared disabledProjects" },
-    { "path": "local/seats.codex.json", "note": "native=codex exec (host model) + external roster {Opus,GLM,Gemini,Grok}" },
-    { "path": "local/isolated-codex-home/", "note": "empty neutral CODEX_HOME for the codex external seat's recursion isolation (when the host is NOT Codex)" }
+    { "path": "local/seats.codex.json", "note": "native=codex exec (host model) + external roster {Opus,GLM,Gemini,Grok}" }
   ]
 }

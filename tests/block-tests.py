@@ -42,11 +42,13 @@ def fresh():
     return home, local
 
 
-def run(home, local, check_mode=False):
+def run(home, local, check_mode=False, remove=False):
     env = dict(os.environ, HOME=home, LEOS_LOCAL=local)
     args = [sys.executable, BLOCK, "--tool", "claude"]
     if check_mode:
         args.append("--check")
+    if remove:
+        args.append("--remove")
     r = subprocess.run(args, capture_output=True, text=True, env=env)
     return r.returncode
 
@@ -81,6 +83,8 @@ def main():
     txt = read(home)
     check("coexist: user content preserved", "always lint" in txt)
     check("coexist: block appended", BEGIN in txt and f"@{IMPORT_ABS}" in txt)
+    check("managed block removal preserves user content", run(home, local, remove=True) == 0 and
+          "always lint" in read(home) and BEGIN not in read(home))
 
     # 4. stale-path refresh: a block with the wrong @path is corrected in place
     home, local = fresh()

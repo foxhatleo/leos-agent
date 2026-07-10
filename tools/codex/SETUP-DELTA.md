@@ -5,22 +5,21 @@ Host-specific steps layered on the shared `docs/SETUP.md` interview.
 0. **Preflight** — `codex doctor --summary` (or `codex --version` + a login check). Don't proceed
    if the CLI or auth is broken.
 1. **Detect** `$CODEX_HOME` (default `~/.codex`).
-2. **Symlinks** — `bin/leos-python bin/leos-link.py --tool codex` (links per `tools/codex/linkmap.json`,
-   including the whole-file `$CODEX_HOME/hooks.json` symlink and the `hooks/inject-instructions.py`
-   injector). Global instructions are delivered by that SessionStart injector, **not** by a
+2. **Symlinks** — `bin/leos-python bin/leos-link.py --tool codex` links executable payloads and the
+   instruction injector. Global instructions are delivered by SessionStart, **not** by a
    `$CODEX_HOME/AGENTS.md` symlink (which would clobber the user's own global instructions). If a
    leftover `$CODEX_HOME/AGENTS.md` clone-symlink exists from an older install, remove it (it's a
    symlink — safe; `leos-doctor` flags it).
-3. **Config merge** — `bin/leos-python bin/leos-merge.py --tool codex` merges `config-fragment.toml`
-   (enables `[features] hooks`) into `$CODEX_HOME/config.toml` (round-trip checked, backed up first).
+3. **Config + hooks merge** — `bin/leos-python bin/leos-merge.py --tool codex` ownership-merges
+   `config-fragment.toml` and Leo hook entries into existing host files without replacing user hooks.
 4. **Policy** — Codex has no enforced declarative permission surface; `command-policy-notes.json`
    is **advisory** (model guidance), and secret-*reads* are hook/sandbox-mediated only, NOT
    pattern-enforced. Do NOT paste Claude `permissions.allow`/`deny` strings into Codex config.
-5. **Council seats** — write `local/seats.codex.json`: native = `codex exec` read-only pass on the
+5. **Council seats** — use `bin/leos-seats.py` as described in shared setup: native = `codex exec
+   --ephemeral` read-only pass on the
    host's own model (no `-m`); externals = roster minus OpenAI = {Opus, GLM, Gemini, Grok}. For the
-   Opus seat use `claude --safe-mode` (Opus line only). Create `local/isolated-codex-home/` (empty)
-   only if a *codex* external seat is ever configured on a non-Codex host. Resolve current slugs at
-   setup; run driver smoke tests.
+   Opus seat use `claude --safe-mode --no-session-persistence` (Opus line only). Codex external
+   seats retain normal authentication and use `--ephemeral`. Resolve slugs and run driver smokes.
 6. **Restart** Codex so hooks load, and **trust `hooks.json` once** via `/hooks` (or use
    `--dangerously-bypass-hook-trust` on `codex exec` for automation). NOTE: a later `git pull` that
    changes `hooks.json` may require **re-trusting** it. Verify:

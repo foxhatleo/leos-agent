@@ -107,13 +107,30 @@ def status() -> dict:
         state = json.loads(STATE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         state = {}
+    import_ok = pip_ok = False
+    if version and version >= MIN_PYTHON:
+        try:
+            probe = subprocess.run([str(VENV_PYTHON), "-c", "import tomli"],
+                                   capture_output=True, text=True, timeout=15)
+            import_ok = probe.returncode == 0
+            check = subprocess.run([str(VENV_PYTHON), "-m", "pip", "check"],
+                                   capture_output=True, text=True, timeout=30)
+            pip_ok = check.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            pass
+    interpreter_ok = os.path.realpath(state.get("venvPython", "")) == os.path.realpath(VENV_PYTHON)
     return {
-        "ok": bool(version and expected and state.get("requirementsSha") == expected),
+        "ok": bool(version and version >= MIN_PYTHON and expected
+                   and state.get("requirementsSha") == expected and interpreter_ok
+                   and import_ok and pip_ok),
         "venv": str(VENV),
         "python": str(VENV_PYTHON),
         "pythonVersion": list(version) if version else None,
         "requirementsSha": expected,
         "installedRequirementsSha": state.get("requirementsSha"),
+        "interpreterStateMatches": interpreter_ok,
+        "requiredImportsOk": import_ok,
+        "pipCheckOk": pip_ok,
         "refreshCommand": f"python3 {ROOT}/bin/leos-runtime.py setup --refresh",
     }
 
@@ -123,34 +140,30 @@ def setup(args) -> int:
         print(f"runtime requirements missing: {REQUIREMENTS}", file=sys.stderr)
         return 1
     secure_dir(LOCAL)
-    current = version_of(str(VENV_PYTHON)) if VENV_PYTHON.is_file() else None
-    bootstrap, bootstrap_version = choose_bootstrap(args.python)
-    if current is None:
-        if not bootstrap:
-            print("Leo's Agents needs CPython 3.9+ with venv to create local/.venv. "
-                  "Install or select one with LEOS_PYTHON; no system package manager was run.",
-                  file=sys.stderr)
-            return 1
-        r = subprocess.run([bootstrap, "-m", "venv", str(VENV)], text=True)
-        if r.returncode != 0 or not VENV_PYTHON.is_file():
-            print("Could not create local/.venv (the selected Python may lack venv/ensurepip). "
-                  "No system package manager was run.", file=sys.stderr)
-            return 1
-        current = version_of(str(VENV_PYTHON))
-    elif current < MIN_PYTHON:
-        print(f"existing runtime is Python {current[0]}.{current[1]}, need 3.9+; refusing to replace "
-              f"{VENV} automatically. Remove it only after approving a rebuild.", file=sys.stderr)
-        return 1
-
     # `setup --refresh` is the normal post-pull command. If the lock is unchanged and the private
     # runtime is healthy, it must be an offline no-op rather than making every upgrade depend on a
-    # package-index lookup. A changed/missing state still falls through to the hash-checked install.
+    # package-index lookup. An unhealthy/stale runtime is rebuilt beside the live one and swapped
+    # only after the locked dependency install succeeds.
     existing = status()
     if existing["ok"]:
         print(json.dumps(existing, indent=2))
         return 0
-
-    cmd = [str(VENV_PYTHON), "-m", "pip", "install", "--disable-pip-version-check", "--require-hashes",
+    bootstrap, bootstrap_version = choose_bootstrap(args.python)
+    if not bootstrap:
+        print("Leo's Agents needs an approved CPython 3.9+ with venv to rebuild local/.venv. "
+              "Select one with LEOS_PYTHON or --python; no system package manager was run.",
+              file=sys.stderr)
+        return 1
+    staging = LOCAL / f".venv-staging-{os.getpid()}"
+    old = LOCAL / f".venv-old-{os.getpid()}"
+    shutil.rmtree(staging, ignore_errors=True); shutil.rmtree(old, ignore_errors=True)
+    r = subprocess.run([bootstrap, "-m", "venv", str(staging)], text=True)
+    staging_python = staging / "bin" / "python"
+    if r.returncode != 0 or not staging_python.is_file():
+        shutil.rmtree(staging, ignore_errors=True)
+        print("Could not create the staged private runtime; the live runtime was untouched.", file=sys.stderr)
+        return 1
+    cmd = [str(staging_python), "-m", "pip", "install", "--disable-pip-version-check", "--require-hashes",
            "--no-input", "--upgrade", "-r", str(REQUIREMENTS)]
     # Keep pip's cache/build scratch inside local/ too.  The repo deliberately does not leave
     # Leo-specific package artefacts in /tmp or a global user cache.
@@ -161,15 +174,28 @@ def setup(args) -> int:
                    PIP_CACHE_DIR=str(pip_cache))
     r = subprocess.run(cmd, text=True, env=pip_env)
     if r.returncode != 0:
+        shutil.rmtree(staging, ignore_errors=True)
         print("Runtime dependency installation failed. Check network/index access and retry; "
               "the existing venv was not removed.", file=sys.stderr)
         return r.returncode
+    try:
+        if VENV.exists():
+            os.replace(VENV, old)
+        os.replace(staging, VENV)
+        shutil.rmtree(old, ignore_errors=True)
+    except OSError as exc:
+        if old.exists() and not VENV.exists():
+            os.replace(old, VENV)
+        shutil.rmtree(staging, ignore_errors=True)
+        print(f"Runtime atomic swap failed; prior runtime restored: {exc}", file=sys.stderr)
+        return 1
+    current = version_of(str(VENV_PYTHON))
     atomic_json(STATE, {
         "requirementsSha": requirements_sha(),
         "venvPython": str(VENV_PYTHON),
         "pythonVersion": list(current or ()),
-        "bootstrapPython": bootstrap or str(VENV_PYTHON),
-        "bootstrapVersion": list(bootstrap_version or current or ()),
+        "bootstrapPython": bootstrap,
+        "bootstrapVersion": list(bootstrap_version or ()),
     })
     print(json.dumps(status(), indent=2))
     return 0

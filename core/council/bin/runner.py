@@ -40,6 +40,9 @@ MAX_ARG_PROMPT_BYTES = 128 * 1024
 MAX_OUTPUT_BYTES = 2 * 1024 * 1024
 HOSTS = ("claude", "codex", "opencode", "cursor")
 TIERS = ("low", "elevated", "high", "critical")
+ACTIVE_PROCESSES = set()
+ACTIVE_LOCK = threading.Lock()
+CANCELLED = threading.Event()
 
 # Deliberately narrow: this catches values/blocks that are very likely credentials without
 # treating ordinary source code that mentions "token" as secret material.
@@ -197,14 +200,21 @@ def prepare_command(seat, tier, prompt):
     """Resolve a machine-local seat into a direct CLI argv plus output contract."""
     efforts = seat.get("efforts") if isinstance(seat.get("efforts"), dict) else {}
     effort = efforts.get("max" if tier == "critical" else "default", "high")
-    isolated = str(LOCAL / "isolated-codex-home")
-    substitutions = {"{EFFORT}": str(effort), "{ISOLATED_CODEX_HOME}": isolated}
-    argv = [substitute(v, substitutions) for v in seat.get("argv", [])]
+    substitutions = {"{EFFORT}": str(effort)}
+    argv_template = seat.get("argv", [])
+    argv = [substitute(v, substitutions) for v in argv_template]
     if not argv or any(not isinstance(v, str) or not v for v in argv):
         raise ValueError("seat argv must be a nonempty string array")
     transport = seat.get("transport")
     if transport not in ("stdin", "arg"):
         raise ValueError("seat transport must be stdin or arg")
+    allowed_placeholders = {"{PROMPT_TEXT}"} if transport == "arg" else set()
+    unresolved = []
+    for value in argv:
+        unresolved.extend(token for token in re.findall(r"\{[A-Z][A-Z0-9_]*\}", value)
+                          if token not in allowed_placeholders)
+    if unresolved:
+        raise ValueError("unresolved placeholder in seat argv: " + ", ".join(sorted(set(unresolved))))
     if transport == "arg":
         if "{PROMPT_TEXT}" not in argv:
             raise ValueError("arg seat must include the literal {PROMPT_TEXT} placeholder")
@@ -213,9 +223,6 @@ def prepare_command(seat, tier, prompt):
         argv = [prompt if v == "{PROMPT_TEXT}" else v for v in argv]
     elif "{PROMPT_TEXT}" in argv:
         raise ValueError("stdin seat must not contain {PROMPT_TEXT}")
-    if any("{" in value and "}" in value for value in argv):
-        raise ValueError("unresolved placeholder in seat argv")
-
     adapter = seat.get("adapter") if isinstance(seat.get("adapter"), str) else adapter_for(argv)
     if adapter == "cursor-unverified":
         raise ValueError("Cursor seat needs an explicit adapter: cursor-json after setup validates its JSON output contract")
@@ -245,7 +252,7 @@ def extract_structured(adapter, raw):
     if not text:
         return None, "empty-output"
     if adapter == "raw":
-        return {"format": "raw", "characters": len(text)}, None
+        return {"format": "raw", "characters": len(text), "reviewText": text}, None
     if adapter in ("codex", "opencode"):
         values = []
         for line in text.splitlines():
@@ -287,6 +294,38 @@ def extract_structured(adapter, raw):
     return {"format": "json", "response": value}, None
 
 
+def extract_findings(review_text, checkpoint):
+    """Validate the findings contract required by both committed review prompts."""
+    text = review_text.strip()
+    fenced = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", text, re.IGNORECASE | re.DOTALL)
+    candidate = fenced.group(1) if fenced else text
+    try:
+        findings = json.loads(candidate)
+    except json.JSONDecodeError:
+        return None, "invalid-review-findings"
+    if not isinstance(findings, list):
+        return None, "invalid-review-findings"
+    required = ("severity", "claim", "failure_scenario", "suggested_fix", "confidence")
+    for finding in findings:
+        if not isinstance(finding, dict) or any(key not in finding for key in required):
+            return None, "invalid-review-findings"
+        if finding["severity"] not in ("high", "medium", "low"):
+            return None, "invalid-review-findings"
+        if any(not isinstance(finding[key], str) or not finding[key].strip()
+               for key in ("claim", "failure_scenario", "suggested_fix")):
+            return None, "invalid-review-findings"
+        confidence = finding["confidence"]
+        if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) \
+                or not 0 <= confidence <= 1:
+            return None, "invalid-review-findings"
+        if checkpoint == "impl":
+            if not isinstance(finding.get("file"), str) or not finding["file"].strip() \
+                    or isinstance(finding.get("line"), bool) \
+                    or not isinstance(finding.get("line"), int) or finding["line"] < 1:
+                return None, "invalid-review-findings"
+    return findings, None
+
+
 def _drain(stream, target):
     while True:
         chunk = stream.read(65536)
@@ -295,6 +334,17 @@ def _drain(stream, target):
         target["total"] += len(chunk)
         if len(target["data"]) < MAX_OUTPUT_BYTES:
             target["data"] += chunk[:MAX_OUTPUT_BYTES - len(target["data"])]
+
+
+def cancel_active(_signum, _frame):
+    CANCELLED.set()
+    with ACTIVE_LOCK:
+        processes = list(ACTIVE_PROCESSES)
+    for proc in processes:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
 
 
 def run_one(work, cwd, run_id, seat, events):
@@ -323,6 +373,8 @@ def run_one(work, cwd, run_id, seat, events):
             argv, cwd=cwd, env=env, stdin=stdin_handle, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             start_new_session=True,
         )
+        with ACTIVE_LOCK:
+            ACTIVE_PROCESSES.add(proc)
         t_out = threading.Thread(target=_drain, args=(proc.stdout, out), daemon=True)
         t_err = threading.Thread(target=_drain, args=(proc.stderr, err), daemon=True)
         t_out.start(); t_err.start()
@@ -352,12 +404,18 @@ def run_one(work, cwd, run_id, seat, events):
             "stdoutBytes": out["total"], "stderrBytes": err["total"],
             "outputTruncated": out["total"] > len(out["data"]) or err["total"] > len(err["data"]),
         })
-        if timed_out:
+        if CANCELLED.is_set() or proc.returncode is not None and proc.returncode < 0 and not timed_out:
+            base["status"] = "cancelled"
+        elif timed_out:
             base["status"] = "timed-out"
         elif proc.returncode != 0:
             base["status"] = "nonzero-exit"
         else:
             parsed, failure = extract_structured(adapter, out["data"].decode("utf-8", "replace"))
+            if not failure and parsed and isinstance(parsed.get("reviewText"), str):
+                findings, failure = extract_findings(parsed["reviewText"], seat["checkpoint"])
+                if findings is not None:
+                    parsed["findings"] = findings
             base["status"] = failure or "completed"
             if parsed:
                 base["transportResult"] = parsed
@@ -366,6 +424,9 @@ def run_one(work, cwd, run_id, seat, events):
     except OSError as e:
         base.update(status="execution-error", reason=str(e))
     finally:
+        if "proc" in locals():
+            with ACTIVE_LOCK:
+                ACTIVE_PROCESSES.discard(proc)
         if opened_stdin:
             stdin_handle.close()
     base["elapsedSeconds"] = round(time.monotonic() - started, 3)
@@ -408,6 +469,17 @@ def select_seats(config, checkpoint, tier, include_native):
     return chosen
 
 
+def native_seats(config, count=1):
+    native = config.get("native")
+    if not isinstance(native, dict):
+        raise ValueError("native seat missing")
+    if native.get("mode") not in ("subagent", "exec"):
+        raise ValueError("native mode must be subagent or exec")
+    return [dict(native, name="native" if index == 0 else f"native-{index + 1}",
+                 kind="native", status="orchestrator-native-subagent-required")
+            for index in range(count)]
+
+
 def cmd_run(args):
     if os.environ.get("LEOS_COUNCIL_SEAT"):
         print(json.dumps({"ok": False, "status": "nested-leos-council-refused",
@@ -426,10 +498,17 @@ def cmd_run(args):
     if len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
         print(json.dumps({"ok": False, "status": "prompt-too-large", "limitBytes": MAX_PROMPT_BYTES}, indent=2))
         return 2
-    if SENSITIVE_PROMPT_RE.search(prompt) and not args.allow_sensitive:
-        print(json.dumps({"ok": False, "status": "sensitive-prompt-refused",
-                          "reason": "probable credential material was not sent to external CLI seats"}, indent=2))
-        return 2
+    prompt_redacted = False
+    if SENSITIVE_PROMPT_RE.search(prompt):
+        if not args.redact_sensitive:
+            print(json.dumps({"ok": False, "status": "sensitive-prompt-refused",
+                              "reason": "probable credential material requires deterministic redaction"}, indent=2))
+            return 2
+        # A key/file marker can cover following lines that the regex cannot safely delimit. Withhold
+        # the complete prompt rather than risk leaking the remainder of a PEM/env-file diff.
+        prompt = ("[REDACTED-SENSITIVE-PROMPT]\n"
+                  "The review context was withheld because probable credential material was detected.\n")
+        prompt_redacted = True
     config = read_json(LOCAL / f"seats.{args.host}.json")
     if not isinstance(config, dict):
         print(json.dumps({"ok": False, "status": "seats-unavailable", "host": args.host}, indent=2))
@@ -438,6 +517,10 @@ def cmd_run(args):
         selected = select_seats(config, args.checkpoint, args.tier, not args.external_only)
     except ValueError as e:
         print(json.dumps({"ok": False, "status": "invalid-seats", "reason": str(e)}, indent=2))
+        return 2
+    if any(seat.get("kind") == "external" for seat in selected) and not args.approve_external:
+        print(json.dumps({"ok": False, "status": "external-send-approval-required",
+                          "reason": "confirm this project's prompt may be sent to configured external providers"}, indent=2))
         return 2
 
     run_id = args.run_id or secrets.token_hex(12)
@@ -455,6 +538,9 @@ def cmd_run(args):
     begin = subprocess.run([str(PYTHON), str(COUNCIL), "begin", "--checkpoint", args.checkpoint,
                             "--run-id", run_id], cwd=cwd, text=True, capture_output=True)
     if begin.returncode != 0:
+        if begin.returncode == 3:
+            print(begin.stdout or json.dumps({"ok": False, "status": "nested-leos-council-refused"}, indent=2))
+            return 3
         print(json.dumps({"ok": False, "status": "begin-failed", "stderr": begin.stderr[-1000:]}, indent=2))
         return 2
     events.emit("runner-started", runId=run_id, host=args.host, checkpoint=args.checkpoint, tier=args.tier)
@@ -462,13 +548,15 @@ def cmd_run(args):
     planned, manual_native = [], []
     for seat in selected:
         if seat.get("mode") == "subagent":
-            manual_native.append({"seat": "native", "status": "orchestrator-native-subagent-required",
+            manual_native.append({"seat": seat["name"], "status": "orchestrator-native-subagent-required",
                                   "model": seat.get("model", ""), "promptPath": str(prompt_path),
                                   "instruction": "Dispatch one native review subagent; do not ask it to convene Leo's Agents council."})
             continue
-        planned.append(dict(seat, tier=args.tier, prompt=prompt, promptPath=str(prompt_path)))
+        planned.append(dict(seat, tier=args.tier, checkpoint=args.checkpoint,
+                            prompt=prompt, promptPath=str(prompt_path)))
     job = {"schema": 1, "runId": run_id, "host": args.host, "checkpoint": args.checkpoint,
-           "tier": args.tier, "cwd": cwd, "promptPath": str(prompt_path), "startedAt": int(time.time()),
+           "tier": args.tier, "cwd": cwd, "promptPath": str(prompt_path), "promptRedacted": prompt_redacted,
+           "externalSendApproved": bool(args.approve_external), "startedAt": int(time.time()),
            "seats": [{"name": s["name"], "kind": s["kind"]} for s in planned], "manualNative": manual_native}
     write_json(work / "job.json", job)
     results = list(manual_native)
@@ -476,22 +564,87 @@ def cmd_run(args):
         futures = [pool.submit(run_one, work, cwd, run_id, seat, events) for seat in planned]
         for future in futures:
             results.append(future.result())
+    if args.checkpoint == "plan" and not args.external_only and planned \
+            and all(seat.get("kind") == "external" for seat in planned) \
+            and not any(result["status"] == "completed" for result in results):
+        events.emit("fallback-fired", reason="all-plan-external-seats-failed")
+        for seat in native_seats(config):
+            if seat.get("mode") == "subagent":
+                manual = {"seat": seat["name"], "status": "orchestrator-native-subagent-required",
+                          "model": seat.get("model", ""), "promptPath": str(prompt_path),
+                          "fallback": True,
+                          "instruction": "Dispatch one native review subagent; do not ask it to convene Leo's Agents council."}
+                manual_native.append(manual)
+                results.append(manual)
+            else:
+                fallback = dict(seat, tier=args.tier, checkpoint=args.checkpoint,
+                                prompt=prompt, promptPath=str(prompt_path), fallback=True)
+                results.append(run_one(work, cwd, run_id, fallback, events))
     summary = dict(job, finishedAt=int(time.time()), results=results)
-    summary["dispatchOk"] = all(r["status"] in ("completed", "orchestrator-native-subagent-required") for r in results)
-    summary["reviewComplete"] = all(r["status"] == "completed" for r in results)
+    summary["dispatchOk"] = bool(results) and all(
+        r["status"] in ("completed", "orchestrator-native-subagent-required") for r in results)
+    summary["reviewComplete"] = bool(results) and all(r["status"] == "completed" for r in results)
     summary["requiresOrchestratorNative"] = bool(manual_native)
     # Exit 0 means every executable CLI dispatch succeeded.  It does *not* mean the review is
     # complete when a host-native subagent still needs the orchestrator to run it.
     summary["ok"] = summary["dispatchOk"]
     summary["resultPath"] = str(work / "result.json")
     write_json(work / "result.json", summary)
+    if not summary["dispatchOk"] and not summary["requiresOrchestratorNative"]:
+        subprocess.run([str(PYTHON), str(COUNCIL), "end", "--run-id", run_id,
+                        "--status", "dispatch-failed"], cwd=cwd, text=True, capture_output=True)
     events.emit("runner-finished", runId=run_id, dispatchOk=summary["dispatchOk"],
                 reviewComplete=summary["reviewComplete"])
     print(json.dumps(summary, indent=2))
     return 0 if summary["ok"] else 1
 
 
+def cmd_collect_native(args):
+    result_path = Path(args.result).expanduser().resolve()
+    work_root = WORK_ROOT.resolve()
+    if result_path.parent == work_root or work_root not in result_path.parents:
+        print(json.dumps({"ok": False, "status": "invalid-result-path"}, indent=2))
+        return 2
+    summary = read_json(result_path)
+    if not isinstance(summary, dict) or summary.get("resultPath") != str(result_path):
+        print(json.dumps({"ok": False, "status": "invalid-result-file"}, indent=2))
+        return 2
+    try:
+        review_text = Path(args.review_file).read_text(encoding="utf-8")
+    except OSError as exc:
+        print(json.dumps({"ok": False, "status": "review-unreadable", "reason": str(exc)}, indent=2))
+        return 2
+    if len(review_text.encode("utf-8")) > MAX_OUTPUT_BYTES:
+        print(json.dumps({"ok": False, "status": "review-too-large"}, indent=2))
+        return 2
+    findings, failure = extract_findings(review_text, summary.get("checkpoint"))
+    if failure:
+        print(json.dumps({"ok": False, "status": failure}, indent=2))
+        return 2
+    matches = [item for item in summary.get("results", [])
+               if item.get("seat") == args.seat
+               and item.get("status") == "orchestrator-native-subagent-required"]
+    if len(matches) != 1:
+        print(json.dumps({"ok": False, "status": "native-seat-not-pending", "seat": args.seat}, indent=2))
+        return 2
+    matches[0].update(status="completed", transportResult={"format": "collected-native",
+                      "reviewText": review_text, "findings": findings})
+    summary["reviewComplete"] = bool(summary["results"]) and all(
+        item.get("status") == "completed" for item in summary["results"])
+    summary["requiresOrchestratorNative"] = any(
+        item.get("status") == "orchestrator-native-subagent-required" for item in summary["results"])
+    summary["dispatchOk"] = all(item.get("status") == "completed" or
+                                item.get("status") == "orchestrator-native-subagent-required"
+                                for item in summary["results"])
+    summary["ok"] = summary["dispatchOk"]
+    write_json(result_path, summary)
+    print(json.dumps(summary, indent=2))
+    return 0
+
+
 def main():
+    signal.signal(signal.SIGINT, cancel_active)
+    signal.signal(signal.SIGTERM, cancel_active)
     ap = argparse.ArgumentParser(prog="runner.py")
     sub = ap.add_subparsers(dest="command", required=True)
     p = sub.add_parser("run", help="explicitly run configured external CLI seats for one council job")
@@ -502,8 +655,16 @@ def main():
     p.add_argument("--cwd", help="repository being reviewed (default: current directory)")
     p.add_argument("--external-only", action="store_true", help="do not run/report the native seat")
     p.add_argument("--run-id", help="resume only the matching active runner job")
-    p.add_argument("--allow-sensitive", action="store_true", help="explicitly permit a prompt matched as probable credential material")
+    p.add_argument("--approve-external", action="store_true",
+                   help="explicitly approve sending this project prompt to configured external providers")
+    p.add_argument("--redact-sensitive", action="store_true",
+                   help="replace probable credential material before dispatch; raw matched content is never sent")
     p.set_defaults(fn=cmd_run)
+    p = sub.add_parser("collect-native", help="collect one orchestrator-run native subagent result")
+    p.add_argument("--result", required=True, help="runner result.json path")
+    p.add_argument("--seat", required=True, help="pending native seat name")
+    p.add_argument("--review-file", required=True, help="native subagent findings JSON/fenced JSON")
+    p.set_defaults(fn=cmd_collect_native)
     args = ap.parse_args()
     return args.fn(args)
 

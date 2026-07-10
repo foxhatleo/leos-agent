@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
 """leos-doctor — health check for an installed leos-agent (no version numbers).
 
-Three checks, all read-only:
-  1. linkcheck   — every symlink in each installed tool's linkmap is present, points into the
-                   clone, and is still a symlink (a host that rewrote a whole-file symlink into a
-                   real file is caught here, not silently).
+Checks are read-only:
+  1. linkcheck   — every executable/payload symlink in each installed tool's linkmap is present and
+                   points to the expected clone source.
   2. fragment-drift — the ONE thing `git pull` cannot auto-apply: a committed merge fragment
                    (settings/config/opencode/cli-config) that changed since it was last merged.
                    Reported as "re-run leos-merge --tool X".
-  3. seat-flags  — each machine-local local/seats.<host>.json carries its recursion-isolation flag
-                   (claude --safe-mode, codex --sandbox read-only, opencode --agent plan).
+  3. seat-flags  — each machine-local seat file is resolved, read-only, non-persistent where
+                   supported, and preserves authentication.
   4. instructions — leos's global instructions are delivered ADDITIVELY (Claude @import block,
                    OpenCode instructions[], Codex SessionStart injector) rather than a clobbering
                    symlink; a leftover clone-symlink at a retired delivery path is flagged.
 
-A tool is only checked if its home dir exists (i.e. it's installed on this machine).
+A tool is checked only when Leo's installed-host registry or owned state says it was configured.
 Exit 1 if any problem is found. Stdlib only.
 """
 
@@ -22,6 +21,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 try:
     import tomllib
@@ -68,6 +68,36 @@ def frag_sha(path, strategy):
         return None
     text = json.dumps(_strip_doc(data), sort_keys=True)
     return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
+
+
+def _owned_mismatches(current, owned, path=()):
+    mismatches = []
+    if isinstance(owned, dict):
+        if not owned:
+            return []
+        if not isinstance(current, dict):
+            return [".".join(path) or "<root>"]
+        for key, value in owned.items():
+            if key not in current:
+                mismatches.append(".".join(path + (str(key),)))
+            else:
+                mismatches.extend(_owned_mismatches(current[key], value, path + (str(key),)))
+    elif isinstance(owned, list):
+        if not isinstance(current, list) or any(value not in current for value in owned):
+            mismatches.append(".".join(path))
+    elif current != owned:
+        mismatches.append(".".join(path))
+    return mismatches
+
+
+def _load_destination(path, strategy):
+    try:
+        if strategy == "merge-toml":
+            with open(path, "rb") as f:
+                return tomllib.load(f)
+        return load_json(path, None)
+    except (OSError, ValueError):
+        return None
 
 
 def link_state(dest, src):
@@ -164,7 +194,8 @@ def check_tool(tool, configured, problems, report):
         merge_command = f"{REPO_ROOT}/bin/leos-python {REPO_ROOT}/bin/leos-merge.py --tool {tool}"
         cur = frag_sha(os.path.join(REPO_ROOT, m["fragment"]), m["strategy"])
         legacy = m["dest"].replace("{{CODEX_HOME}}", "~/.codex")
-        rec = state["merges"].get(m["dest"], state["merges"].get(legacy, {})).get("fragmentSha")
+        entry = state["merges"].get(m["dest"], state["merges"].get(legacy, {}))
+        rec = entry.get("fragmentSha")
         if rec is None:
             drift = "never-merged"
             suffix = " --package-manager <pnpm|yarn|npm>" if tool == "claude" else ""
@@ -174,8 +205,14 @@ def check_tool(tool, configured, problems, report):
             problems.append(f"{tool}: fragment {m['fragment']} changed since last merge — re-run {merge_command}")
         else:
             drift = "current"
+            destination = _load_destination(expand_path(m["dest"]), m["strategy"])
+            mismatches = _owned_mismatches(destination, entry.get("values", {}))
+            mismatches += _owned_mismatches(destination, entry.get("extraValues", {}))
+            if mismatches:
+                drift = "destination-drift"
+                problems.append(f"{tool}: Leo-owned values missing/changed in {m['dest']}: {mismatches[:5]} — "
+                                f"re-run {merge_command}")
         if tool == "claude":
-            entry = state["merges"].get(m["dest"], state["merges"].get(legacy, {}))
             pm = entry.get("packageManager")
             recorded_pm_sha = entry.get("packageManagerSha")
             if pm:
@@ -194,6 +231,9 @@ def check_tool(tool, configured, problems, report):
         seat_problems = check_seat_flags(tool, seats)
         problems.extend(f"{tool}: {p}" for p in seat_problems)
         tinfo["seats"] = "ok" if not seat_problems else "problems"
+    else:
+        problems.append(f"{tool}: configured host is missing local/seats.{tool}.json")
+        tinfo["seats"] = "missing"
 
     check_instructions_delivery(tool, problems, tinfo)
     report.append(tinfo)
@@ -252,10 +292,19 @@ def check_seat_flags(tool, seats):
             continue
         base = os.path.basename(argv[0])
         joined = " ".join(argv)
+        unresolved = sorted(set(re.findall(r"\{[A-Z][A-Z0-9_]*\}", joined)) - {"{PROMPT_TEXT}"})
+        if unresolved:
+            problems.append(f"seat has unresolved placeholders {unresolved}: {joined}")
         if base == "claude" and ("--safe-mode" not in argv or not _option_is(argv, "--permission-mode", "plan")):
             problems.append(f"claude seat missing --safe-mode or --permission-mode plan: {joined}")
+        if base == "claude" and "--no-session-persistence" not in argv:
+            problems.append(f"claude seat persists sessions: {joined}")
         if base == "codex" and not _option_is(argv, "--sandbox", "read-only"):
             problems.append(f"codex seat not --sandbox read-only: {joined}")
+        if base == "codex" and "--ephemeral" not in argv:
+            problems.append(f"codex seat persists sessions: {joined}")
+        if base == "codex" and isinstance(seat.get("env"), dict) and seat["env"].get("CODEX_HOME"):
+            problems.append(f"codex seat overrides CODEX_HOME and may lose host authentication: {joined}")
         if base == "opencode" and not _option_is(argv, "--agent", "plan"):
             problems.append(f"opencode seat missing --agent plan: {joined}")
         if base == "cursor-agent" and not _option_is(argv, "--mode", "plan"):
@@ -267,6 +316,13 @@ def check_seat_flags(tool, seats):
             if not isinstance(response_path, str) or not re.fullmatch(
                     r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*", response_path):
                 problems.append(f"cursor-agent seat needs a simple responsePath to reviewer text: {joined}")
+        if seat.get("name") == "opus":
+            model = ""
+            for i, value in enumerate(argv):
+                if value == "--model" and i + 1 < len(argv):
+                    model = argv[i + 1]
+            if model and "opus" not in model.lower():
+                problems.append(f"Anthropic seat must use the Opus line, got {model!r}")
     return problems
 
 
@@ -315,12 +371,21 @@ def check_runtime(configured, problems):
     except OSError:
         want = None
     state = load_json(state_path, {})
-    ok = bool(want and os.path.isfile(launcher) and state.get("requirementsSha") == want)
+    runtime_report = {}
+    if os.path.isfile(launcher):
+        try:
+            proc = subprocess.run([launcher, os.path.join(REPO_ROOT, "bin", "leos-runtime.py"), "status"],
+                                  capture_output=True, text=True, timeout=45)
+            runtime_report = json.loads(proc.stdout) if proc.stdout else {}
+        except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+            runtime_report = {}
+    ok = bool(want and state.get("requirementsSha") == want and runtime_report.get("ok"))
     if configured and not ok:
         problems.append("runtime: local/.venv is missing or requirements changed — run "
                         f"python3 {REPO_ROOT}/bin/leos-runtime.py setup --refresh")
     return {"component": "runtime", "ok": ok, "venvPython": launcher,
-            "requirementsSha": want, "installedRequirementsSha": state.get("requirementsSha")}
+            "requirementsSha": want, "installedRequirementsSha": state.get("requirementsSha"),
+            "health": runtime_report}
 
 
 def legacy_council_state_report():

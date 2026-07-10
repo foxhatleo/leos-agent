@@ -77,13 +77,18 @@ independent planning review without turning plan review into an implementation p
 
 ## Prepare context and deterministic checks
 
-Run `.council.json` `fastChecks` first if present. A failed fast check blocks low/elevated work
-until fixed; for high/critical include it as reviewer context. Run slow checks as context. No test
-configuration escalates one tier and is reported as unknown verification.
+Run task-relevant deterministic checks explicitly and include their results as reviewer context.
+The engine deliberately does not execute commands sourced from `.council.json`; that file controls
+risk globs, default branch, and thresholds only. A failed relevant check blocks low/elevated work;
+for high/critical include the failure as reviewer context. Missing verification is reported as
+unknown, never silently treated as passing.
 
 Create a private prompt file under local state. It contains the task summary, check results, and
 the appropriately bounded diff. Do not include `.env`, private keys, credential values, or other
-secrets. The runner independently refuses prompts that match likely credential material.
+secrets. The runner independently refuses likely credential material unless `--redact-sensitive`
+is used, in which case the whole prompt is withheld before any seat sees it (a PEM or sensitive-file
+marker can cover later lines); raw matched prompts cannot be force-sent. Prefer constructing a
+useful sanitized prompt yourself.
 
 For example:
 
@@ -107,20 +112,24 @@ progress, so a long tool loop cannot look indistinguishable from a blank return.
 
 ```
 "$RUNTIME" "$RUNNER" run \
-  --host "$HOST" --checkpoint impl --tier high --prompt "$PROMPT" --cwd "$PWD"
+  --host "$HOST" --checkpoint impl --tier high --prompt "$PROMPT" --cwd "$PWD" \
+  --approve-external
 ```
 
-Use the actual checkpoint/tier. The command is explicit orchestrator action; it is not a daemon or
-automatic trigger. Its result file is under `$ROOT/local/council/work/.../result.json`.
+Use the actual checkpoint/tier. `--approve-external` means the developer/project policy has
+explicitly approved sending this prompt to the named providers; omit it and the runner refuses
+external dispatch. The command is explicit orchestrator action, not a daemon. Its result file is
+under `$ROOT/local/council/work/.../result.json`.
 
 - An `exec` native seat is run by the runner.
 - A native `mode: subagent` result is `orchestrator-native-subagent-required`; dispatch exactly one
   native read-only subagent with the returned private `promptPath`. Tell it not to convene Leo's
-  Agents council. It may otherwise use ordinary allowed tools/subagents. In this case the runner
-  reports `dispatchOk: true` but `reviewComplete: false`—do not present the council as complete
-  until that native result is collected.
+  Agents council. It may otherwise use ordinary allowed tools/subagents. Save its mandatory
+  findings JSON privately and run `runner.py collect-native --result <result.json> --seat <name>
+  --review-file <file>` for each pending native pass. Until collection, the runner reports
+  `dispatchOk: true` but `reviewComplete: false`; never present it as complete.
 - `completed` is the only successful CLI response. `empty-output`, `missing-review-content`,
-  `invalid-structured-output`, `nonzero-exit`, `timed-out`, `unavailable`, and `execution-error`
+  `invalid-structured-output`, `invalid-review-findings`, `nonzero-exit`, `timed-out`, `unavailable`, and `execution-error`
   are distinct failures. Report each one; never infer a successful review from a blank terminal or
   a transport bookkeeping event with no reviewer message.
 - If all external seats fail, continue native-only and append a `fallback-fired` ledger entry. Do
