@@ -1,5 +1,5 @@
 {
-  "$doc": "Codex hook registration. Symlinked to ~/.codex/hooks.json (Codex does not rewrite it today; leos-doctor asserts it is still a symlink). Same exit-code contract as Claude: guard 43->2 (fail-closed on missing script), formatter 44->2 (fail-open), council 42->2 (fail-open). $CODEX_HOME + $HOME expand at execution so a relocated CODEX_HOME keeps working.",
+  "$doc": "Codex hook registration. Symlinked to ~/.codex/hooks.json (Codex does not rewrite it today; leos-doctor asserts it is still a symlink). Same exit-code contract as Claude: guard 43->2 (fail-closed on missing script), formatter 44->2 (fail-open), council 42->2 (fail-open). SessionStart runs the instruction injector, which prints global/AGENTS.md as additionalContext on stdout and always exits 0 (fail-open — never blocks session start). NOTE: hooks require one-time trust via /hooks; a `git pull` that changes THIS file may require re-trusting it. $CODEX_HOME + $HOME expand at execution so a relocated CODEX_HOME keeps working.",
   "hooks": {
     "PreToolUse": [
       {
@@ -32,6 +32,18 @@
             "type": "command",
             "command": "sh -c 'CODEX_HOME=\"${CODEX_HOME:-$HOME/.codex}\"; S=\"$CODEX_HOME\"/council/bin/council.py; [ -f \"$S\" ] || exit 0; python3 \"$S\" hook; ec=$?; [ \"$ec\" = 42 ] && exit 2; exit 0'",
             "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'CODEX_HOME=\"${CODEX_HOME:-$HOME/.codex}\"; S=\"$CODEX_HOME\"/hooks/inject-instructions.py; [ -f \"$S\" ] || exit 0; python3 \"$S\"; exit 0'",
+            "timeout": 10
           }
         ]
       }

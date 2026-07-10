@@ -11,6 +11,12 @@
         "transport": "stdin",
         "argv": ["claude", "--safe-mode", "--print", "--permission-mode", "plan", "--model", "{MODEL}", "--effort", "{EFFORT}"],
         "efforts": { "default": "high", "max": "xhigh" }
+      },
+      "asExternalCursor": {
+        "transport": "arg",
+        "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
+        "efforts": { "default": "{EFFORT}", "max": "{EFFORT}" },
+        "note": "Opus-line model via Cursor when the claude CLI is absent (confirm the Cursor slug is an Opus id with `cursor-agent --list-models`). Isolation = read-only `--mode plan` in a clean dir — weaker than native `--safe-mode`; acceptable fallback."
       }
     },
     {
@@ -28,26 +34,44 @@
         "argv": ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort={EFFORT}", "-m", "{MODEL}", "-"],
         "efforts": { "default": "high", "max": "xhigh" },
         "env": { "CODEX_HOME": "{ISOLATED_CODEX_HOME}" }
+      },
+      "asExternalCursor": {
+        "transport": "arg",
+        "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
+        "efforts": { "default": "{EFFORT}", "max": "{EFFORT}" },
+        "note": "GPT/OpenAI model via Cursor when the codex CLI is absent (confirm the Cursor slug with `cursor-agent --list-models`). Isolation = read-only `--mode plan` in a clean dir instead of an isolated CODEX_HOME."
       }
     },
     {
       "role": "glm", "provider": "zhipu",
-      "modelGuidance": "Latest GLM (e.g. z-ai/glm-5.2) via OpenRouter. Resolve at setup.",
-      "recursionDisable": "opencode --agent plan (read-only) + clean config dir; opencode does not load CLAUDE.md-style council mandates",
+      "modelGuidance": "Latest GLM via OpenRouter (e.g. z-ai/glm-5.2) for the opencode transport, or the Cursor GLM slug (confirm with `cursor-agent --list-models`) for the cursor transport. Resolve at setup.",
+      "recursionDisable": "opencode --agent plan (read-only) + clean config dir; or cursor-agent --mode plan (read-only) in a clean dir. Neither loads CLAUDE.md-style council mandates.",
       "asExternal": {
         "transport": "arg",
         "argv": ["opencode", "run", "--agent", "plan", "-m", "openrouter/{MODEL}", "--variant", "{EFFORT}", "{PROMPT_TEXT}"],
         "efforts": { "default": "high", "max": "max" }
+      },
+      "asExternalCursor": {
+        "transport": "arg",
+        "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
+        "efforts": { "default": "{EFFORT}", "max": "{EFFORT}" },
+        "note": "GLM via Cursor when opencode is absent — only if `cursor-agent --list-models` lists a GLM slug; {MODEL} is the Cursor slug, not the OpenRouter one."
       }
     },
     {
       "role": "gemini", "provider": "google",
-      "modelGuidance": "Latest Gemini flagship (e.g. google/gemini-3.1-pro) via OpenRouter. Native Gemini-CLI plan mode is experimental, so OpenCode+OpenRouter is the firm read-only route. Resolve at setup.",
-      "recursionDisable": "opencode --agent plan (read-only) + clean config dir",
+      "modelGuidance": "Latest Gemini flagship via OpenRouter (e.g. google/gemini-3.1-pro), or the Cursor Gemini slug (confirm with `cursor-agent --list-models`) for the cursor transport. Native Gemini-CLI plan mode is experimental, so OpenCode+OpenRouter (or Cursor) is the firm read-only route. Resolve at setup.",
+      "recursionDisable": "opencode --agent plan (read-only) + clean config dir; or cursor-agent --mode plan (read-only) in a clean dir",
       "asExternal": {
         "transport": "arg",
         "argv": ["opencode", "run", "--agent", "plan", "-m", "openrouter/{MODEL}", "--variant", "{EFFORT}", "{PROMPT_TEXT}"],
         "efforts": { "default": "xhigh", "max": "max" }
+      },
+      "asExternalCursor": {
+        "transport": "arg",
+        "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
+        "efforts": { "default": "{EFFORT}", "max": "{EFFORT}" },
+        "note": "Gemini via Cursor when opencode is absent — only if `cursor-agent --list-models` lists a Gemini slug; {MODEL} is the Cursor slug, not the OpenRouter one."
       }
     },
     {
@@ -83,7 +107,7 @@
         "argv": ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort={EFFORT}", "-m", "gpt-5.5", "-"],
         "efforts": { "default": "high", "max": "xhigh" },
         "env": { "CODEX_HOME": "/Users/you/.leos-agent/local/isolated-codex-home" },
-        "timeoutSeconds": 600
+        "timeoutSeconds": 300
       }
     ]
   }

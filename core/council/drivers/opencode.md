@@ -3,6 +3,10 @@
 The default transport for **GLM**, **Gemini**, and (optionally) **Grok**. One CLI serves any model
 via OpenRouter slugs. Also the NATIVE seat when the host IS OpenCode.
 
+**Alternate:** if OpenCode isn't installed, these same GLM / Gemini / Grok seats can run via
+`cursor-agent` instead (see `cursor-cli.md`) — the setup interview picks whichever transport's CLI
+is present (`asExternal` = this OpenCode route; `asExternalCursor` = the Cursor route).
+
 **Models (resolve at setup; OpenRouter slugs):** GLM `z-ai/glm-5.2`, Gemini `google/gemini-3.1-pro`,
 Grok `x-ai/grok-4.5`. (Prefer this route for Gemini — the native Gemini-CLI plan mode is
 experimental.)

@@ -1,5 +1,6 @@
 {
-  "$doc": "RENDERED from core/policy/policy-data.json into OpenCode's enforced permission vocabulary. Merged into ~/.config/opencode/opencode.json by bin/leos-merge.py (user-owned file; never symlinked). `read` deny patterns block secret reads (deny is enforced even in auto mode); `bash` allow patterns pre-approve the fixed-subcommand set, everything else falls through to OpenCode's default. Schema is version-sensitive — verify keys against the installed opencode at setup.",
+  "$doc": "RENDERED from core/policy/policy-data.json into OpenCode's enforced permission vocabulary, PLUS an additive `instructions` entry delivering leos's global instructions. Merged into ~/.config/opencode/opencode.json by bin/leos-merge.py (user-owned file; never symlinked). The `{{CLONE_ROOT}}` token is expanded to the leos-agent clone path at merge time (machine-local, never committed); OpenCode reads that file ALONGSIDE the user's own ~/.config/opencode/AGENTS.md, live on git pull. `read` deny patterns block secret reads (deny is enforced even in auto mode); `bash` allow patterns pre-approve the fixed-subcommand set, everything else falls through to OpenCode's default. Schema is version-sensitive — verify keys against the installed opencode at setup.",
+  "instructions": ["{{CLONE_ROOT}}/global/AGENTS.md"],
   "permission": {
     "read": {
       "**/.env": "deny",

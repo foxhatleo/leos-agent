@@ -28,11 +28,13 @@ One `AGENTS.md` serves every tool for instructions; one `SKILL.md` for the counc
    `--dangerously-skip-permissions`, Codex `--dangerously-bypass-approvals-and-sandbox`, or OpenCode
    in bypass mode) and point it at this repo's runbook:
    > Set up my agent config by following `~/.leos-agent/AGENTS.md` for this machine.
-3. The agent runs the interview in [`docs/SETUP.md`](docs/SETUP.md): it detects which of the four
-   hosts you use, creates the symlinks, merges the settings fragments, and — for the council — asks
-   which reviewer transports you want and resolves each model's current flagship slug (stored
-   machine-locally, never committed). Model versions are **never hard-coded**; today's Opus/GPT are
-   already about to be superseded.
+3. The agent runs the interview in [`docs/SETUP.md`](docs/SETUP.md): **by default it sets up only
+   the host you asked from** (the agent you're talking to configures its own environment) and offers
+   to do the others on request. For each host it creates the symlinks, merges the settings
+   fragments, adds the global-instruction reference (so your own instructions are never clobbered),
+   and — for the council — asks which reviewer transports you want and resolves each model's current
+   flagship slug (stored machine-locally, never committed). Model versions are **never hard-coded**;
+   today's Opus/GPT are already about to be superseded.
 
 Nothing is installed until you run setup — cloning alone is inert.
 

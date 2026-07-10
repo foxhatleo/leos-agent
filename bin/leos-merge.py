@@ -78,6 +78,21 @@ def _deep_union(base, extra):
     return base
 
 
+def _expand_tokens(obj, mapping):
+    """Recursively replace token substrings in every string value (e.g. {{CLONE_ROOT}} -> the clone
+    path). Committed fragments carry the token so a machine-local absolute path is never committed;
+    it is expanded here, at merge time."""
+    if isinstance(obj, dict):
+        return {k: _expand_tokens(v, mapping) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_expand_tokens(v, mapping) for v in obj]
+    if isinstance(obj, str):
+        for tok, val in mapping.items():
+            obj = obj.replace(tok, val)
+        return obj
+    return obj
+
+
 # --- TOML serialization (round-trip gated) -----------------------------------
 
 def _toml_key(key):
@@ -243,6 +258,10 @@ def do_merge(dest_key, fragment_path, strategy, force):
     if not isinstance(fragment, dict):
         return {"applied": False, "dest": dest_key, "reason": f"cannot read fragment: {fragment_path}"}
     fragment = {k: v for k, v in fragment.items() if not str(k).startswith("$")}
+    # Hash the TEMPLATE (tokens unexpanded) so drift detection stays machine-independent and matches
+    # leos-doctor.frag_sha; then expand machine-local tokens for the actual merge + stored values.
+    template_sha = sha_text(json.dumps(fragment, sort_keys=True))
+    fragment = _expand_tokens(fragment, {"{{CLONE_ROOT}}": REPO_ROOT})
 
     dest = expand(dest_key)
     current = load_toml(dest, {}) if strategy == "merge-toml" else load_json(dest, {})
@@ -251,13 +270,12 @@ def do_merge(dest_key, fragment_path, strategy, force):
     owned = _deep_union(_copy(entry.get("values", {})), entry.get("extraValues", {}))
     actions, conflicts = merge_preview(fragment, current, owned,
                                        retire_snapshot=entry.get("values", {}))
-    frag_text = json.dumps(fragment, sort_keys=True)
     if conflicts and not force:
         return {"applied": False, "dest": dest_key, "conflicts": conflicts}
     if not actions and not conflicts:
         # No-op: keep the drift snapshot honest without rewriting the dest.
         state["merges"][dest_key] = {"values": fragment, "extraValues": entry.get("extraValues", {}),
-                                     "fragmentSha": sha_text(frag_text), "strategy": strategy}
+                                     "fragmentSha": template_sha, "strategy": strategy}
         save_state(state)
         return {"applied": True, "dest": dest_key, "actions": [], "note": "already current"}
     merged = apply_actions(current, actions)
@@ -274,7 +292,7 @@ def do_merge(dest_key, fragment_path, strategy, force):
     except (OSError, TypeError, ValueError) as e:
         return {"applied": False, "dest": dest_key, "reason": f"write failed: {e}"}
     state["merges"][dest_key] = {"values": fragment, "extraValues": entry.get("extraValues", {}),
-                                 "fragmentSha": sha_text(frag_text), "strategy": strategy,
+                                 "fragmentSha": template_sha, "strategy": strategy,
                                  "backup": backup}
     save_state(state)
     return {"applied": True, "dest": dest_key, "actions": actions, "backup": backup}

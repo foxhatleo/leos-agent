@@ -26,6 +26,6 @@ jobs:
             | xargs -0 -n1 python3 -c 'import json,sys; json.load(open(sys.argv[1]))'
       - name: Test batteries (all must pass)
         run: |
-          for t in guard fmt council merge link; do python3 tests/$t-tests.py; done
+          for t in guard fmt council merge link block inject; do python3 tests/$t-tests.py; done
       - name: Policy enforced-vs-advisory boundary
         run: python3 tests/contamination-check.py

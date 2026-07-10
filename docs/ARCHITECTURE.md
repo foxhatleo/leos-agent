@@ -15,9 +15,16 @@ adapters, not forks.
 
 ## Maximum sharing
 
-- **Instructions:** one canonical `global/AGENTS.md`, symlinked into each host's global path (Claude
-  reads its `CLAUDE.md` symlink; Codex/OpenCode read `AGENTS.md` natively; Cursor CLI has no global
-  file — it relies on per-project `AGENTS.md`).
+- **Instructions:** one canonical `global/AGENTS.md`, delivered to each host by an **additive
+  reference** — never a whole-file symlink, which would clobber a user's own global instructions:
+  - **Claude** — a managed `@import` block in `~/.claude/CLAUDE.md` (Claude resolves `@import`
+    natively; coexists with the user's content; live on pull). Written by `bin/leos-block.py`.
+  - **Codex** — a `SessionStart` hook that injects `global/AGENTS.md` as `additionalContext`.
+    (Empirically verified: Codex `@import`/`@./path` is inert, and `model_instructions_file`
+    *replaces* the base/system prompt — both unusable; the hook is additive and base-safe.)
+  - **OpenCode** — an `instructions[]` entry in the merged `opencode.json` (absolute clone path via
+    the `{{CLONE_ROOT}}` merge token; additive with the user's `AGENTS.md`).
+  - **Cursor** — no global file; per-project `AGENTS.md` only.
 - **Council:** one `SKILL.md` in `~/.agents/skills` (read natively by Codex, OpenCode, Cursor) +
   `~/.claude/skills/council` for Claude. One engine, data-driven from `local/seats.<host>.json`.
 - **Guard:** one `bash-guard.py` core + a thin per-host registration (Claude/Codex PreToolUse

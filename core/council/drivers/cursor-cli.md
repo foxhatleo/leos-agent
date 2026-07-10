@@ -1,11 +1,16 @@
-# Driver: Cursor CLI (`cursor-agent`) — xAI / Grok seat
+# Driver: Cursor CLI (`cursor-agent`) — any seat Cursor routes (Grok / Opus / GPT / GLM / Gemini)
 
-Serves the **Grok** external seat via Cursor (when you want Grok through the Cursor app rather than
-OpenRouter). Also the NATIVE seat when the host IS Cursor. **Not installed by default** — the setup
-interview only offers this transport if `cursor-agent` is on PATH.
+`cursor-agent --model <slug>` is model-agnostic: it carries any provider Cursor exposes. So beyond
+the **Grok** external seat, it is the **universal fallback transport** for the Opus / GPT / GLM /
+Gemini seats whenever their preferred CLI (`claude` / `codex` / `opencode`) isn't installed — a
+Cursor-only machine can host the whole council through this one CLI. Also the NATIVE seat when the
+host IS Cursor. **Not installed by default** — the setup interview only offers this transport if
+`cursor-agent` is on PATH.
 
-**Model:** the latest Grok flagship. Confirm the exact slug with `cursor-agent --list-models`
-(expected `grok-4.5`). Resolve at setup.
+**Model:** the flagship slug for whichever provider this seat carries. **Always confirm the exact
+slug with `cursor-agent --list-models`** — Cursor's slugs differ from OpenRouter's (e.g. Grok
+`grok-4.5`; an Opus seat must resolve to an Opus-line id, never Fable/Mythos). If a provider isn't
+listed, Cursor can't carry that seat — use another transport. Resolve at setup.
 
 **Install / auth:** install the Cursor CLI (`cursor-agent --version`); auth via Cursor login.
 

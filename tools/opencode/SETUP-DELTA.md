@@ -3,12 +3,17 @@
 Host-specific steps layered on the shared `docs/SETUP.md` interview.
 
 1. **Detect** `~/.config/opencode`. Confirm `opencode --version`.
-2. **Symlinks** — `python3 bin/leos-link.py --tool opencode` (plugin, council.py, skill dir, global
-   AGENTS.md).
-3. **Permissions merge** — `python3 bin/leos-merge.py --tool opencode` merges
-   `opencode-fragment.json` (`permission.read` secret denies + `permission.bash` allows) into
-   `~/.config/opencode/opencode.json`. `deny` is enforced even in auto mode; avoid `"ask"` in pure
-   headless `serve`.
+2. **Symlinks** — `python3 bin/leos-link.py --tool opencode` (plugin, council.py, skill dir).
+   Global instructions are NOT a `~/.config/opencode/AGENTS.md` symlink (which would clobber the
+   user's own) — they come via the `instructions[]` entry in step 3. Remove a leftover
+   `~/.config/opencode/AGENTS.md` clone-symlink from an older install (safe — it's a symlink;
+   `leos-doctor` flags it).
+3. **Permissions + instructions merge** — `python3 bin/leos-merge.py --tool opencode` merges
+   `opencode-fragment.json` into `~/.config/opencode/opencode.json`: `permission.read` secret denies
+   + `permission.bash` allows, **plus** an additive `instructions` entry whose `{{CLONE_ROOT}}`
+   token is expanded to the clone path (so `global/AGENTS.md` loads alongside the user's own
+   `AGENTS.md`, live on pull). `deny` is enforced even in auto mode; avoid `"ask"` in pure headless
+   `serve`. Verify `opencode.json` `instructions` contains the absolute `<clone>/global/AGENTS.md`.
 4. **Guard plugin smoke test** (the guard here is a plugin, so verify it actually blocks):
    ```
    opencode run --agent build -m <cheap-model> 'run: rm -rf ~'

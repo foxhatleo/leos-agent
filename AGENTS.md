@@ -36,11 +36,14 @@ live in [`global/AGENTS.md`](global/AGENTS.md).)
 ## Do it
 
 Run the interview in [`docs/SETUP.md`](docs/SETUP.md) top to bottom. It detects the installed hosts
-(Claude Code / Codex / OpenCode / Cursor), then for each: `leos-link` → `leos-merge` → write
+(Claude Code / Codex / OpenCode / Cursor) but **by default configures only your own host** — the
+one you (the installing agent) are running on (Claude→`claude`, Codex→`codex`, etc.); the other
+detected hosts are offered, not auto-configured, and only added when Leo explicitly asks. For each
+host you do configure: `leos-link` → `leos-merge` → `leos-block` (Claude's `@import` block) → write
 `local/seats.<host>.json` (asking the council transport questions + resolving slugs) → verify. The
-per-host specifics live in `tools/<host>/SETUP-DELTA.md`. Before declaring done, run **all five test
-batteries** (`tests/{guard,fmt,council,merge,link}-tests.py`) and `bin/leos-doctor.py` — all must
-pass.
+per-host specifics live in `tools/<host>/SETUP-DELTA.md`. Before declaring done, run **all test
+batteries** (`tests/{guard,fmt,council,merge,link,block,inject}-tests.py`) and `bin/leos-doctor.py`
+— all must pass.
 
 ## Never
 

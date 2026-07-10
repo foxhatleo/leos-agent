@@ -1,5 +1,5 @@
 {
-  "$doc": "Codex delivery map. hooks.json is symlinked whole-file (Codex doesn't rewrite it; doctor asserts it stays a symlink). Skills go to ~/.agents/skills (Codex reads it natively). config.toml is merged, not linked.",
+  "$doc": "Codex delivery map. hooks.json is symlinked whole-file (Codex doesn't rewrite it; doctor asserts it stays a symlink) and carries the SessionStart injector that delivers global/AGENTS.md as additionalContext (additive — NOT a symlink over ~/.codex/AGENTS.md, which would clobber the user's own global instructions). Skills go to ~/.agents/skills (Codex reads it natively). config.toml is merged, not linked.",
   "toolHome": "~/.codex",
   "links": [
     { "dest": "~/.codex/hooks/bash-guard.py", "src": "core/hooks/bash-guard.py" },
@@ -7,7 +7,10 @@
     { "dest": "~/.codex/council/bin/council.py", "src": "core/council/bin/council.py" },
     { "dest": "~/.codex/hooks.json", "src": "tools/codex/hooks.json", "note": "whole-file symlink; doctor asserts still-a-symlink" },
     { "dest": "~/.agents/skills/council", "src": "core/skills/council", "type": "dir", "note": "Codex reads ~/.agents/skills natively; shared with OpenCode/Cursor" },
-    { "dest": "~/.codex/AGENTS.md", "src": "global/AGENTS.md" }
+    { "dest": "~/.codex/hooks/inject-instructions.py", "src": "core/hooks/inject-instructions.py", "note": "SessionStart injector — emits global/AGENTS.md as additionalContext (additive; the user's ~/.codex/AGENTS.md is untouched and still loads)" }
+  ],
+  "retiredLinks": [
+    { "dest": "~/.codex/AGENTS.md", "was": "global/AGENTS.md", "note": "REMOVED: the whole-file symlink clobbered the user's global instructions and Codex has no @import — replaced by the SessionStart injector hook. leos-doctor flags a leftover clone-symlink here." }
   ],
   "merges": [
     { "dest": "~/.codex/config.toml", "fragment": "tools/codex/config-fragment.toml", "strategy": "merge-toml" }

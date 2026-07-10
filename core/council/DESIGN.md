@@ -66,7 +66,17 @@ committed (recipes carry a `{MODEL}` placeholder; see `seats.catalog.json`):
 deletions, new deps/env, exported-API changes, removed assertions, security symbols, config
 surface). The author's self-assessed confidence may escalate **at most one tier**, never below the
 floor; every escalation is logged. The floor is a *proxy*, not tamper-proof — the ledger + sampled
-audit are the compensating controls. Ambiguous diff base → escalate one tier.
+audit are the compensating controls.
+
+**Escalate only on a genuinely undeterminable base** (a git-diff failure or a diff past the parse
+cap) — a repo with no upstream/remote is NOT undeterminable: diffing against HEAD is a legitimate
+base and is not escalated (so a local, remoteless branch isn't perpetually over-tiered).
+
+**Delta-gated re-review.** Once a checkpoint is reviewed, `council.py mark` records a `git write-tree`
+snapshot of the reviewed worktree as the **reviewed baseline**. The Stop hook then scores the
+*increment since that baseline*, not the cumulative branch — so a small follow-up fix on top of a
+large reviewed change is judged on its own (small) risk and does not re-trigger a full council. Only
+a genuinely non-trivial increment re-nudges.
 
 ---
 
@@ -105,11 +115,19 @@ back to a single strong reviewer and record `fallback-fired`.
 - **Implementation** backstopped by a soft `Stop`-hook nudge — if a turn ends on an `elevated`+
   diff with no fresh marker, the hook reminds the orchestrator. Never a hard block; override allowed
   with a logged reason.
-- **State (shared, zero repo footprint):** `ledger.jsonl` + `markers/<diff-hash>.json` live under a
-  single `STATE_ROOT` **outside every tool home and outside the clone** (default
+- **State (shared, zero repo footprint):** `ledger.jsonl` + fixed-name pointers live under a single
+  `STATE_ROOT` **outside every tool home and outside the clone** (default
   `~/.local/state/leos-agent/council/state`), so a review recorded by one host is visible to the
-  others on the same repo+diff, and `git clean` in the clone can never destroy it. An `in-review`
-  marker written by `council.py begin` at dispatch suppresses the nudge while a council runs.
+  others on the same repo, and `git clean` in the clone can never destroy it. The pointers are
+  hash-independent (they survive diff-hash churn as the author iterates):
+  - `baseline-<checkpoint>.json` — the reviewed-tree snapshot the delta-gate diffs against.
+  - `in-review.json` — written by `council.py begin` at dispatch; suppresses the nudge while a
+    council runs (TTL 30 min).
+  - `nudge-state.json` — the persistent loop guard (see §8).
+  - `cache.json` / `base-cache.json` — a short-TTL risk cache and a HEAD-keyed base cache, so
+    repeated Stop events in a turn don't recompute from scratch.
+  Legacy `markers/<diff-hash>.json` are still written by `mark`/`begin` for cross-tool/back-compat
+  visibility, but the hook's decision keys on the pointers above, not the exact diff hash.
 
 ---
 
@@ -141,8 +159,10 @@ Layered, deterministic-first — tool-agnostic because all four hosts have hooks
    clean dir. Only Claude has a true `--safe-mode`; the others rely on read-only + dir/env hygiene.
 
 Registration keeps only the `Stop` event (never `SubagentStop`), so native subagents are never
-hook-nudged. Bounds retained as backstops: 2-nudge loop guard per diff hash, read-only seats
-(can't churn the diff hash), per-seat timeouts, hard 2-pass cap.
+hook-nudged. Bounds retained as backstops: a **persistent loop guard** (`nudge-state.json`, scoped
+per project+checkpoint, so it survives diff-hash churn across edits — capped at `MAX_NUDGES`, cleared
+by a real `mark`, and re-armed at most `MAX_REARMS` times only if genuinely new substantial work
+appears since it tripped), read-only seats, per-seat timeouts, hard 2-pass cap.
 
 ---
 

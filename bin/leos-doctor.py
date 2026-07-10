@@ -10,6 +10,9 @@ Three checks, all read-only:
                    Reported as "re-run leos-merge --tool X".
   3. seat-flags  — each machine-local local/seats.<host>.json carries its recursion-isolation flag
                    (claude --safe-mode, codex --sandbox read-only, opencode --agent plan).
+  4. instructions — leos's global instructions are delivered ADDITIVELY (Claude @import block,
+                   OpenCode instructions[], Codex SessionStart injector) rather than a clobbering
+                   symlink; a leftover clone-symlink at a retired delivery path is flagged.
 
 A tool is only checked if its home dir exists (i.e. it's installed on this machine).
 Exit 1 if any problem is found. Stdlib only.
@@ -65,13 +68,57 @@ def link_state(dest, src):
     return "foreign"
 
 
+def _read_text(path):
+    try:
+        with open(os.path.expanduser(path), encoding="utf-8") as f:
+            return f.read()
+    except Exception:
+        return None
+
+
+def check_instructions_delivery(tool, problems, tinfo):
+    """Verify leos's global instructions are delivered ADDITIVELY (never as a clobbering symlink):
+    Claude via an @import block, OpenCode via instructions[], Codex via the SessionStart injector.
+    Cursor has no global instruction file, so nothing to check."""
+    gi = os.path.join(REPO_ROOT, "global", "AGENTS.md")
+    if tool == "claude":
+        txt = _read_text("~/.claude/CLAUDE.md")
+        if txt is None or "leos-agent:global-instructions" not in txt:
+            problems.append("claude: @import block missing from ~/.claude/CLAUDE.md — run leos-block --tool claude")
+            tinfo["instructions"] = "missing"
+        elif f"@{gi}" not in txt:
+            problems.append(f"claude: @import block does not point at {gi} (moved clone?) — re-run leos-block --tool claude")
+            tinfo["instructions"] = "stale"
+        else:
+            tinfo["instructions"] = "ok"
+    elif tool == "opencode":
+        try:   # user-hand-editable file: a malformed opencode.json must be reported, not crash doctor
+            data = load_json(os.path.expanduser("~/.config/opencode/opencode.json"), None)
+        except Exception:
+            data = None
+        instr = data.get("instructions") if isinstance(data, dict) else None
+        if not isinstance(instr, list) or gi not in instr:
+            problems.append(f"opencode: instructions[] does not include {gi} — re-run leos-merge --tool opencode")
+            tinfo["instructions"] = "missing"
+        else:
+            tinfo["instructions"] = "ok"
+    elif tool == "codex":
+        txt = _read_text("~/.codex/hooks.json")
+        if txt is None or "SessionStart" not in txt or "inject-instructions.py" not in txt:
+            problems.append("codex: SessionStart instruction injector not registered in ~/.codex/hooks.json")
+            tinfo["instructions"] = "missing"
+        else:
+            tinfo["instructions"] = "ok"
+
+
 def check_tool(tool, problems, report):
     lm = load_json(os.path.join(REPO_ROOT, "tools", tool, "linkmap.json"), {})
     home = os.path.expanduser(lm.get("toolHome", ""))
     if not home or not os.path.isdir(home):
         report.append({"tool": tool, "installed": False})
         return
-    tinfo = {"tool": tool, "installed": True, "links": [], "merges": [], "seats": None}
+    tinfo = {"tool": tool, "installed": True, "links": [], "merges": [], "seats": None,
+             "instructions": None}
 
     for e in lm.get("links", []):
         dest = os.path.expanduser(e["dest"])
@@ -80,6 +127,16 @@ def check_tool(tool, problems, report):
         if st != "linked":
             problems.append(f"{tool}: link {e['dest']} is '{st}' (want linked)")
         tinfo["links"].append({"dest": e["dest"], "state": st})
+
+    # Retired symlinks: a leftover clone-symlink at an old delivery path masks the user's own
+    # global file — flag it (read-only; the user removes it).
+    for e in lm.get("retiredLinks", []):
+        dest = os.path.expanduser(e["dest"])
+        if os.path.islink(dest):
+            target = os.path.realpath(dest)
+            if target == REPO_ROOT or target.startswith(REPO_ROOT + os.sep):
+                problems.append(f"{tool}: leftover clone-symlink at {e['dest']} — remove it "
+                                f"(delivery is now additive; the symlink masks your own global file)")
 
     state = load_json(os.path.join(REPO_ROOT, "local", "merge-state.json"), {"merges": {}})
     for m in lm.get("merges", []):
@@ -100,6 +157,8 @@ def check_tool(tool, problems, report):
         seat_problems = check_seat_flags(tool, seats)
         problems.extend(f"{tool}: {p}" for p in seat_problems)
         tinfo["seats"] = "ok" if not seat_problems else "problems"
+
+    check_instructions_delivery(tool, problems, tinfo)
     report.append(tinfo)
 
 

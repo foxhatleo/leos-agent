@@ -58,7 +58,7 @@ seats. Total council size is at most **5** (native + 4 externals).
 - **Every external seat MUST be launched with `env LEOS_COUNCIL_SEAT=1` prepended** (plus any
   per-seat `env` map, e.g. an isolated `CODEX_HOME`). This is the deterministic recursion guard:
   it is inherited by any hook the seat's own CLI fires, so a seat can never be nudged to convene
-  its own council. Respect each seat's `timeoutSeconds` (default 600) as the Bash-call timeout.
+  its own council. Respect each seat's `timeoutSeconds` (default 300) as the Bash-call timeout.
 - Missing/empty/unparseable `seats.$HOST.json` → **native-only mode**: every tier is served by
   independent native review passes (low=1, elevated=2, high=3, critical=3). State the
   reduced-diversity caveat in your report.
@@ -109,7 +109,7 @@ Then launch ALL seats for the tier in one message, in parallel, backgrounded, fr
 - **Each external seat**: `env LEOS_COUNCIL_SEAT=1 <per-seat env> <argv…>` built per the Seats
   model, from the repo root, output to `$WORK/out-<seat>.md`.
 
-Budget: give each Bash call a timeout (default 10 min; `.council.json` `budgetSeconds` overrides).
+Budget: give each Bash call a timeout (default 5 min; `.council.json` `budgetSeconds` overrides).
 If a seat times out or errors, proceed without it and record `fallback-fired`; if ALL external
 seats fail, fall back to native-only and record it.
 
