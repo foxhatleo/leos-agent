@@ -21,7 +21,7 @@
     },
     {
       "role": "gpt", "provider": "openai",
-      "modelGuidance": "The latest Codex/GPT flagship (e.g. gpt-5.5, then gpt-5.6, ...). Resolve at setup.",
+      "modelGuidance": "The latest Codex/GPT flagship. Resolve its transport-specific slug at setup; never commit it.",
       "recursionDisable": "isolated neutral CODEX_HOME (empty dir: no hooks.json, skills, or global AGENTS.md) + --sandbox read-only",
       "asNative": {
         "mode": "exec", "transport": "stdin",
@@ -44,7 +44,7 @@
     },
     {
       "role": "glm", "provider": "zhipu",
-      "modelGuidance": "Latest GLM via OpenRouter (e.g. z-ai/glm-5.2) for the opencode transport, or the Cursor GLM slug (confirm with `cursor-agent --list-models`) for the cursor transport. Resolve at setup.",
+      "modelGuidance": "Latest GLM via OpenRouter for the opencode transport, or the Cursor GLM slug (confirm with `cursor-agent --list-models`) for the cursor transport. Resolve at setup; never commit it.",
       "recursionDisable": "opencode --agent plan (read-only) + clean config dir; or cursor-agent --mode plan (read-only) in a clean dir. Neither loads CLAUDE.md-style council mandates.",
       "asExternal": {
         "transport": "arg",
@@ -60,7 +60,7 @@
     },
     {
       "role": "gemini", "provider": "google",
-      "modelGuidance": "Latest Gemini flagship via OpenRouter (e.g. google/gemini-3.1-pro), or the Cursor Gemini slug (confirm with `cursor-agent --list-models`) for the cursor transport. Native Gemini-CLI plan mode is experimental, so OpenCode+OpenRouter (or Cursor) is the firm read-only route. Resolve at setup.",
+      "modelGuidance": "Latest Gemini flagship via OpenRouter, or the Cursor Gemini slug (confirm with `cursor-agent --list-models`) for the cursor transport. Native Gemini-CLI plan mode is experimental, so OpenCode+OpenRouter (or Cursor) is the firm route. Resolve at setup; never commit it.",
       "recursionDisable": "opencode --agent plan (read-only) + clean config dir; or cursor-agent --mode plan (read-only) in a clean dir",
       "asExternal": {
         "transport": "arg",
@@ -76,7 +76,7 @@
     },
     {
       "role": "grok", "provider": "xai",
-      "modelGuidance": "Latest Grok flagship (e.g. grok-4.5 in Cursor, or x-ai/grok-4.5 via OpenRouter). For cursor-agent, confirm the exact slug with `cursor-agent --list-models`. Resolve at setup.",
+      "modelGuidance": "Latest Grok flagship in Cursor or via OpenRouter. For cursor-agent, confirm the exact slug with `cursor-agent --list-models`. Resolve at setup; never commit it.",
       "recursionDisable": "cursor-agent --mode plan (read-only) in a clean project dir; or opencode --agent plan via OpenRouter",
       "asExternalCursor": {
         "transport": "arg",
@@ -94,6 +94,8 @@
   "$runtimeSchema": {
     "$doc": "Shape of the machine-local local/seats.<host>.json the installer writes and the council skill reads. `native` describes how THIS host runs its own-model read-only review pass; `seats` are the EXTERNAL seats = roster minus this host's own provider, strongest-first, with {MODEL} already resolved to a concrete slug.",
     "host": "claude | codex | opencode | cursor",
+    "adapter": "optional external-seat adapter; cursor requires cursor-json after an output-contract smoke test",
+    "responsePath": "cursor-json external seat only: dotted JSON string field containing reviewer text",
     "native": {
       "mode": "subagent | exec",
       "model": "(subagent only) resolved model, e.g. opus",
@@ -104,9 +106,10 @@
     "seats": [
       {
         "name": "gpt", "provider": "openai", "transport": "stdin",
-        "argv": ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort={EFFORT}", "-m", "gpt-5.5", "-"],
+        "argv": ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort={EFFORT}", "-m", "{MODEL}", "-"],
         "efforts": { "default": "high", "max": "xhigh" },
         "env": { "CODEX_HOME": "/Users/you/.leos-agent/local/isolated-codex-home" },
+        "adapter": "codex",
         "timeoutSeconds": 300
       }
     ]

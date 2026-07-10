@@ -63,6 +63,7 @@ HOME_REF = re.compile(r"(~([A-Za-z_][\w-]*)?(/|[\s*]|$)|\$\{?HOME\}?)")
 WATCHED = {"rm", "dd", "chmod", "xargs", "cd"}
 ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 UNKNOWN_DIR = "<unknown>"
+UNKNOWN_PATH = "<unexpanded-shell-path>"
 
 # Whole subtrees that are never rm -rf'd unattended. /var excepted for temp dirs;
 # home containers (/Users, /home) handled separately so the caller's OWN home
@@ -120,8 +121,26 @@ def strip_wrappers(tokens):
 
 
 def expand(target, cwd, cd_context):
-    """Expand ~/, ~user, $HOME; resolve relative paths against cd-context or tool cwd."""
+    """Expand only stable shell path values and resolve relative paths against cd-context/tool cwd.
+
+    ``$PWD`` is deliberately modelled from the statement's preceding ``cd`` rather than the hook
+    process's own environment; that closes ``cd / && rm -rf $PWD``.  Other shell expansion is not
+    safe to guess for a catastrophic operation, so it remains an explicit unknown for the caller
+    to block conservatively.
+    """
+    if cd_context in (UNKNOWN_DIR, UNKNOWN_PATH):
+        # `$PWD` follows the shell's last successful `cd`; falling back to the hook payload's
+        # original cwd here would mis-model `cd $UNKNOWN && rm -rf $PWD` as a safe project delete.
+        pwd = None
+    else:
+        pwd = cd_context or cwd
     t = target.replace("${HOME}", HOME).replace("$HOME", HOME)
+    if pwd:
+        t = t.replace("${PWD}", pwd).replace("$PWD", pwd)
+    elif "$PWD" in t or "${PWD}" in t:
+        return UNKNOWN_PATH
+    if "$" in t or "`" in t or "$(`" in t:
+        return UNKNOWN_PATH
     if t == "~" or t.startswith("~/"):
         t = HOME + t[1:]
     else:
@@ -132,7 +151,7 @@ def expand(target, cwd, cd_context):
             except KeyError:
                 t = "/Users/" + m.group(1) + (m.group(2) or "")
     base = cd_context or cwd
-    if base == UNKNOWN_DIR:
+    if base in (UNKNOWN_DIR, UNKNOWN_PATH):
         base = None
     if t and not t.startswith("/") and base:
         t = os.path.join(base, t)
@@ -214,6 +233,8 @@ def check_rm(tokens, cwd, cd_context):
         if raw in (".", "..", "./", "../", "./*", "../*", "*") and not (cwd or cd_context):
             return f"recursive rm of '{raw}' with unknown working directory"
         for candidate in brace_variants(expand(raw, cwd, cd_context)):
+            if candidate == UNKNOWN_PATH:
+                return f"recursive rm with unexpanded shell path '{raw}'"
             if is_critical(candidate):
                 return f"recursive rm targeting '{raw}'"
     return None
@@ -226,7 +247,8 @@ def handle_cd(tokens, cwd, cd_context):
         return HOME
     if args[0] == "-":
         return UNKNOWN_DIR
-    return expand(args[0], cwd, cd_context)
+    result = expand(args[0], cwd, cd_context)
+    return UNKNOWN_DIR if result == UNKNOWN_PATH else result
 
 
 def check_statement(statement, cwd, cd_context):

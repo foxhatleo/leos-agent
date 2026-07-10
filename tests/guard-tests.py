@@ -2,7 +2,7 @@
 """Tests for core/hooks/bash-guard.py — the catastrophic-deletion tripwire.
 
 Each case runs the real guard as a subprocess with a JSON payload on stdin and asserts the exit
-code (43 = block, 0 = allow). Run: python3 tests/guard-tests.py
+code (43 = block, 0 = allow). Run: bin/leos-python tests/guard-tests.py
 """
 
 import json
@@ -29,6 +29,9 @@ BLOCK = [
     "{ rm -rf ~; }",                   # brace group
     "cd /usr\nrm -rf bin",             # newline-separated statements
     "cd /usr && rm -rf bin",           # cd-context then relative rm
+    "cd / && rm -rf $PWD",             # $PWD must follow the preceding cd, not the hook cwd
+    "rm -rf $UNRESOLVED_DEST",         # ambiguous shell target is unsafe for recursive rm
+    "cd $UNRESOLVED_DEST && rm -rf $PWD",  # an unresolved cd must not make $PWD look harmless
     "chmod -R 755 /usr",               # recursive chmod of system path
     "chmod -R 777 ~",                  # recursive chmod of home
     "chmod -R 777 /{bin,usr}",         # brace-expanded chmod
@@ -64,7 +67,7 @@ ALLOW = [
 
 def run(command, cwd=None):
     payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": cwd})
-    r = subprocess.run(["python3", GUARD], input=payload, capture_output=True, text=True)
+    r = subprocess.run([sys.executable, GUARD], input=payload, capture_output=True, text=True)
     return r.returncode
 
 

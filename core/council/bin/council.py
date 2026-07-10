@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Council review support tool. See <repo>/core/council/DESIGN.md.
 
-Tool-neutral: one engine serves Claude Code, Codex, OpenCode, and Cursor. State is
-shared across tools (one STATE_ROOT outside every tool home and outside the repo), so
-a review recorded by one host is visible to the others on the same repo+diff.
+Tool-neutral: one engine serves Claude Code, Codex, OpenCode, and Cursor. State is shared across
+the configured hosts in this clone under local/council/state, so a review recorded by one host is
+visible to the others on the same repo+diff without using global or system temporary directories.
 
 Subcommands:
   risk    [--json]                 Compute risk tier for the current repo's diff.
@@ -27,8 +27,10 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 HOME = os.path.expanduser("~")
@@ -42,15 +44,17 @@ def _repo_root():
 
 
 REPO_ROOT = _repo_root()
+LOCAL = os.environ.get("LEOS_LOCAL", os.path.join(REPO_ROOT, "local"))
 # Machine-local council config (disabledProjects) lives gitignored inside the clone.
 CONFIG_PATH = os.environ.get(
-    "LEOS_COUNCIL_CONFIG", os.path.join(REPO_ROOT, "local", "council", "config.json"))
-# State (markers/ledger) lives OUTSIDE the repo and every tool home: shared across
-# tools, and safe from `git clean` in the clone.
+    "LEOS_COUNCIL_CONFIG", os.path.join(LOCAL, "council", "config.json"))
+# State (markers/ledger) is private to this clone, gitignored, and shared across its hosts.  It
+# intentionally does not use /tmp or ~/.local/state: all Leo-owned runtime material belongs under
+# local/ so it can be inspected/backed up/removed with the clone.
 STATE_ROOT = os.environ.get(
     "LEOS_COUNCIL_STATE",
-    os.path.join(os.environ.get("XDG_STATE_HOME", os.path.join(HOME, ".local", "state")),
-                 "leos-agent", "council", "state"))
+    os.path.join(LOCAL, "council", "state"))
+LEGACY_STATE_ROOT = os.path.join(os.path.expanduser("~"), ".local", "state", "leos-agent", "council", "state")
 _SELF = os.path.realpath(__file__)
 
 TIERS = ["skip", "low", "elevated", "high", "critical"]
@@ -91,6 +95,11 @@ DEP_FILE_RE = re.compile(
 )
 
 ENV_FILE_RE = re.compile(r"(^|/)\.env[^/]*$")
+SENSITIVE_UNTRACKED_RE = re.compile(
+    r"(^|/)(\.env[^/]*|\.netrc|credentials\.json|id_(rsa|ed25519|ecdsa)[^/]*|.*\.(pem|key))$"
+    r"|(^|/)\.(ssh|aws|gnupg)/",
+    re.IGNORECASE,
+)
 
 SECURITY_SYMBOL_RE = re.compile(
     r"\b(token|secret|password|passwd|credential|authoriz\w*|authenticat\w*|permission|csrf|jwt|cookie|session[_ ]?key)\b",
@@ -166,8 +175,7 @@ def resolve_base(cwd):
     if base is None:
         base = "HEAD"  # no upstream/default branch — score uncommitted changes; NOT escalated
     try:
-        with open(_base_cache_path(cwd), "w") as f:
-            json.dump({"head": head, "base": base}, f)
+        _atomic_json(_base_cache_path(cwd), {"head": head, "base": base})
     except Exception:
         pass
     return base
@@ -233,6 +241,12 @@ def _read_untracked(cwd, untracked):
     for p in sorted(untracked)[:MAX_UNTRACKED_FILES]:
         try:
             fp = os.path.join(cwd, p)
+            if SENSITIVE_UNTRACKED_RE.search(p):
+                # Never read probable secrets merely to score risk.  Hash stable metadata so edits
+                # still invalidate a marker, and let _score surface the omitted-review risk.
+                st = os.stat(fp)
+                contents[p] = (MAX_UNTRACKED_READ, f"sensitive:{st.st_size}:{st.st_mtime_ns}".encode())
+                continue
             size = os.path.getsize(fp)
             with open(fp, "rb") as f:
                 contents[p] = (size, f.read(MAX_UNTRACKED_READ))
@@ -284,7 +298,7 @@ def _hash_all(cwd, diff_text, untracked, untracked_contents):
     files invalidate markers."""
     h = hashlib.sha256()
     h.update(diff_text.encode("utf-8", "replace"))
-    for p in sorted(untracked)[:MAX_UNTRACKED_FILES]:
+    for p in sorted(untracked):
         h.update(("\0" + p + "\0").encode("utf-8", "replace"))
         c = untracked_contents.get(p)
         if c is None:
@@ -368,8 +382,7 @@ def cached_risk(cwd, *, base_tree=None):
         cfg = load_project_config(cwd)
         risk = _score(diff_text, name_status, untracked, untracked_contents, undeterminable, cfg, h)
         try:
-            with open(cpath, "w") as f:
-                json.dump({"key": key, "ts": int(time.time()), "risk": risk}, f)
+            _atomic_json(cpath, {"key": key, "ts": int(time.time()), "risk": risk})
         except Exception:
             pass
         return risk
@@ -409,7 +422,23 @@ def _score(diff_text, name_status, untracked, untracked_contents, undeterminable
     large_files = th.get("largeFiles", 10)
 
     code_files = {p: v for p, v in files.items() if not IGNORE_PATH_RE.search(p)}
+    sensitive_untracked = [p for p in untracked if SENSITIVE_UNTRACKED_RE.search(p)]
+    oversized_untracked = [p for p, c in untracked_contents.items()
+                           if c is not None and c[0] >= MAX_UNTRACKED_READ and p not in sensitive_untracked]
+    unscanned_count = max(0, len(untracked) - MAX_UNTRACKED_FILES)
+    unknown_untracked = bool(sensitive_untracked or oversized_untracked or unscanned_count)
     if not code_files:
+        if unknown_untracked:
+            details = []
+            if sensitive_untracked:
+                details.append(f"{len(sensitive_untracked)} sensitive untracked path(s) not read")
+            if oversized_untracked:
+                details.append(f"{len(oversized_untracked)} oversized untracked file(s) not read")
+            if unscanned_count:
+                details.append(f"{unscanned_count} untracked file(s) beyond scan cap")
+            return {"tier": "elevated", "tier_index": 2,
+                    "reasons": ["unknown untracked content: " + "; ".join(details)],
+                    "hash": h, "stats": {"files": len(files)}}
         if undeterminable and (diff_text or untracked):
             return {"tier": "elevated", "tier_index": 2,
                     "reasons": ["undeterminable diff base with changes present — unknown floor"],
@@ -500,6 +529,16 @@ def _score(diff_text, name_status, untracked, untracked_contents, undeterminable
     if undeterminable and tier < 4:
         tier += 1
         reasons.append("undeterminable diff base (escalated one tier)")
+    if unknown_untracked:
+        tier = max(tier, 2)
+        details = []
+        if sensitive_untracked:
+            details.append(f"{len(sensitive_untracked)} sensitive untracked path(s) omitted")
+        if oversized_untracked:
+            details.append(f"{len(oversized_untracked)} oversized untracked file(s) omitted")
+        if unscanned_count:
+            details.append(f"{unscanned_count} untracked file(s) beyond cap")
+        reasons.append("unknown untracked content: " + "; ".join(details))
     if truncated:
         reasons.append("diff exceeded parse cap (treated as large)")
 
@@ -528,13 +567,14 @@ def project_slug(cwd):
 
 def state_dir(cwd):
     slug, root = project_slug(cwd)
+    _secure_mkdir(STATE_ROOT)
     d = os.path.join(STATE_ROOT, slug)
-    os.makedirs(os.path.join(d, "markers"), exist_ok=True)
-    os.makedirs(os.path.join(d, "tmp"), exist_ok=True)
+    _secure_mkdir(d)
+    _secure_mkdir(os.path.join(d, "markers"))
+    _secure_mkdir(os.path.join(d, "tmp"))
     rootfile = os.path.join(d, "root")
     if not os.path.exists(rootfile):
-        with open(rootfile, "w") as f:
-            f.write(root)
+        _atomic_write(rootfile, root + "\n")
     return d
 
 
@@ -552,16 +592,34 @@ def read_marker(cwd, h):
 
 def write_marker(cwd, h, data):
     data = {"hash": h, "ts": int(time.time()), **data}
-    with open(marker_path(cwd, h), "w") as f:
-        json.dump(data, f, indent=2)
+    _atomic_json(marker_path(cwd, h), data)
     return data
 
 
 def append_ledger(cwd, entry):
     p = os.path.join(state_dir(cwd), "ledger.jsonl")
     entry = {"ts": int(time.time()), **entry}
-    with open(p, "a") as f:
+    with open(p, "a", encoding="utf-8") as f:
+        try:
+            os.chmod(p, 0o600)
+        except OSError:
+            pass
+        try:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        except (ImportError, OSError):
+            pass
         f.write(json.dumps(entry) + "\n")
+        f.flush()
+        try:
+            os.fsync(f.fileno())
+        except OSError:
+            pass
+        try:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        except (ImportError, OSError):
+            pass
 
 
 # Fixed-name project pointers (independent of the churning diff hash): the reviewed baselines
@@ -578,10 +636,49 @@ def _read_pointer(cwd, name):
 
 def _write_pointer(cwd, name, data):
     try:
-        with open(os.path.join(state_dir(cwd), name), "w") as f:
-            json.dump(data, f, indent=2)
+        _atomic_json(os.path.join(state_dir(cwd), name), data)
     except Exception:
         pass
+
+
+def _remove_pointer(cwd, name):
+    try:
+        os.unlink(os.path.join(state_dir(cwd), name))
+    except OSError:
+        pass
+
+
+def _secure_mkdir(path):
+    os.makedirs(path, exist_ok=True, mode=0o700)
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        pass
+
+
+def _atomic_write(path, text):
+    _secure_mkdir(os.path.dirname(path))
+    fd, tmp = tempfile.mkstemp(prefix="state-", dir=os.path.dirname(path))
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+
+
+def _atomic_json(path, data):
+    _atomic_write(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
 # --- Subcommands -------------------------------------------------------------
@@ -616,13 +713,59 @@ def cmd_root(_args):
     return 0
 
 
+def cmd_migrate_legacy_state(args):
+    """Explicitly copy old external state into local/ without ever modifying the source.
+
+    This command is intentionally opt-in: a new clone starts clean unless Leo asks to preserve
+    historical review markers/ledgers.  It refuses a nonempty target and symlinks in the source so
+    migration cannot silently overwrite current state or follow arbitrary external files.
+    """
+    source = os.path.realpath(os.path.expanduser(args.from_path or LEGACY_STATE_ROOT))
+    target = os.path.realpath(STATE_ROOT)
+    if not os.path.isdir(source):
+        print(json.dumps({"ok": False, "reason": f"legacy state directory not found: {source}"}, indent=2))
+        return 1
+    if source == target:
+        print(json.dumps({"ok": False, "reason": "legacy source already is the active state directory"}, indent=2))
+        return 1
+    if os.path.exists(target) and os.listdir(target):
+        print(json.dumps({"ok": False, "reason": f"target is not empty: {target}"}, indent=2))
+        return 1
+    for current, dirs, files in os.walk(source):
+        if any(os.path.islink(os.path.join(current, name)) for name in dirs + files):
+            print(json.dumps({"ok": False, "reason": "legacy state contains symlinks; refusing to follow them"}, indent=2))
+            return 1
+    try:
+        os.makedirs(os.path.dirname(target), exist_ok=True, mode=0o700)
+        if os.path.exists(target):
+            os.rmdir(target)  # verified empty above
+        shutil.copytree(source, target, copy_function=shutil.copy2)
+        for current, dirs, files in os.walk(target):
+            try:
+                os.chmod(current, 0o700)
+            except OSError:
+                pass
+            for name in files:
+                try:
+                    os.chmod(os.path.join(current, name), 0o600)
+                except OSError:
+                    pass
+    except OSError as e:
+        print(json.dumps({"ok": False, "reason": f"migration failed: {e}"}, indent=2))
+        return 1
+    print(json.dumps({"ok": True, "source": source, "target": target,
+                      "note": "source left unchanged"}, indent=2))
+    return 0
+
+
 def cmd_begin(args):
     """Write an in-review marker so the Stop hook doesn't nudge while a council runs."""
     cwd = os.getcwd()
     diff_text, _, untracked, uc, _ = get_diff(cwd)
     h = _hash_all(cwd, diff_text, untracked, uc)
     data = write_marker(cwd, h, {"status": "in-review", "checkpoint": args.checkpoint})  # legacy
-    _write_pointer(cwd, "in-review.json", {"checkpoint": args.checkpoint, "ts": int(time.time())})
+    _write_pointer(cwd, "in-review.json", {"checkpoint": args.checkpoint, "ts": int(time.time()),
+                                              "run_id": getattr(args, "run_id", "")})
     append_ledger(cwd, {"type": "begin", **data})
     print(f"in-review: {h}")
     return 0
@@ -652,6 +795,9 @@ def cmd_mark(args):
     ns = _read_pointer(cwd, "nudge-state.json") or {}
     ns[args.checkpoint] = {"count": 0, "ts": int(time.time())}
     _write_pointer(cwd, "nudge-state.json", ns)
+    ir = _read_pointer(cwd, "in-review.json") or {}
+    if ir.get("checkpoint") == args.checkpoint:
+        _remove_pointer(cwd, "in-review.json")
     append_ledger(cwd, {"type": "marker", **data})
     print(f"marked {status}: {h}")
     return 0
@@ -691,8 +837,8 @@ def cmd_hook(_args):
     """Stop hook. Exit 0 = allow stop; exit NUDGE_EXIT = nudge (stderr shown to the model).
     FAIL OPEN on every error path — never break the user's flow."""
     # Recursion guard: a council seat/subagent must never be nudged to convene its own
-    # council. This env var is set by the council skill when it dispatches seats, and is
-    # inherited by any hook the seat's own CLI fires.
+    # council. The runner sets this env var for CLI seats, and it is inherited by any hook the
+    # seat's own CLI fires.
     if os.environ.get("LEOS_COUNCIL_SEAT"):
         return 0
     try:
@@ -779,7 +925,7 @@ def cmd_hook(_args):
             f"review marker. Before finishing: EITHER run the council implementation checkpoint "
             f"(invoke the 'council' skill with checkpoint=impl), OR — if review is genuinely "
             f"unwarranted — record a logged override:\n"
-            f"  python3 {_SELF} mark --checkpoint impl --override --reason \"<why>\"\n"
+            f"  {REPO_ROOT}/bin/leos-python {_SELF} mark --checkpoint impl --override --reason \"<why>\"\n"
             f"If you are running as a council seat or subagent, ignore this nudge entirely — "
             f"do not convene a council or write an override marker. "
             f"Overrides are logged and surfaced to the developer. This nudge does not repeat "
@@ -807,8 +953,13 @@ def main():
     p = sub.add_parser("root")
     p.set_defaults(fn=cmd_root)
 
+    p = sub.add_parser("migrate-legacy-state", help="explicitly copy old ~/.local council state into local/")
+    p.add_argument("--from", dest="from_path", default="", help="legacy state root (default: old ~/.local path)")
+    p.set_defaults(fn=cmd_migrate_legacy_state)
+
     p = sub.add_parser("begin")
     p.add_argument("--checkpoint", choices=["impl", "plan"], required=True)
+    p.add_argument("--run-id", default="", help="runner-owned id; prevents a nested Leo council")
     p.set_defaults(fn=cmd_begin)
 
     p = sub.add_parser("mark")

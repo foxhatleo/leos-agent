@@ -22,9 +22,9 @@ Codex, OpenCode, Cursor). They do not re-source shell profiles per command. Cons
 Hook scripts (`bash-guard.py`, `format-on-edit.py`, `council.py`) are **symlinked** from each tool
 home into the leos-agent clone and **self-locate** the clone via `realpath(__file__)`, so they find
 their machine-local config in `<clone>/local/` regardless of which tool home invoked them and even
-if the home is relocated. The registration wrapper is fail-closed on a missing script:
-`sh -c '[ -f "$S" ] || exit 2; python3 "$S"; ec=$?; [ "$ec" = <CODE> ] && exit 2; exit 0'` — a
-dangling symlink blocks rather than silently passing.
+if the home is relocated. Registrations invoke the symlinked `leos-python` launcher, which uses
+only `<clone>/local/.venv/bin/python`; the guard wrapper blocks on a missing/broken launcher or
+script, while formatter/council availability remains fail-open by design.
 
 Where host config expects a literal command path (e.g. a notifier), render the absolute path from
 THIS machine (`command -v <tool>`). Never copy one from another machine.

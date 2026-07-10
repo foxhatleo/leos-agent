@@ -20,7 +20,7 @@ OpenCode and Cursor support.
   external seats. One tool-neutral engine + skill + prompts. Model slugs resolved at setup, never
   committed; the Anthropic seat is always the Opus line (never Fable/Mythos).
 - `[all]` **Deterministic anti-recursion**: a `LEOS_COUNCIL_SEAT` env sentinel (checked by the Stop
-  hook, the skill, and both prompts), a shared council `STATE_ROOT` outside every tool home, an
+  hook, the skill, and both prompts), a shared council `STATE_ROOT` (now clone-local under `local/`), an
   in-review marker, and per-seat mechanical isolation (`claude --safe-mode`, isolated `CODEX_HOME`,
   `--agent plan`, `--mode plan`). A council seat can never convene its own council.
 - `[all]` **Shared `policy-data.json`** (secret-read denies + fixed-subcommand allowlist) rendered
@@ -34,6 +34,21 @@ OpenCode and Cursor support.
 - `[all]` Five test batteries (guard, fmt, council, merge, link) — the actual counts, not "90+".
 
 ### Changed (setup & council robustness — from second-machine install feedback)
+- `[all]` **Private Python runtime + portable TOML support.** Setup now bootstraps CPython 3.9+
+  into `local/.venv`, installs hash-locked `tomli`, and launches every Leo script through
+  `bin/leos-python`; no host hook relies on ambient `python3`. GitHub Actions covers Python 3.9,
+  3.11, and 3.14 on macOS and Linux.
+- `[all]` **Deterministic council CLI runner.** `core/council/bin/runner.py` is explicitly invoked
+  by the orchestrator, uses direct argv/process-group timeouts, captures private structured
+  results, emits private lifecycle events, and distinguishes completed/empty/missing-content/
+  invalid/nonzero/timeout/unavailable states. It blocks nested Leo council runs while allowing
+  seats' ordinary subagents; native-only and plan checkpoints retain their intended selection.
+- `[all]` **Clone-local runtime state.** Council state, prompts, results, venv/cache, merge/link
+  staging, and test scratch all live under `local/`; legacy `~/.local/state` is preserved but no
+  longer used by new installs. A source-preserving legacy-state import is explicit-only.
+- `[all]` **Host/safety repairs.** OpenCode uses its plural `plugins/` discovery path; Codex links,
+  merges, and doctor honor `CODEX_HOME`; `$PWD` and unresolved shell targets are covered by the
+  destructive-command guard; link/block/merge writes are backed up, private-staged, and atomic.
 - `[all]` **Council seats available via any installed transport, not OpenCode-only.** GLM/Gemini
   (and Opus/GPT) now declare an `asExternalCursor` variant, so `cursor-agent` is a universal
   fallback transport — a Cursor-but-no-OpenCode machine can host the whole council. Setup's rule is

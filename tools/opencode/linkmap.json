@@ -2,7 +2,8 @@
   "$doc": "OpenCode delivery map. The guard is a plugin (tool.execute.before), not an exit-2 hook. Skills go to ~/.agents/skills (OpenCode reads it natively). opencode.json is merged — including an additive `instructions` entry pointing at {{CLONE_ROOT}}/global/AGENTS.md (leos-merge expands the token to the clone path), so leos's global instructions load ALONGSIDE the user's own ~/.config/opencode/AGENTS.md instead of clobbering it. NOTE: OpenCode has no documented Stop-event hook, so the council Stop-nudge is NOT wired here — the council still runs via the skill + global AGENTS.md mandate.",
   "toolHome": "~/.config/opencode",
   "links": [
-    { "dest": "~/.config/opencode/plugin/leos-guard.ts", "src": "tools/opencode/plugin/leos-guard.ts", "note": "Node resolves the symlink; plugin self-locates core/hooks/bash-guard.py" },
+    { "dest": "~/.config/opencode/plugins/leos-guard.ts", "src": "tools/opencode/plugin/leos-guard.ts", "note": "OpenCode loads local plugins from plugins/; the plugin self-locates the shared guard" },
+    { "dest": "~/.config/opencode/leos-python", "src": "bin/leos-python", "note": "private-runtime launcher for plugin-backed guard" },
     { "dest": "~/.config/opencode/council/bin/council.py", "src": "core/council/bin/council.py", "note": "BIN for the council skill on OpenCode host" },
     { "dest": "~/.agents/skills/council", "src": "core/skills/council", "type": "dir", "note": "OpenCode reads ~/.agents/skills natively; shared symlink" }
   ],

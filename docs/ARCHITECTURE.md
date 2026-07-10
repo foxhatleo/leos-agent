@@ -37,7 +37,9 @@ adapters, not forks.
 Symlinks retire the copy/ownership/migration machinery for everything a host does NOT rewrite. The
 gains and the guardrails:
 
-- **`git pull` = upgrade.** The symlinked payload updates live. No version numbers, no `MIGRATE`.
+- **`git pull` updates payload.** The symlinked payload updates live; refresh the private runtime
+  with `leos-runtime.py setup --refresh` and let doctor report a changed lock/fragment. There is no
+  destructive migration system.
 - **Self-location.** Hooks/engine find `<clone>/local/` via `realpath(__file__)`, so one symlinked
   script serves any tool home.
 - **Everything machine-local lives in the clone, gitignored** (`local/`) — including the council
@@ -55,8 +57,8 @@ gains and the guardrails:
 
 ## Council: host = native, roster minus host = external
 
-The five flagship roles are fixed; the exact model slug is resolved at setup, never committed (they
-go stale — Opus 4.8 / GPT-5.5 are already about to be superseded). The host's own model is the
+The five flagship roles are fixed; the exact model slug is resolved at setup and never committed
+(provider versions change). The host's own model is the
 native reviewer; the other four flagships (minus the host's provider) are external. The Anthropic
 seat is always the **Opus line** — never Fable or Mythos.
 
@@ -64,13 +66,18 @@ seat is always the **Opus line** — never Fable or Mythos.
 
 Deterministic first, tool-agnostic:
 
-1. `LEOS_COUNCIL_SEAT=1` env sentinel on every external-seat launch (inherited by child hooks).
+1. The explicit runner sets `LEOS_COUNCIL_SEAT=1` on every external-seat launch (inherited by child hooks).
 2. The Stop hook returns 0 immediately when the sentinel is set.
-3. The skill's first paragraph and both review prompts check the sentinel.
-4. One shared `STATE_ROOT` outside every tool home + an in-review marker cover env-stripping CLIs
-   and cross-tool visibility.
+3. The skill, runner, and prompts refuse a nested Leo's Agents council. Seats may still use ordinary
+   host subagents; this is a recursion boundary, not a ban on delegation.
+4. One shared clone-local `STATE_ROOT` under `local/council/state` + an owned in-review marker
+   cover env-stripping CLIs and cross-tool visibility without using `/tmp` or `~/.local/state`.
 5. Per-seat mechanical isolation (`claude --safe-mode` is the only true one; others use read-only +
    dir/env hygiene).
+
+The runner creates its owned marker before dispatch and records bounded stdout/stderr, exit code,
+elapsed time, and a typed terminal state. A blank/invalid/nonzero/timed-out CLI call is never
+treated as a successful review.
 
 Only the `Stop` event is registered (never `SubagentStop`), so native subagents are never
 hook-nudged. Backstops retained: 2-nudge loop guard, read-only seats, per-seat timeouts, 2-pass cap.

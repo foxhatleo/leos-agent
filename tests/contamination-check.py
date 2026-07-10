@@ -5,7 +5,7 @@ Asserts that the Codex and Cursor rendered configs never contain a literal Claud
 string (`Bash(...)` / `permissions.allow` in Claude's exact form) — the exact contamination the
 steelman warned about. Codex's command policy is advisory; Cursor uses Shell()/Read() tokens, not
 Claude's Bash(). A future "unify the policy step" edit that pasted Claude strings across would be
-caught here. Run: python3 tests/contamination-check.py
+caught here. Run: bin/leos-python tests/contamination-check.py
 """
 
 import json

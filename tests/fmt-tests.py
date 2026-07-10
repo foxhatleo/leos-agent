@@ -3,7 +3,7 @@
 
 Uses fake executable shims (no real toolchains needed) inside an isolated project under a temp
 HOME. Covers: apply_patch + file_path path extraction, JS eslint --fix + lint feedback (exit 44),
-Python ruff, a clean pass (exit 0), and the home-boundary no-op. Run: python3 tests/fmt-tests.py
+Python ruff, a clean pass (exit 0), and the home-boundary no-op. Run: bin/leos-python tests/fmt-tests.py
 """
 
 import importlib.util
@@ -15,6 +15,9 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+TEST_TMP = os.path.join(ROOT, "local", "test-work")
+os.makedirs(TEST_TMP, exist_ok=True)
+tempfile.tempdir = TEST_TMP
 FMT = os.path.join(ROOT, "core", "hooks", "format-on-edit.py")
 
 spec = importlib.util.spec_from_file_location("fmt", FMT)
@@ -40,7 +43,7 @@ def shim(binpath, exit_code, stderr=""):
 
 
 def run_hook(home, payload):
-    r = subprocess.run(["python3", FMT], input=json.dumps(payload), capture_output=True, text=True,
+    r = subprocess.run([sys.executable, FMT], input=json.dumps(payload), capture_output=True, text=True,
                        env=dict(os.environ, HOME=home, PATH=os.path.join(home, "bin") + ":" + os.environ["PATH"]))
     return r.returncode, r.stderr
 

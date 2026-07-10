@@ -19,19 +19,30 @@ copy/ownership-sha machinery that symlinks make obsolete.
 """
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
 import re
 import shutil
+import stat
 import sys
+import tempfile
 import time
-import tomllib
+try:  # Python 3.11+; the local runtime installs tomli for Python 3.9–3.10.
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised on the Python 3.9 CI lane
+    import tomli as tomllib
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 LOCAL = os.environ.get("LEOS_LOCAL", os.path.join(REPO_ROOT, "local"))  # override for tests
 STATE = os.path.join(LOCAL, "merge-state.json")
 HOME = os.path.realpath(os.path.expanduser("~"))
+
+
+def _expand_home_token(path):
+    """Expand the one portable host-home token used in committed link maps."""
+    return path.replace("{{CODEX_HOME}}", os.environ.get("CODEX_HOME", os.path.join(HOME, ".codex")))
 
 
 def sha_text(text):
@@ -41,7 +52,7 @@ def sha_text(text):
 def expand(dest):
     """Expand a dest and REFUSE anything outside $HOME (all host homes live under it).
     realpath kills ../ traversal and symlink tricks."""
-    path = os.path.realpath(os.path.expanduser(dest))
+    path = os.path.realpath(os.path.expanduser(_expand_home_token(dest)))
     if not (path == HOME or path.startswith(HOME + os.sep)):
         raise SystemExit(f"refusing dest outside HOME: {dest}")
     return path
@@ -234,27 +245,119 @@ def load_state():
 
 
 def save_state(state):
-    os.makedirs(LOCAL, exist_ok=True)
-    with open(STATE, "w") as f:
-        json.dump(state, f, indent=2, sort_keys=True)
+    _atomic_write(STATE, json.dumps(state, indent=2, sort_keys=True) + "\n", mode=0o600)
+
+
+def _secure_mkdir(path):
+    os.makedirs(path, exist_ok=True, mode=0o700)
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        pass
+
+
+def _atomic_write(path, text, mode=0o600):
+    """Stage under local/ then atomically replace.  Refuse cross-device writes rather than
+    quietly putting Leo's temporary files in a system temp directory."""
+    staging = os.path.join(LOCAL, "staging")
+    _secure_mkdir(staging)
+    parent = os.path.dirname(path)
+    os.makedirs(parent, exist_ok=True)
+    if os.stat(staging).st_dev != os.stat(parent).st_dev:
+        raise OSError("local staging and destination are on different filesystems; refusing non-atomic write")
+    fd, tmp = tempfile.mkstemp(prefix="merge-", dir=staging)
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        try:
+            os.chmod(path, mode)
+        except OSError:
+            pass
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+
+
+@contextlib.contextmanager
+def _merge_lock():
+    """Serialize state+destination updates across concurrent setup/doctor sessions."""
+    _secure_mkdir(LOCAL)
+    lock_path = os.path.join(LOCAL, "merge.lock")
+    with open(lock_path, "a+") as lock:
+        try:
+            os.chmod(lock_path, 0o600)
+        except OSError:
+            pass
+        try:
+            import fcntl
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        except (ImportError, OSError):
+            # macOS and mainstream Linux provide fcntl.  If unavailable, preserve correctness of
+            # individual atomic writes but do not pretend we have inter-process serialization.
+            pass
+        try:
+            yield
+        finally:
+            try:
+                import fcntl
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            except (ImportError, OSError):
+                pass
 
 
 def snapshot_dest(dest, dest_key):
     if not os.path.exists(dest):
         return None
     bdir = os.path.join(LOCAL, "backups", time.strftime("%Y%m%d-%H%M%S"))
-    os.makedirs(bdir, exist_ok=True)
-    target = os.path.join(bdir, dest_key.replace("~/", "").replace("/", "__"))
+    _secure_mkdir(bdir)
+    base = dest_key.replace("{{CODEX_HOME}}/", "codex-home__").replace("~/", "").replace("/", "__")
+    target = os.path.join(bdir, base)
+    n = 1
+    while os.path.lexists(target):
+        target = os.path.join(bdir, f"{base}.{n}")
+        n += 1
     shutil.copy2(dest, target)
     return target
 
 
-def do_merge(dest_key, fragment_path, strategy, force):
+def _package_manager_extras(package_manager):
+    """Render the selected Claude package-manager rules from the canonical policy data."""
+    policy = load_json(os.path.join(REPO_ROOT, "core", "policy", "policy-data.json"), {})
+    commands = policy.get("commandAllow", {}).get(package_manager, [])
+    if not isinstance(commands, list) or not all(isinstance(c, str) for c in commands):
+        raise ValueError(f"invalid commandAllow.{package_manager} policy data")
+    return ({"permissions": {"allow": [f"Bash({cmd}:*)" for cmd in commands]}},
+            {"packageManager": package_manager,
+             "packageManagerSha": sha_text(json.dumps(commands, sort_keys=True))})
+
+
+def _recorded_package_manager():
+    """Keep a prior Claude choice on ordinary upgrade merges.  Without this, doctor could tell a
+    user to re-run --tool claude and silently retire their package-manager allowances."""
+    try:
+        state = load_state()
+        entry = state.get("merges", {}).get("~/.claude/settings.json", {})
+        pm = entry.get("packageManager")
+        return pm if pm in ("pnpm", "yarn", "npm") else None
+    except (OSError, json.JSONDecodeError, ValueError, AttributeError):
+        return None
+
+
+def do_merge(dest_key, fragment_path, strategy, force, extra_values=None, extra_meta=None):
     strip = fragment_path
-    if strategy == "merge-toml":
-        fragment = load_toml(strip, None)
-    else:
-        fragment = load_json(strip, None)
+    try:
+        if strategy == "merge-toml":
+            fragment = load_toml(strip, None)
+        else:
+            fragment = load_json(strip, None)
+    except (OSError, json.JSONDecodeError, ValueError) as e:
+        return {"applied": False, "dest": dest_key, "reason": f"cannot read fragment: {e}"}
     if not isinstance(fragment, dict):
         return {"applied": False, "dest": dest_key, "reason": f"cannot read fragment: {fragment_path}"}
     fragment = {k: v for k, v in fragment.items() if not str(k).startswith("$")}
@@ -262,11 +365,25 @@ def do_merge(dest_key, fragment_path, strategy, force):
     # leos-doctor.frag_sha; then expand machine-local tokens for the actual merge + stored values.
     template_sha = sha_text(json.dumps(fragment, sort_keys=True))
     fragment = _expand_tokens(fragment, {"{{CLONE_ROOT}}": REPO_ROOT})
+    extra_values = extra_values or {}
+    extra_meta = extra_meta or {}
+    fragment = _deep_union(_copy(fragment), extra_values)
 
     dest = expand(dest_key)
-    current = load_toml(dest, {}) if strategy == "merge-toml" else load_json(dest, {})
-    state = load_state()
-    entry = state["merges"].get(dest_key, {})
+    try:
+        current = load_toml(dest, {}) if strategy == "merge-toml" else load_json(dest, {})
+    except (OSError, json.JSONDecodeError, ValueError) as e:
+        return {"applied": False, "dest": dest_key, "reason": f"cannot parse destination: {e}"}
+    try:
+        state = load_state()
+    except (OSError, json.JSONDecodeError, ValueError) as e:
+        return {"applied": False, "dest": dest_key, "reason": f"cannot parse merge state: {e}"}
+    if not isinstance(state, dict) or not isinstance(state.get("merges"), dict):
+        return {"applied": False, "dest": dest_key, "reason": "invalid merge state schema"}
+    # A pre-CODEX_HOME state record used ~/.codex/config.toml.  Read it once and migrate it to the
+    # portable key when the merge succeeds; no host file is rewritten merely to migrate metadata.
+    legacy_key = dest_key.replace("{{CODEX_HOME}}", "~/.codex")
+    entry = state["merges"].get(dest_key, state["merges"].get(legacy_key, {}))
     owned = _deep_union(_copy(entry.get("values", {})), entry.get("extraValues", {}))
     actions, conflicts = merge_preview(fragment, current, owned,
                                        retire_snapshot=entry.get("values", {}))
@@ -274,8 +391,10 @@ def do_merge(dest_key, fragment_path, strategy, force):
         return {"applied": False, "dest": dest_key, "conflicts": conflicts}
     if not actions and not conflicts:
         # No-op: keep the drift snapshot honest without rewriting the dest.
-        state["merges"][dest_key] = {"values": fragment, "extraValues": entry.get("extraValues", {}),
-                                     "fragmentSha": template_sha, "strategy": strategy}
+        state["merges"][dest_key] = {"values": _deep_union(_copy(fragment), {}), "extraValues": extra_values,
+                                      "fragmentSha": template_sha, "strategy": strategy, **extra_meta}
+        if legacy_key != dest_key:
+            state["merges"].pop(legacy_key, None)
         save_state(state)
         return {"applied": True, "dest": dest_key, "actions": [], "note": "already current"}
     merged = apply_actions(current, actions)
@@ -286,14 +405,15 @@ def do_merge(dest_key, fragment_path, strategy, force):
     try:
         text = dump_toml(merged) if strategy == "merge-toml" else json.dumps(merged, indent=2)
         backup = snapshot_dest(dest, dest_key)
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        with open(dest, "w") as f:
-            f.write(text)
+        old_mode = stat.S_IMODE(os.stat(dest).st_mode) if os.path.exists(dest) else 0o600
+        _atomic_write(dest, text, mode=old_mode)
     except (OSError, TypeError, ValueError) as e:
         return {"applied": False, "dest": dest_key, "reason": f"write failed: {e}"}
-    state["merges"][dest_key] = {"values": fragment, "extraValues": entry.get("extraValues", {}),
-                                 "fragmentSha": template_sha, "strategy": strategy,
+    state["merges"][dest_key] = {"values": _deep_union(_copy(fragment), {}), "extraValues": extra_values,
+                                 "fragmentSha": template_sha, "strategy": strategy, **extra_meta,
                                  "backup": backup}
+    if legacy_key != dest_key:
+        state["merges"].pop(legacy_key, None)
     save_state(state)
     return {"applied": True, "dest": dest_key, "actions": actions, "backup": backup}
 
@@ -304,19 +424,34 @@ def main():
     ap.add_argument("--dest")
     ap.add_argument("--fragment")
     ap.add_argument("--strategy", choices=["merge-json", "merge-toml"])
+    ap.add_argument("--package-manager", choices=["pnpm", "yarn", "npm"],
+                    help="Claude only: render this machine's safe package-manager allow rules")
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args()
 
     results = []
-    if args.tool:
-        linkmap = load_json(os.path.join(REPO_ROOT, "tools", args.tool, "linkmap.json"), {})
-        for m in linkmap.get("merges", []):
-            frag = os.path.join(REPO_ROOT, m["fragment"])
-            results.append(do_merge(m["dest"], frag, m["strategy"], args.force))
-    elif args.dest and args.fragment and args.strategy:
-        results.append(do_merge(args.dest, args.fragment, args.strategy, args.force))
-    else:
-        ap.error("give --tool, or all of --dest --fragment --strategy")
+    with _merge_lock():
+        if args.tool:
+            linkmap = load_json(os.path.join(REPO_ROOT, "tools", args.tool, "linkmap.json"), {})
+            extras = {}
+            extra_meta = {}
+            selected_pm = args.package_manager
+            if args.tool == "claude" and selected_pm is None:
+                selected_pm = _recorded_package_manager()
+            if selected_pm:
+                if args.tool != "claude":
+                    ap.error("--package-manager is currently a Claude settings surface only")
+                try:
+                    extras, extra_meta = _package_manager_extras(selected_pm)
+                except ValueError as e:
+                    ap.error(str(e))
+            for m in linkmap.get("merges", []):
+                frag = os.path.join(REPO_ROOT, m["fragment"])
+                results.append(do_merge(m["dest"], frag, m["strategy"], args.force, extras, extra_meta))
+        elif args.dest and args.fragment and args.strategy:
+            results.append(do_merge(args.dest, args.fragment, args.strategy, args.force))
+        else:
+            ap.error("give --tool, or all of --dest --fragment --strategy")
     print(json.dumps(results, indent=2))
     return 1 if any(not r.get("applied") for r in results) else 0
 

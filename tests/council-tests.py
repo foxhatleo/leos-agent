@@ -6,7 +6,7 @@ check.
 Each group uses its OWN throwaway git repo + isolated STATE (LEOS_COUNCIL_STATE) so nothing
 touches real state and groups don't contaminate each other's markers/baselines. Temp repos set
 commit.gpgsign=false so they pass on machines with global signing on.
-Run: python3 tests/council-tests.py
+Run: bin/leos-python tests/council-tests.py
 """
 
 import json
@@ -17,6 +17,9 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+TEST_TMP = os.path.join(ROOT, "local", "test-work")
+os.makedirs(TEST_TMP, exist_ok=True)
+tempfile.tempdir = TEST_TMP
 BIN = os.path.join(ROOT, "core", "council", "bin", "council.py")
 
 passed = failed = 0
@@ -57,7 +60,7 @@ def make_repo():
 
 
 def council(repo, env, *args, stdin=None):
-    r = subprocess.run(["python3", BIN, *args], cwd=repo, capture_output=True, text=True,
+    r = subprocess.run([sys.executable, BIN, *args], cwd=repo, capture_output=True, text=True,
                        env=env, input=stdin)
     return r.returncode, r.stdout, r.stderr
 
@@ -233,19 +236,74 @@ def main():
     ec, _ = hook(ur, uenv)
     check("unborn HEAD hook is silent for docs", ec == 0)
 
-    # 13. seat-flag doctor check: a claude seat WITHOUT --safe-mode is flagged
+    # 13. Sensitive/oversized untracked content is never read merely for scoring; it raises the
+    # review floor so the omission is visible rather than quietly looking like a tiny diff.
+    sr, senv = make_repo()
+    with open(os.path.join(sr, ".env"), "w") as f:
+        f.write("API_TOKEN=not-for-reviewers\n")
+    ec, out, _ = council(sr, senv, "risk", "--json")
+    secret_risk = json.loads(out) if ec == 0 else {}
+    check("sensitive untracked path escalates risk", secret_risk.get("tier_index", 0) >= 2)
+    check("sensitive untracked omission is explicit", any("unknown untracked content" in x for x in secret_risk.get("reasons", [])))
+
+    # 14. Legacy external state is copied only by an explicit, source-preserving command.
+    mr, menv = make_repo()
+    legacy = tempfile.mkdtemp(prefix="legacystate.")
+    _cleanup.append(legacy)
+    os.makedirs(os.path.join(legacy, "old-project"))
+    legacy_ledger = os.path.join(legacy, "old-project", "ledger.jsonl")
+    with open(legacy_ledger, "w") as f:
+        f.write('{"type":"historical"}\n')
+    ec, out, _ = council(mr, menv, "migrate-legacy-state", "--from", legacy)
+    migrated_target = os.path.join(menv["LEOS_COUNCIL_STATE"], "old-project", "ledger.jsonl")
+    check("explicit legacy-state migration copies into local target", ec == 0 and os.path.isfile(migrated_target))
+    check("legacy-state migration leaves source intact", os.path.isfile(legacy_ledger))
+    ec, _, _ = council(mr, menv, "migrate-legacy-state", "--from", legacy)
+    check("legacy-state migration refuses nonempty target", ec == 1)
+
+    # 15. Oversized and scan-capped untracked material raises the floor instead of disappearing
+    # from risk just because content was intentionally not read.
+    or_, oenv = make_repo()
+    with open(os.path.join(or_, "large_untracked.py"), "wb") as f:
+        f.write(b"x" * (513 * 1024))
+    ec, out, _ = council(or_, oenv, "risk", "--json")
+    oversized_risk = json.loads(out) if ec == 0 else {}
+    check("oversized untracked file escalates risk", oversized_risk.get("tier_index", 0) >= 2)
+    check("oversized omission is explicit", any("oversized untracked" in x for x in oversized_risk.get("reasons", [])))
+    cr, cenv = make_repo()
+    for i in range(201):
+        with open(os.path.join(cr, f"untracked_{i}.py"), "w") as f:
+            f.write("x = 1\n")
+    ec, out, _ = council(cr, cenv, "risk", "--json")
+    capped_risk = json.loads(out) if ec == 0 else {}
+    check("untracked scan cap escalates risk", any("beyond cap" in x for x in capped_risk.get("reasons", [])))
+
+    # 16. The default state root follows LEOS_LOCAL and is private; an explicit state override is
+    # only for controlled tests/migrations, not the normal runtime location.
+    lr, _ = make_repo()
+    local_root = tempfile.mkdtemp(prefix="councillocal.")
+    _cleanup.append(local_root)
+    local_env = dict(os.environ, LEOS_LOCAL=local_root, GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_SYSTEM="/dev/null")
+    local_env.pop("LEOS_COUNCIL_STATE", None)
+    ec, out, _ = council(lr, local_env, "state-dir")
+    default_state = out.strip()
+    state_root = os.path.join(local_root, "council", "state")
+    check("default state root is clone-local", ec == 0 and default_state.startswith(state_root + os.sep))
+    check("default state root is private", os.stat(state_root).st_mode & 0o777 == 0o700)
+
+    # 17. seat-flag doctor check: a claude seat WITHOUT --safe-mode is flagged
     sys.path.insert(0, os.path.join(ROOT, "bin"))
     import importlib.util
     spec = importlib.util.spec_from_file_location("leos_doctor", os.path.join(ROOT, "bin", "leos-doctor.py"))
     doc = importlib.util.module_from_spec(spec); spec.loader.exec_module(doc)
-    bad = doc.check_seat_flags("claude", {"seats": [
-        {"name": "opus", "argv": ["claude", "--print", "--model", "opus"]}]})
+    bad = doc.check_seat_flags("claude", {"host": "claude", "native": {"mode": "subagent", "model": "opus"}, "seats": [
+        {"name": "opus", "transport": "stdin", "argv": ["claude", "--print", "--model", "opus", "--permission-mode", "plan"]}]})
     check("doctor flags claude seat missing --safe-mode", any("safe-mode" in p for p in bad))
-    good = doc.check_seat_flags("claude", {"seats": [
-        {"name": "opus", "argv": ["claude", "--safe-mode", "--print", "--model", "opus"]}]})
-    check("doctor passes claude seat with --safe-mode", not good)
+    good = doc.check_seat_flags("claude", {"host": "claude", "native": {"mode": "subagent", "model": "opus"}, "seats": [
+        {"name": "opus", "transport": "stdin", "argv": ["claude", "--safe-mode", "--print", "--model", "opus", "--permission-mode", "plan"]}]})
+    check("doctor passes schema-valid claude seat", not good)
 
-    # 14. doctor: instruction-delivery + retired-symlink + malformed-config checks (new logic).
+    # 18. doctor: instruction-delivery + retired-symlink + malformed-config checks (new logic).
     dhome = tempfile.mkdtemp(prefix="doctorhome.")
     _cleanup.append(dhome)
     gi = os.path.join(ROOT, "global", "AGENTS.md")
@@ -270,7 +328,7 @@ def main():
         os.makedirs(os.path.join(dhome, ".codex"))
         os.symlink(gi, os.path.join(dhome, ".codex", "AGENTS.md"))
         probs, rep = [], []
-        doc.check_tool("codex", probs, rep)
+        doc.check_tool("codex", True, probs, rep)
         check("doctor flags leftover retired clone-symlink",
               any("leftover clone-symlink" in p for p in probs))
         # malformed opencode.json must be reported, not crash doctor

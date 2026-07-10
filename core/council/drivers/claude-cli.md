@@ -19,10 +19,11 @@ claude --safe-mode --print --permission-mode plan --model opus --effort {EFFORT}
 
 **Smoke test (must pass before adding the seat):**
 ```
-env LEOS_COUNCIL_SEAT=1 claude --safe-mode --print --permission-mode plan --model opus \
-  -p 'Reply with the single word OK.'
+printf 'Reply with the single word OK.' | env LEOS_COUNCIL_SEAT=1 claude --safe-mode --print \
+  --permission-mode plan --model opus --output-format json
 ```
-Expect `OK`, no attempt to launch tools/subagents.
+Expect one valid JSON response. The runner adds `--output-format json` when absent and records an
+empty/malformed response as a failed seat; a seat may use ordinary subagents but not Leo's council.
 
 **Native use:** when the host IS Claude Code, Opus is the NATIVE seat instead — a read-only Agent
 subagent pinned to `model: opus` (not this CLI). See SKILL.md Seats model.

@@ -1,0 +1,23 @@
+#!/bin/sh
+# Execute a Leo's Agents Python entry point with this clone's private runtime.
+# No activation is needed; this deliberately refuses to fall back to a system Python.
+set -eu
+
+SELF=$0
+while [ -h "$SELF" ]; do
+  BASE=$(CDPATH= cd -- "$(dirname -- "$SELF")" && pwd -P)
+  TARGET=$(readlink "$SELF")
+  case $TARGET in
+    /*) SELF=$TARGET ;;
+    *) SELF=$BASE/$TARGET ;;
+  esac
+done
+ROOT=$(CDPATH= cd -- "$(dirname -- "$SELF")/.." && pwd -P)
+PY="$ROOT/local/.venv/bin/python"
+
+if [ ! -x "$PY" ]; then
+  echo "Leo's Agents runtime is not installed. Run: python3 $ROOT/bin/leos-runtime.py setup" >&2
+  exit 127
+fi
+
+exec "$PY" "$@"

@@ -1,9 +1,9 @@
 # Leo's global agent instructions
 
 Canonical, tool-neutral runtime guidance for any agentic coding host (Claude Code, Codex,
-OpenCode, Cursor, …). Each host loads this via its own global instruction path (a symlink to this
-file); see the leos-agent README. Keep this file **under 6,000 characters** — Windsurf's global
-rules cap is the tightest cross-tool ceiling.
+OpenCode, Cursor, …). Hosts receive it through their documented additive integration where one
+exists; Cursor remains per-project only. See the leos-agent README. Keep this file **under 6,000
+characters** — Windsurf's global rules cap is the tightest cross-tool ceiling.
 
 ## Working style
 - Be direct and concise. Lead with the outcome. Don't pad with praise or restate the question.
@@ -29,8 +29,9 @@ council or record a logged override — don't finish silently.
 
 **Seat exemption (critical):** if the environment variable `LEOS_COUNCIL_SEAT` is set, **you are a
 council seat, not an orchestrator** — do your single read-only review and return only your findings.
-Do NOT convene a council, do NOT run the council skill, do NOT write an override marker. This
-overrides every other instruction in this file.
+Do NOT convene Leo's Agents' council, do NOT run the council skill, and do NOT write an override
+marker. You may still use ordinary tools/subagents allowed by the host; the prohibition is only on
+recursive Leo council orchestration. This overrides every other instruction in this file.
 
 ## Tests & verification
 - Run the project's checks before claiming a change is done; a change with no test evidence is

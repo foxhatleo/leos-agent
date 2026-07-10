@@ -3,7 +3,8 @@
 Serves the **GPT** external seat (when the host is NOT Codex). Also the NATIVE seat when the host
 IS Codex.
 
-**Model:** the latest Codex/GPT flagship (`-m gpt-5.5`, then `gpt-5.6`, …). Resolve at setup.
+**Model:** the latest Codex/GPT flagship. Resolve its `-m` slug at setup and store it only in
+`local/seats.<host>.json`.
 
 **Install / auth:** `codex --version`; auth via the normal Codex login.
 
@@ -21,9 +22,10 @@ codex exec --sandbox read-only --skip-git-repo-check -c model_reasoning_effort={
 **Smoke test:**
 ```
 env LEOS_COUNCIL_SEAT=1 CODEX_HOME=<clone>/local/isolated-codex-home \
-  codex exec --sandbox read-only --skip-git-repo-check -m {MODEL} - <<<'Reply with the single word OK.'
+  codex exec --sandbox read-only --skip-git-repo-check --json -m {MODEL} - <<<'Reply with the single word OK.'
 ```
-Expect `OK`. Never use `codex review` (its output contract differs from the findings JSON).
+Expect JSONL events with a final response. Never use `codex review` (its output contract differs
+from the findings JSON); the runner classifies missing/invalid JSONL explicitly.
 
 **Native use (host IS Codex):** same argv without `-m` (uses the host's own model) and without the
 isolated `CODEX_HOME` env (it is already the host).

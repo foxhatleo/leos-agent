@@ -1,0 +1,35 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  runtime-and-tests:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ['3.9', '3.11', '3.14']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Create private runtime
+        run: python3 bin/leos-runtime.py setup --python python3
+      - name: Validate rendered policy and run batteries
+        run: |
+          bin/leos-python bin/leos-render-policy.py --check
+          bin/leos-python tests/guard-tests.py
+          bin/leos-python tests/fmt-tests.py
+          bin/leos-python tests/council-tests.py
+          bin/leos-python tests/runner-tests.py
+          bin/leos-python tests/merge-tests.py
+          bin/leos-python tests/link-tests.py
+          bin/leos-python tests/block-tests.py
+          bin/leos-python tests/inject-tests.py
+          bin/leos-python tests/contamination-check.py
+          bin/leos-python bin/leos-doctor.py

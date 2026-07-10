@@ -4,7 +4,7 @@
 Runs the real tool with `--tool claude` against an isolated HOME + LEOS_LOCAL (nothing touches the
 real clone). Covers: fresh create, idempotence, coexistence with user content, stale-path refresh,
 legacy-symlink migration, foreign-symlink follow, and --check exit codes.
-Run: python3 tests/block-tests.py
+Run: bin/leos-python tests/block-tests.py
 """
 
 import os
@@ -14,6 +14,9 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+TEST_TMP = os.path.join(ROOT, "local", "test-work")
+os.makedirs(TEST_TMP, exist_ok=True)
+tempfile.tempdir = TEST_TMP
 BLOCK = os.path.join(ROOT, "bin", "leos-block.py")
 IMPORT_ABS = os.path.join(ROOT, "global", "AGENTS.md")
 MARKER = "leos-agent:global-instructions"
@@ -41,7 +44,7 @@ def fresh():
 
 def run(home, local, check_mode=False):
     env = dict(os.environ, HOME=home, LEOS_LOCAL=local)
-    args = ["python3", BLOCK, "--tool", "claude"]
+    args = [sys.executable, BLOCK, "--tool", "claude"]
     if check_mode:
         args.append("--check")
     r = subprocess.run(args, capture_output=True, text=True, env=env)

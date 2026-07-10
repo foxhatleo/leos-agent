@@ -4,11 +4,14 @@ Leo's unified agent-config for AI coding harnesses — **Claude Code, OpenAI Cod
 Cursor** — from one repo, one source of truth. It installs a small, shared layer into each tool:
 
 - **A catastrophic-deletion guard** (`bash-guard`) that blocks `rm -rf ~` / `/` / other-users'
-  homes / recursive `chmod` of system paths, across every host.
+  homes / recursive `chmod` of system paths on each host's documented hook/plugin surface. Codex
+  interception is necessarily partial for some shell execution paths; it is a safety backstop, not
+  a complete command-policy sandbox.
 - **A format-on-edit hook** (auto-format + lint feedback for JS/TS, Python, Go, Rust).
 - **A multi-model review council**: your host's own model reviews your work alongside other-lineage
-  flagships (Opus, GPT, GLM, Gemini, Grok), at plan and implementation checkpoints — with hard
-  guarantees that a reviewer can never spin up its own council.
+  flagships (Opus, GPT, GLM, Gemini, Grok), at plan and implementation checkpoints. An explicit
+  runner records every CLI seat's completed/empty/invalid/error/timeout result and prevents nested
+  Leo's Agents councils; seats may still use ordinary subagents.
 - **A shared permission layer** (secret-read denies + a fixed-subcommand allowlist), rendered into
   each tool's own enforcement vocabulary.
 
@@ -38,30 +41,34 @@ One `AGENTS.md` serves every tool for instructions; one `SKILL.md` for the counc
 
 Nothing is installed until you run setup — cloning alone is inert.
 
+Setup first creates `local/.venv` from an approved CPython 3.9+ bootstrap interpreter and installs
+the pinned runtime dependency there. Leo scripts always use `bin/leos-python`, never an ambient
+host-hook `python3`.
+
 ## Upgrade
 
 ```sh
 git -C ~/.leos-agent pull
 ```
-Because the payload is **symlinked** from each tool home into the clone, `git pull` updates every
-hook, the council engine, the skill, and the prompts instantly — no version bumps, no migration.
-Then run the doctor:
+Because payloads are **symlinked** from each tool home into the clone, `git pull` updates hooks,
+the council engine, the skill, and prompts instantly. Then refresh/check the private runtime and
+run doctor:
 ```sh
-python3 ~/.leos-agent/bin/leos-doctor.py
+python3 ~/.leos-agent/bin/leos-runtime.py setup --refresh
+~/.leos-agent/bin/leos-python ~/.leos-agent/bin/leos-doctor.py
 ```
-If it reports a **fragment changed** (the one thing a symlink can't auto-apply — the few files a
-host rewrites itself: `settings.json`, `config.toml`, `opencode.json`, `cli-config.json`), it tells
-you the single `leos-merge` command to re-run. Otherwise you're done.
+Doctor reports a changed merge fragment, a stale private runtime, or host links that need attention.
+It only checks hosts recorded during Leo setup, not every config directory that happens to exist.
 
 ## What lives where
 
 | Path | What |
 |---|---|
 | `core/` | The single source of truth — guard, formatter, council engine + skill + prompts, shared policy data. Everything here is symlink-target material. |
-| `global/AGENTS.md` | Canonical home-dir instructions, symlinked into each host's global path. |
+| `global/AGENTS.md` | Canonical instructions, delivered additively where a host supports it; Cursor remains per-project. |
 | `tools/<host>/` | Thin per-host adapters: the settings/permission fragment, the symlink map, and setup deltas. No logic or prose forks. |
-| `bin/` | `leos-link` (symlink farm), `leos-merge` (fragment merges), `leos-doctor` (health check). |
-| `local/` | **Gitignored** machine-local config: your resolved council seats, guard extras, merge state. Lives in the clone but never committed. |
+| `bin/` | `leos-runtime` (private venv), `leos-python` (launcher), `leos-link`, `leos-merge`, `leos-render-policy`, and `leos-doctor`. |
+| `local/` | **Gitignored** machine-local config and all Leo runtime data: venv, resolved seats, guard extras, merge state/backups, council state/work/results. |
 | `tests/` | Guard / formatter / council / merge / link batteries. |
 
 ## Uninstall

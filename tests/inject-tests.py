@@ -3,7 +3,7 @@
 
 Verifies it emits valid SessionStart additionalContext JSON, self-locates the real
 global/AGENTS.md by default, and fails open (exit 0, no output) when the file is missing.
-Run: python3 tests/inject-tests.py
+Run: bin/leos-python tests/inject-tests.py
 """
 
 import json
@@ -14,6 +14,9 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+TEST_TMP = os.path.join(ROOT, "local", "test-work")
+os.makedirs(TEST_TMP, exist_ok=True)
+tempfile.tempdir = TEST_TMP
 INJ = os.path.join(ROOT, "core", "hooks", "inject-instructions.py")
 
 passed = failed = 0
@@ -29,7 +32,7 @@ def check(name, cond):
 
 
 def run(env):
-    return subprocess.run(["python3", INJ], capture_output=True, text=True, env=env)
+    return subprocess.run([sys.executable, INJ], capture_output=True, text=True, env=env)
 
 
 def main():

@@ -3,7 +3,7 @@
 
 Covers: fresh link, idempotence, refuse-to-clobber a foreign regular file, --force replace,
 wrong-link repair, dangling detection, and that link_state never follows the link (lstat/readlink).
-Run: python3 tests/link-tests.py
+Run: bin/leos-python tests/link-tests.py
 """
 
 import importlib.util
@@ -13,6 +13,9 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+TEST_TMP = os.path.join(ROOT, "local", "test-work")
+os.makedirs(TEST_TMP, exist_ok=True)
+tempfile.tempdir = TEST_TMP
 LINK = os.path.join(ROOT, "bin", "leos-link.py")
 
 spec = importlib.util.spec_from_file_location("leos_link", LINK)
@@ -32,12 +35,13 @@ def check(name, cond):
 
 
 def run_cli(home, force=False, check_only=False):
-    args = ["python3", LINK, "--tool", "claude"]
+    args = [sys.executable, LINK, "--tool", "claude"]
     if force:
         args.append("--force")
     if check_only:
         args.append("--check")
-    r = subprocess.run(args, capture_output=True, text=True, env=dict(os.environ, HOME=home))
+    r = subprocess.run(args, capture_output=True, text=True,
+                       env=dict(os.environ, HOME=home, LEOS_LOCAL=os.path.join(home, "local")))
     return r.returncode
 
 
@@ -50,12 +54,23 @@ def main():
     dest = os.path.join(home, ".claude", "hooks", "bash-guard.py")
     check("symlink created", os.path.islink(dest))
     check("symlink points into clone", os.path.realpath(dest) == os.path.join(ROOT, "core", "hooks", "bash-guard.py"))
+    private_python = os.path.join(home, ".claude", "leos-python")
+    launched = subprocess.run([private_python, "-c", "import sys; print(sys.executable)"], capture_output=True, text=True)
+    check("symlinked launcher resolves clone-private venv", launched.returncode == 0 and
+          os.path.realpath(launched.stdout.strip()) == os.path.realpath(os.path.join(ROOT, "local", ".venv", "bin", "python")))
 
     # 2. idempotent
     rc = run_cli(home)
     check("re-link idempotent (exit 0)", rc == 0)
     rc = run_cli(home, check_only=True)
     check("--check passes", rc == 0)
+
+    # A formerly predictable sibling temp path is user-owned data, never a cleanup target.
+    old_tmp = dest + ".tmp-leoslink"
+    with open(old_tmp, "w") as f:
+        f.write("leave me alone\n")
+    rc = run_cli(home)
+    check("preexisting legacy tmp path is preserved", rc == 0 and open(old_tmp).read() == "leave me alone\n")
 
     # 3. refuse to clobber a foreign regular file
     os.remove(dest)
@@ -82,6 +97,30 @@ def main():
     os.symlink(os.path.join(home, "missing-src"), dpath)
     st = ll.link_state(dpath, os.path.join(home, "missing-src"))
     check("dangling detected (not followed)", st == "dangling")
+
+    # 7. CODEX_HOME is honored consistently instead of hard-coding ~/.codex.
+    codex_home = os.path.join(home, "relocated-codex")
+    env = dict(os.environ, HOME=home, CODEX_HOME=codex_home, LEOS_LOCAL=os.path.join(home, "local"))
+    r = subprocess.run([sys.executable, LINK, "--tool", "codex"], capture_output=True, text=True, env=env)
+    cguard = os.path.join(codex_home, "hooks", "bash-guard.py")
+    check("CODEX_HOME link install succeeds", r.returncode == 0)
+    check("CODEX_HOME receives Codex hooks", os.path.islink(cguard) and
+          os.path.realpath(cguard) == os.path.join(ROOT, "core", "hooks", "bash-guard.py"))
+
+    # 8. OpenCode's automatic plugin discovery is the plural plugins/ directory.
+    env = dict(os.environ, HOME=home, LEOS_LOCAL=os.path.join(home, "local"))
+    r = subprocess.run([sys.executable, LINK, "--tool", "opencode"], capture_output=True, text=True, env=env)
+    plugin = os.path.join(home, ".config", "opencode", "plugins", "leos-guard.ts")
+    check("OpenCode plugin map installs successfully", r.returncode == 0)
+    check("OpenCode plugin uses plural plugins directory", os.path.islink(plugin) and
+          os.path.realpath(plugin) == os.path.join(ROOT, "tools", "opencode", "plugin", "leos-guard.ts"))
+
+    # 9. Cursor gets the same private launcher the adapter expects, not a bare system Python.
+    r = subprocess.run([sys.executable, LINK, "--tool", "cursor"], capture_output=True, text=True, env=env)
+    cursor_launcher = os.path.join(home, ".cursor", "leos-python")
+    check("Cursor link install succeeds", r.returncode == 0)
+    check("Cursor private launcher linked", os.path.islink(cursor_launcher) and
+          os.path.realpath(cursor_launcher) == os.path.join(ROOT, "bin", "leos-python"))
 
     total = passed + failed
     print(f"link-tests: {passed}/{total} PASS" + (" — ALL PASS" if not failed else f" ({failed} FAIL)"))

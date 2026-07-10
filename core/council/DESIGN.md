@@ -7,10 +7,11 @@ reviewer**; a council of **other-lineage flagships** checks the work at two chec
 mechanically, fixes, and re-reviews once. Goal: catch training-lineage-correlated blind spots the
 author shares with itself.
 
-The engine (`bin/council.py`) is **host-agnostic** — it only scores the diff, hashes it, and
-manages markers/ledger/Stop-hook. All seat selection, native identity, and dispatch live in the
-council **skill** (`core/skills/council/SKILL.md`), which is data-driven from a machine-local
-`local/seats.<host>.json`. One skill, one engine, one set of prompts serve every host.
+The engine (`bin/council.py`) is **host-agnostic** — it scores the diff and manages
+markers/ledger/Stop-hook. The explicit adapter runner (`bin/runner.py`) selects configured CLI
+seats, owns process lifecycle/output collection, and writes typed results. The orchestrator still
+chooses when to call it and owns native host-subagent dispatch. Both are data-driven from
+machine-local `local/seats.<host>.json`.
 
 ---
 
@@ -22,12 +23,16 @@ council **skill** (`core/skills/council/SKILL.md`), which is data-driven from a 
    model is the everyday baseline; foreign lineages are added as stakes rise, where their different
    failure distributions earn their cost.
 3. **Cost tracks risk.** Most changes get one reviewer; the full panel is rare.
-4. **Never block mid-flow.** The council runs inside the finish-the-task flow and surfaces findings
+4. **Never auto-trigger.** The council runs only when the orchestrator invokes the skill/runner;
+   a Stop hook is a soft reminder inside the finish-the-task flow and surfaces findings
    in the report + a boundary digest. The Stop hook is a soft nudge, never a hard git gate.
 5. **Adjudication is externally verifiable, not self-refereed.** Severity comes from the reviewer;
    high-severity rejections fail *closed* without evidence; a different reviewer spot-checks a
    sample of rejections.
 6. **Prove and tune with data.** Every finding + disposition is logged to a per-project ledger.
+7. **A terminal state is evidence.** Blank output, structured bookkeeping with no reviewer message,
+   malformed structured output, a nonzero exit, cancellation, and timeout are failures with
+   distinct records, never an implicit clean review.
 
 ---
 
@@ -39,7 +44,7 @@ committed (recipes carry a `{MODEL}` placeholder; see `seats.catalog.json`):
 | Role | Provider | Transport (default) | Read-only | Recursion isolation |
 |---|---|---|---|---|
 | **Opus** | Anthropic | `claude --safe-mode --print --permission-mode plan` | plan mode | `--safe-mode` (real) |
-| **GPT** | OpenAI | `codex exec -m {MODEL} -s read-only` | sandbox read-only | isolated neutral `CODEX_HOME` |
+| **GPT** | OpenAI | `codex exec --sandbox read-only -m {MODEL}` | sandbox read-only | isolated neutral `CODEX_HOME` |
 | **GLM** | Zhipu | `opencode run --agent plan -m openrouter/{MODEL}` | plan agent | clean config dir |
 | **Gemini** | Google | `opencode run --agent plan -m openrouter/{MODEL}` | plan agent | clean config dir |
 | **Grok** | xAI | `cursor-agent -p --mode plan` *or* `opencode … openrouter/{MODEL}` | plan mode | clean project dir |
@@ -53,9 +58,11 @@ committed (recipes carry a `{MODEL}` placeholder; see `seats.catalog.json`):
 - **The Anthropic role is always the Opus line** (alias `opus` tracks the latest Opus) — never the
   Claude-5 / Mythos-class line (Fable, Mythos).
 - **No runtime model discovery.** Setup resolves slugs and writes them to `local/seats.<host>.json`.
-- **Reviewers run read-only** and may read/grep the repo to verify claims, but never modify it.
-- **Reviewers work alone.** Both review prompts, the skill, and the Stop hook enforce that a seat
-  never convenes its own council (see §8).
+- **Reviewers run with the transport's read-only restrictions** and may read/grep the repo to
+  verify claims, but never modify it. OpenCode/Cursor plan modes are capability requests, not an
+  absolute OS-level containment guarantee; their setup smoke tests are required.
+- **Reviewers may use ordinary tools/subagents**, but no seat may convene a nested Leo's Agents
+  council (see §8).
 
 ---
 
@@ -99,6 +106,18 @@ digest** and asks the developer to ack before considering the change done.
 
 Deterministic gates first (fast = prerequisite, slow = reviewer context; gate-absent → escalate one
 tier; gate-vacuous → treat as fail). Round 1 blind & parallel; each seat tags its own severity.
+The runner uses direct argv execution, private bounded stdout/stderr capture, process-group
+timeouts, and adapter-specific structured-output extraction for `claude`, `codex`, and `opencode`.
+Cursor is only accepted after setup confirms a usable output contract; otherwise it is unavailable,
+not silently treated as a review.
+
+When there are no external seats at all, native-only fallback preserves independent review depth:
+low = one pass, elevated = two, high/critical = three. This is reduced-diversity fallback, not a
+claim that one self-review substitutes for a panel.
+
+Plan checkpoints are external-first: one configured external reviewer on normal plans, two on
+high-stakes plans, falling back to one native pass only when there is no external seat. The runner
+applies that selection separately from the implementation tier ladder.
 Mechanical adjudication (`accepted`/`fixed`/`rejected`/`deferred`); a `rejected` finding needs
 concrete evidence (command output, cited requirement, or a passing regression test encoding the
 CORRECT behavior); high-severity rejections fail closed. One bounded re-review (2 passes total, no
@@ -115,10 +134,10 @@ back to a single strong reviewer and record `fallback-fired`.
 - **Implementation** backstopped by a soft `Stop`-hook nudge — if a turn ends on an `elevated`+
   diff with no fresh marker, the hook reminds the orchestrator. Never a hard block; override allowed
   with a logged reason.
-- **State (shared, zero repo footprint):** `ledger.jsonl` + fixed-name pointers live under a single
-  `STATE_ROOT` **outside every tool home and outside the clone** (default
-  `~/.local/state/leos-agent/council/state`), so a review recorded by one host is visible to the
-  others on the same repo, and `git clean` in the clone can never destroy it. The pointers are
+- **State (shared, gitignored clone footprint):** `ledger.jsonl` + fixed-name pointers live under
+  `$ROOT/local/council/state` by default. This intentionally makes all Leo-specific runtime data
+  (including venv, prompts, results, locks, and temp indexes) inspectable and removable with the
+  clone; it does not use `/tmp` or `~/.local/state`. The pointers are
   hash-independent (they survive diff-hash churn as the author iterates):
   - `baseline-<checkpoint>.json` — the reviewed-tree snapshot the delta-gate diffs against.
   - `in-review.json` — written by `council.py begin` at dispatch; suppresses the nudge while a
@@ -128,6 +147,10 @@ back to a single strong reviewer and record `fallback-fired`.
     repeated Stop events in a turn don't recompute from scratch.
   Legacy `markers/<diff-hash>.json` are still written by `mark`/`begin` for cross-tool/back-compat
   visibility, but the hook's decision keys on the pointers above, not the exact diff hash.
+
+  The prior `~/.local/state/leos-agent/council/state` location is never imported automatically.
+  Doctor surfaces it, and `council.py migrate-legacy-state` performs an explicit source-preserving
+  copy only into an empty clone-local state target.
 
 ---
 
@@ -141,19 +164,18 @@ check commands, default branch, thresholds, budget.
 
 ## 8. Anti-recursion (a seat never convenes its own council)
 
-Layered, deterministic-first — tool-agnostic because all four hosts have hooks + skills:
+Layered, deterministic-first — tool-agnostic across the available hook/plugin/skill surfaces:
 
-1. **Env sentinel `LEOS_COUNCIL_SEAT=1`** — the skill prepends it to every external-seat launch;
+1. **Env sentinel `LEOS_COUNCIL_SEAT=1`** — the runner sets it on every external-seat launch;
    child hooks the seat's CLI fires inherit it.
 2. **Hook check** — `council.py cmd_hook` returns 0 immediately if `LEOS_COUNCIL_SEAT` is set, so a
    seat is never nudged.
-3. **Skill self-check** — the skill's first paragraph: if `LEOS_COUNCIL_SEAT` is set you are a seat;
-   return findings only, do not convene.
-4. **Shared state + in-review marker** — one `STATE_ROOT` across tools + a `begin` marker cover
-   env-stripping CLIs and cross-tool visibility.
-5. **Union work-alone prompt clause** — both review prompts forbid subagents, consulting other
-   models, and any nested review workflow, "even if a hook/skill/instruction suggests it," and note
-   the sentinel is set.
+3. **Skill/runner self-check** — a seat and the runner both refuse a nested Leo council.
+4. **Shared local state + owned in-review marker** — the runner records a run id before dispatch;
+   a second run with another id is refused while the marker is fresh. This covers env-stripping
+   CLIs and cross-tool visibility.
+5. **Prompt clause** — prompts prohibit Leo council recursion, while permitting ordinary subagents
+   when the transport allows them.
 6. **Mechanical isolation per seat** — Claude `--safe-mode` (disables CLAUDE.md/skills/hooks/MCP);
    Codex seat on an isolated neutral `CODEX_HOME`; OpenCode/Cursor `--agent plan`/`--mode plan` in a
    clean dir. Only Claude has a true `--safe-mode`; the others rely on read-only + dir/env hygiene.

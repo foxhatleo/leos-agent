@@ -2,6 +2,7 @@
   "$doc": "Cursor CLI delivery map. Guard = beforeShellExecution hook + guard-adapter shim, backed by a static Shell/Read deny list. hooks.json is symlinked whole-file; cli-config.json is merged (Cursor writes to it). No global CLI instruction file exists for Cursor — coverage is per-project AGENTS.md/CLAUDE.md, so no global symlink here. No documented Stop-event hook, so no council nudge; the council runs via the skill.",
   "toolHome": "~/.cursor",
   "links": [
+    { "dest": "~/.cursor/leos-python", "src": "bin/leos-python", "note": "private-runtime launcher for the Cursor guard adapter" },
     { "dest": "~/.cursor/hooks/guard-adapter.py", "src": "tools/cursor/guard-adapter.py" },
     { "dest": "~/.cursor/hooks.json", "src": "tools/cursor/hooks.json", "note": "whole-file symlink; doctor asserts still-a-symlink" },
     { "dest": "~/.cursor/council/bin/council.py", "src": "core/council/bin/council.py", "note": "BIN for the council skill on Cursor host" },

@@ -4,7 +4,7 @@
   "hooks": {
     "beforeShellExecution": [
       {
-        "command": "python3 \"$HOME\"/.cursor/hooks/guard-adapter.py",
+        "command": "\"$HOME\"/.cursor/leos-python \"$HOME\"/.cursor/hooks/guard-adapter.py",
         "failClosed": true
       }
     ]

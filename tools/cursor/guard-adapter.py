@@ -28,15 +28,22 @@ def main():
     if not command:
         return 0
     payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": cwd})
+    launcher = os.path.join(_ROOT, "bin", "leos-python")
     try:
-        r = subprocess.run(["python3", GUARD], input=payload, capture_output=True,
+        r = subprocess.run([launcher, GUARD], input=payload, capture_output=True,
                            text=True, timeout=10)
     except Exception:
-        return 0  # guard unavailable -> no opinion (fail-open for availability)
+        reason = "Leo's Agents guard is unavailable; refusing shell execution"
+        print(json.dumps({"permission": "deny", "userMessage": reason, "agentMessage": reason}))
+        return 0
     if r.returncode == 43:
         reason = (r.stderr or "blocked by bash-guard").strip()
         print(json.dumps({"permission": "deny", "userMessage": reason,
                           "agentMessage": reason}))
+        return 0
+    if r.returncode != 0:
+        reason = "Leo's Agents guard failed; refusing shell execution"
+        print(json.dumps({"permission": "deny", "userMessage": reason, "agentMessage": reason}))
         return 0
     return 0
 

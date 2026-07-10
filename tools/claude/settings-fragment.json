@@ -1,5 +1,5 @@
 {
-  "$doc": "RENDERED from core/policy/policy-data.json into Claude Code's vocabulary + hook registration. Merged into ~/.claude/settings.json by bin/leos-merge.py (never symlinked — Claude Code rewrites settings.json). permissions.deny = enforced secret-read guard; permissions.allow ships the 'universal' git/gh set only — setup appends the machine's package-manager allow (machine-local). Hook wrappers are FAIL-CLOSED: a missing/dangling script exits 2 (blocks) instead of silently passing.",
+  "$doc": "RENDERED from core/policy/policy-data.json into Claude Code's vocabulary + hook registration. Merged into ~/.claude/settings.json by bin/leos-merge.py (never symlinked — Claude Code rewrites settings.json). permissions.deny = enforced secret-read guard; permissions.allow ships the universal git/gh set, and leos-merge --tool claude --package-manager renders the machine's package-manager extras as local merge ownership. Guard wrappers are FAIL-CLOSED: a missing/dangling script or private runtime exits 2 (blocks) instead of silently passing.",
   "permissions": {
     "deny": [
       "Read(**/.env)",
@@ -42,7 +42,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh -c 'S=\"$HOME\"/.claude/hooks/bash-guard.py; [ -f \"$S\" ] || exit 2; python3 \"$S\"; ec=$?; [ \"$ec\" = 43 ] && exit 2; exit 0'",
+            "command": "sh -c 'S=\"$HOME\"/.claude/hooks/bash-guard.py; P=\"$HOME\"/.claude/leos-python; [ -f \"$S\" ] && [ -x \"$P\" ] || exit 2; \"$P\" \"$S\"; ec=$?; [ \"$ec\" = 0 ] && exit 0; exit 2'",
             "timeout": 10
           }
         ]
@@ -54,7 +54,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh -c 'S=\"$HOME\"/.claude/hooks/format-on-edit.py; [ -f \"$S\" ] || exit 0; python3 \"$S\"; ec=$?; [ \"$ec\" = 44 ] && exit 2; exit 0'",
+            "command": "sh -c 'S=\"$HOME\"/.claude/hooks/format-on-edit.py; P=\"$HOME\"/.claude/leos-python; [ -f \"$S\" ] && [ -x \"$P\" ] || exit 0; \"$P\" \"$S\"; ec=$?; [ \"$ec\" = 44 ] && exit 2; exit 0'",
             "timeout": 45
           }
         ]
@@ -65,7 +65,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh -c 'S=\"$HOME\"/.claude/council/bin/council.py; [ -f \"$S\" ] || exit 0; python3 \"$S\" hook; ec=$?; [ \"$ec\" = 42 ] && exit 2; exit 0'",
+            "command": "sh -c 'S=\"$HOME\"/.claude/council/bin/council.py; P=\"$HOME\"/.claude/leos-python; [ -f \"$S\" ] && [ -x \"$P\" ] || exit 0; \"$P\" \"$S\" hook; ec=$?; [ \"$ec\" = 42 ] && exit 2; exit 0'",
             "timeout": 30
           }
         ]

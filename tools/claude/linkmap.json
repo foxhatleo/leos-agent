@@ -2,6 +2,7 @@
   "$doc": "Claude Code delivery map for bin/leos-link.py (symlinks), bin/leos-block.py (@import blocks) + bin/leos-merge.py (fragments). 'links' are file/dir symlinks from the tool home into the leos-agent clone; 'blocks' are managed @import references appended into a host-owned markdown file (coexist, never clobber); 'merges' are files Claude Code rewrites, so they are merged not linked. Paths under `src`/`import` are clone-relative; `dest` is under $HOME.",
   "toolHome": "~/.claude",
   "links": [
+    { "dest": "~/.claude/leos-python", "src": "bin/leos-python", "note": "private-runtime launcher for every Leo Python hook" },
     { "dest": "~/.claude/hooks/bash-guard.py", "src": "core/hooks/bash-guard.py" },
     { "dest": "~/.claude/hooks/format-on-edit.py", "src": "core/hooks/format-on-edit.py" },
     { "dest": "~/.claude/council/bin/council.py", "src": "core/council/bin/council.py" },

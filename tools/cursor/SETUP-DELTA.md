@@ -4,9 +4,10 @@ Host-specific steps layered on the shared `docs/SETUP.md` interview. Only run if
 installed.
 
 1. **Detect** `~/.cursor` + `cursor-agent --version`.
-2. **Symlinks** — `python3 bin/leos-link.py --tool cursor` (guard-adapter, hooks.json, council.py,
+2. **Symlinks** — `bin/leos-python bin/leos-link.py --tool cursor` (private launcher,
+   guard-adapter, hooks.json, council.py,
    skill dir).
-3. **Permissions merge** — `python3 bin/leos-merge.py --tool cursor` merges
+3. **Permissions merge** — `bin/leos-python bin/leos-merge.py --tool cursor` merges
    `permissions-fragment.json` (Read denies + Shell allows) into `~/.cursor/cli-config.json`. This
    static deny list is the **reliable** guard surface; the hook is defence-in-depth.
 4. **Hook smoke test (verify headless behaviour — this is the UNCERTAIN part):**

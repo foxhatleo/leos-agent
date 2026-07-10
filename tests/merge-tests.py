@@ -4,7 +4,7 @@
 Runs the real tool via `--dest --fragment --strategy` against temp files in an isolated HOME +
 isolated LEOS_LOCAL (so nothing touches the real clone). Covers: fresh merge, array union,
 scalar preservation, retire-on-shrink, foreign-conflict refusal, forced override, TOML round-trip,
-and no-op idempotence. Run: python3 tests/merge-tests.py
+and no-op idempotence. Run: bin/leos-python tests/merge-tests.py
 """
 
 import json
@@ -14,6 +14,9 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+TEST_TMP = os.path.join(ROOT, "local", "test-work")
+os.makedirs(TEST_TMP, exist_ok=True)
+tempfile.tempdir = TEST_TMP
 MERGE = os.path.join(ROOT, "bin", "leos-merge.py")
 
 passed = failed = 0
@@ -36,7 +39,7 @@ def run(env, dest, fragment, strategy, force=False):
     else:
         with open(frag, "w") as f:
             json.dump(fragment, f)
-    args = ["python3", MERGE, "--dest", dest, "--fragment", frag, "--strategy", strategy]
+    args = [sys.executable, MERGE, "--dest", dest, "--fragment", frag, "--strategy", strategy]
     if force:
         args.append("--force")
     r = subprocess.run(args, capture_output=True, text=True, env=env)
@@ -90,7 +93,10 @@ def main():
     tdest = os.path.join(home, ".codex", "config.toml")
     ec, r = run(env, "~/.codex/config.toml", '[features]\nhooks = true\nname = "café ✅"\n', "merge-toml")
     check("toml merge applies", r.get("applied") and ec == 0)
-    import tomllib
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        import tomli as tomllib
     with open(tdest, "rb") as f:
         td = tomllib.load(f)
     check("toml value round-trips", td["features"]["hooks"] is True and td["features"]["name"] == "café ✅")
@@ -116,6 +122,54 @@ def main():
     ec, r = run(env, "~/.config/opencode/opencode.json", frag, "merge-json")
     cur = json.load(open(idest))
     check("token re-merge idempotent (no duplicate)", cur["instructions"].count(expanded) == 1)
+
+    # 8. Claude's selected package-manager rules are rendered by the merge tool, not left as an
+    # undocumented manual setup edit.
+    pmhome = tempfile.mkdtemp(prefix="pmhome.")
+    pmlocal = tempfile.mkdtemp(prefix="pmlocal.")
+    pmenv = dict(os.environ, HOME=pmhome, LEOS_LOCAL=pmlocal)
+    pr = subprocess.run([sys.executable, MERGE, "--tool", "claude", "--package-manager", "pnpm"],
+                        capture_output=True, text=True, env=pmenv)
+    try:
+        policy_settings = json.load(open(os.path.join(pmhome, ".claude", "settings.json")))
+    except Exception:
+        policy_settings = {}
+    check("package-manager merge applies", pr.returncode == 0)
+    check("package-manager allow is rendered", "Bash(pnpm test:*)" in
+          policy_settings.get("permissions", {}).get("allow", []))
+    pmstate = json.load(open(os.path.join(pmlocal, "merge-state.json")))
+    check("package-manager policy fingerprint recorded", next(iter(pmstate["merges"].values())).get("packageManager") == "pnpm")
+    # Doctor's ordinary upgrade command is intentionally allowed to omit --package-manager; the
+    # merge state must preserve the established choice rather than retiring those allowances.
+    rerun = subprocess.run([sys.executable, MERGE, "--tool", "claude"], capture_output=True, text=True, env=pmenv)
+    retained = json.load(open(os.path.join(pmhome, ".claude", "settings.json")))
+    check("ordinary Claude re-merge retains package-manager allow", rerun.returncode == 0 and
+          "Bash(pnpm test:*)" in retained.get("permissions", {}).get("allow", []))
+    import shutil
+    shutil.rmtree(pmhome, ignore_errors=True)
+    shutil.rmtree(pmlocal, ignore_errors=True)
+
+    # 9. Each host map merges into its correct host-owned destination; Codex honors CODEX_HOME.
+    host_home = tempfile.mkdtemp(prefix="hostmerge.")
+    host_local = tempfile.mkdtemp(prefix="hostlocal.")
+    codex_home = os.path.join(host_home, "relocated-codex")
+    host_env = dict(os.environ, HOME=host_home, LEOS_LOCAL=host_local, CODEX_HOME=codex_home)
+    codex_merge = subprocess.run([sys.executable, MERGE, "--tool", "codex"], capture_output=True, text=True, env=host_env)
+    opencode_merge = subprocess.run([sys.executable, MERGE, "--tool", "opencode"], capture_output=True, text=True, env=host_env)
+    cursor_merge = subprocess.run([sys.executable, MERGE, "--tool", "cursor"], capture_output=True, text=True, env=host_env)
+    try:
+        ocfg = json.load(open(os.path.join(host_home, ".config", "opencode", "opencode.json")))
+        cursor_cfg = json.load(open(os.path.join(host_home, ".cursor", "cli-config.json")))
+    except Exception:
+        ocfg, cursor_cfg = {}, {}
+    check("Codex merge honors CODEX_HOME", codex_merge.returncode == 0 and
+          os.path.isfile(os.path.join(codex_home, "config.toml")))
+    check("OpenCode merge writes additive instructions", opencode_merge.returncode == 0 and
+          os.path.join(ROOT, "global", "AGENTS.md") in ocfg.get("instructions", []))
+    check("Cursor merge writes its native permission schema", cursor_merge.returncode == 0 and
+          "Read(**/.env)" in cursor_cfg.get("permissions", {}).get("deny", []))
+    shutil.rmtree(host_home, ignore_errors=True)
+    shutil.rmtree(host_local, ignore_errors=True)
 
     total = passed + failed
     print(f"merge-tests: {passed}/{total} PASS" + (" — ALL PASS" if not failed else f" ({failed} FAIL)"))

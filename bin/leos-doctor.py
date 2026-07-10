@@ -21,18 +21,33 @@ Exit 1 if any problem is found. Stdlib only.
 import hashlib
 import json
 import os
+import re
 import sys
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.9–3.10 local runtime fallback
+    import tomli as tomllib
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 TOOLS = ["claude", "codex", "opencode", "cursor"]
+LOCAL = os.environ.get("LEOS_LOCAL", os.path.join(REPO_ROOT, "local"))
+HOME = os.path.realpath(os.path.expanduser("~"))
+
+
+def current_home():
+    return os.path.realpath(os.path.expanduser("~"))
+
+
+def expand_path(value):
+    value = value.replace("{{CODEX_HOME}}", os.environ.get("CODEX_HOME", os.path.join(current_home(), ".codex")))
+    return os.path.expanduser(value)
 
 
 def load_json(path, default):
     try:
         with open(path) as f:
             return json.load(f)
-    except FileNotFoundError:
+    except (OSError, json.JSONDecodeError):
         return default
 
 
@@ -84,7 +99,8 @@ def check_instructions_delivery(tool, problems, tinfo):
     if tool == "claude":
         txt = _read_text("~/.claude/CLAUDE.md")
         if txt is None or "leos-agent:global-instructions" not in txt:
-            problems.append("claude: @import block missing from ~/.claude/CLAUDE.md — run leos-block --tool claude")
+            problems.append("claude: @import block missing from ~/.claude/CLAUDE.md — run "
+                            f"{REPO_ROOT}/bin/leos-python {REPO_ROOT}/bin/leos-block.py --tool claude")
             tinfo["instructions"] = "missing"
         elif f"@{gi}" not in txt:
             problems.append(f"claude: @import block does not point at {gi} (moved clone?) — re-run leos-block --tool claude")
@@ -103,25 +119,27 @@ def check_instructions_delivery(tool, problems, tinfo):
         else:
             tinfo["instructions"] = "ok"
     elif tool == "codex":
-        txt = _read_text("~/.codex/hooks.json")
+        codex_home = os.environ.get("CODEX_HOME", os.path.join(current_home(), ".codex"))
+        txt = _read_text(os.path.join(codex_home, "hooks.json"))
         if txt is None or "SessionStart" not in txt or "inject-instructions.py" not in txt:
-            problems.append("codex: SessionStart instruction injector not registered in ~/.codex/hooks.json")
+            problems.append(f"codex: SessionStart instruction injector not registered in {codex_home}/hooks.json")
             tinfo["instructions"] = "missing"
         else:
             tinfo["instructions"] = "ok"
 
 
-def check_tool(tool, problems, report):
+def check_tool(tool, configured, problems, report):
     lm = load_json(os.path.join(REPO_ROOT, "tools", tool, "linkmap.json"), {})
-    home = os.path.expanduser(lm.get("toolHome", ""))
-    if not home or not os.path.isdir(home):
-        report.append({"tool": tool, "installed": False})
+    home = expand_path(lm.get("toolHome", ""))
+    if not configured:
+        report.append({"tool": tool, "configured": False})
         return
-    tinfo = {"tool": tool, "installed": True, "links": [], "merges": [], "seats": None,
+    tinfo = {"tool": tool, "configured": True, "homePresent": bool(home and os.path.isdir(home)),
+             "links": [], "merges": [], "seats": None,
              "instructions": None}
 
     for e in lm.get("links", []):
-        dest = os.path.expanduser(e["dest"])
+        dest = expand_path(e["dest"])
         src = os.path.join(REPO_ROOT, e["src"])
         st = link_state(dest, src)
         if st != "linked":
@@ -131,28 +149,47 @@ def check_tool(tool, problems, report):
     # Retired symlinks: a leftover clone-symlink at an old delivery path masks the user's own
     # global file — flag it (read-only; the user removes it).
     for e in lm.get("retiredLinks", []):
-        dest = os.path.expanduser(e["dest"])
+        dest = expand_path(e["dest"])
         if os.path.islink(dest):
             target = os.path.realpath(dest)
             if target == REPO_ROOT or target.startswith(REPO_ROOT + os.sep):
                 problems.append(f"{tool}: leftover clone-symlink at {e['dest']} — remove it "
                                 f"(delivery is now additive; the symlink masks your own global file)")
 
-    state = load_json(os.path.join(REPO_ROOT, "local", "merge-state.json"), {"merges": {}})
+    state = load_json(os.path.join(LOCAL, "merge-state.json"), {"merges": {}})
+    if not isinstance(state, dict) or not isinstance(state.get("merges"), dict):
+        problems.append("merge state is malformed — restore local/merge-state.json from backup or re-run setup")
+        state = {"merges": {}}
     for m in lm.get("merges", []):
+        merge_command = f"{REPO_ROOT}/bin/leos-python {REPO_ROOT}/bin/leos-merge.py --tool {tool}"
         cur = frag_sha(os.path.join(REPO_ROOT, m["fragment"]), m["strategy"])
-        rec = state["merges"].get(m["dest"], {}).get("fragmentSha")
+        legacy = m["dest"].replace("{{CODEX_HOME}}", "~/.codex")
+        rec = state["merges"].get(m["dest"], state["merges"].get(legacy, {})).get("fragmentSha")
         if rec is None:
             drift = "never-merged"
-            problems.append(f"{tool}: fragment {m['fragment']} never merged — run leos-merge --tool {tool}")
+            suffix = " --package-manager <pnpm|yarn|npm>" if tool == "claude" else ""
+            problems.append(f"{tool}: fragment {m['fragment']} never merged — run {merge_command}{suffix}")
         elif rec != cur:
             drift = "changed"
-            problems.append(f"{tool}: fragment {m['fragment']} changed since last merge — re-run leos-merge --tool {tool}")
+            problems.append(f"{tool}: fragment {m['fragment']} changed since last merge — re-run {merge_command}")
         else:
             drift = "current"
+        if tool == "claude":
+            entry = state["merges"].get(m["dest"], state["merges"].get(legacy, {}))
+            pm = entry.get("packageManager")
+            recorded_pm_sha = entry.get("packageManagerSha")
+            if pm:
+                policy = load_json(os.path.join(REPO_ROOT, "core", "policy", "policy-data.json"), {})
+                commands = policy.get("commandAllow", {}).get(pm)
+                current_pm_sha = hashlib.sha256(json.dumps(commands, sort_keys=True).encode("utf-8", "replace")).hexdigest() \
+                    if isinstance(commands, list) else None
+                if not current_pm_sha or current_pm_sha != recorded_pm_sha:
+                    drift = "package-policy-changed"
+                    problems.append(f"claude: package-manager policy for {pm} changed — run "
+                                    f"{merge_command} --package-manager {pm}")
         tinfo["merges"].append({"dest": m["dest"], "drift": drift})
 
-    seats = load_json(os.path.join(REPO_ROOT, "local", f"seats.{tool}.json"), None)
+    seats = load_json(os.path.join(LOCAL, f"seats.{tool}.json"), None)
     if seats is not None:
         seat_problems = check_seat_flags(tool, seats)
         problems.extend(f"{tool}: {p}" for p in seat_problems)
@@ -168,8 +205,45 @@ def _argv_of(seat):
 
 def check_seat_flags(tool, seats):
     problems = []
-    all_seats = list(seats.get("seats", []))
-    native = seats.get("native") or {}
+    if not isinstance(seats, dict):
+        return ["seats file must be a JSON object"]
+    if seats.get("host") not in (None, tool):
+        problems.append(f"seats file host is {seats.get('host')!r}, expected {tool!r}")
+    external = seats.get("seats", [])
+    if not isinstance(external, list):
+        return problems + ["seats must be an array"]
+    native = seats.get("native")
+    if not isinstance(native, dict) or native.get("mode") not in ("subagent", "exec"):
+        return problems + ["native seat must be an object with mode subagent or exec"]
+    if native["mode"] == "subagent" and not isinstance(native.get("model"), str):
+        problems.append("native subagent seat requires a model")
+    if native["mode"] == "exec" and not _argv_of(native):
+        problems.append("native exec seat requires argv")
+    seen = set()
+    all_seats = []
+    for seat in external:
+        if not isinstance(seat, dict):
+            problems.append("external seat must be an object")
+            continue
+        name = seat.get("name")
+        if not isinstance(name, str) or not name:
+            problems.append("external seat missing name")
+        elif name in seen:
+            problems.append(f"duplicate external seat name: {name}")
+        else:
+            seen.add(name)
+        if not _argv_of(seat):
+            problems.append(f"external seat {name or '<unnamed>'} requires argv")
+        if seat.get("transport") not in ("stdin", "arg"):
+            problems.append(f"external seat {name or '<unnamed>'} transport must be stdin or arg")
+        timeout = seat.get("timeoutSeconds", 300)
+        if not isinstance(timeout, int) or not 1 <= timeout <= 900:
+            problems.append(f"external seat {name or '<unnamed>'} timeoutSeconds must be 1..900")
+        env = seat.get("env", {})
+        if not isinstance(env, dict) or any(not isinstance(k, str) or not isinstance(v, str)
+                                            for k, v in env.items()):
+            problems.append(f"external seat {name or '<unnamed>'} env must be string:string")
+        all_seats.append(seat)
     if native.get("mode") == "exec":
         all_seats = all_seats + [native]
     for seat in all_seats:
@@ -178,21 +252,95 @@ def check_seat_flags(tool, seats):
             continue
         base = os.path.basename(argv[0])
         joined = " ".join(argv)
-        if base == "claude" and "--safe-mode" not in argv:
-            problems.append(f"claude seat missing --safe-mode: {joined}")
-        if base == "codex" and not ("read-only" in joined):
+        if base == "claude" and ("--safe-mode" not in argv or not _option_is(argv, "--permission-mode", "plan")):
+            problems.append(f"claude seat missing --safe-mode or --permission-mode plan: {joined}")
+        if base == "codex" and not _option_is(argv, "--sandbox", "read-only"):
             problems.append(f"codex seat not --sandbox read-only: {joined}")
-        if base == "opencode" and not ("plan" in argv):
+        if base == "opencode" and not _option_is(argv, "--agent", "plan"):
             problems.append(f"opencode seat missing --agent plan: {joined}")
-        if base == "cursor-agent" and not ("plan" in joined):
+        if base == "cursor-agent" and not _option_is(argv, "--mode", "plan"):
             problems.append(f"cursor-agent seat not --mode plan: {joined}")
+        if base == "cursor-agent" and seat.get("adapter") != "cursor-json":
+            problems.append(f"cursor-agent seat needs adapter cursor-json after a setup output-contract smoke test: {joined}")
+        if base == "cursor-agent":
+            response_path = seat.get("responsePath")
+            if not isinstance(response_path, str) or not re.fullmatch(
+                    r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*", response_path):
+                problems.append(f"cursor-agent seat needs a simple responsePath to reviewer text: {joined}")
     return problems
+
+
+def _option_is(argv, flag, wanted):
+    for i, value in enumerate(argv):
+        if value == flag and i + 1 < len(argv) and argv[i + 1] == wanted:
+            return True
+        if value == f"{flag}={wanted}":
+            return True
+    return False
+
+
+def configured_hosts():
+    """Read the explicit link-time registry, with a read-only legacy migration heuristic.
+
+    A directory such as ~/.claude is not evidence that Leo configured it; old installs that
+    predate the registry are recognized only when they have a Leo seat, merge record, or link.
+    """
+    data = load_json(os.path.join(LOCAL, "installed-hosts.json"), {})
+    hosts = data.get("hosts", []) if isinstance(data, dict) else []
+    hosts = {h for h in hosts if h in TOOLS}
+    state = load_json(os.path.join(LOCAL, "merge-state.json"), {"merges": {}})
+    merges = state.get("merges", {}) if isinstance(state, dict) else {}
+    for tool in TOOLS:
+        if os.path.exists(os.path.join(LOCAL, f"seats.{tool}.json")):
+            hosts.add(tool)
+            continue
+        lm = load_json(os.path.join(REPO_ROOT, "tools", tool, "linkmap.json"), {})
+        if any(os.path.islink(expand_path(e["dest"])) for e in lm.get("links", [])):
+            hosts.add(tool)
+            continue
+        if any(m["dest"] in merges or m["dest"].replace("{{CODEX_HOME}}", "~/.codex") in merges
+               for m in lm.get("merges", [])):
+            hosts.add(tool)
+    return hosts
+
+
+def check_runtime(configured, problems):
+    """Validate the clone-private runtime without invoking an ambient Python."""
+    requirements = os.path.join(REPO_ROOT, "requirements", "runtime.txt")
+    state_path = os.path.join(LOCAL, "runtime-state.json")
+    launcher = os.path.join(LOCAL, ".venv", "bin", "python")
+    try:
+        with open(requirements, "rb") as f:
+            want = hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        want = None
+    state = load_json(state_path, {})
+    ok = bool(want and os.path.isfile(launcher) and state.get("requirementsSha") == want)
+    if configured and not ok:
+        problems.append("runtime: local/.venv is missing or requirements changed — run "
+                        f"python3 {REPO_ROOT}/bin/leos-runtime.py setup --refresh")
+    return {"component": "runtime", "ok": ok, "venvPython": launcher,
+            "requirementsSha": want, "installedRequirementsSha": state.get("requirementsSha")}
+
+
+def legacy_council_state_report():
+    """Surface, but never auto-import, the prior global council state location."""
+    legacy = os.path.join(current_home(), ".local", "state", "leos-agent", "council", "state")
+    target = os.path.join(LOCAL, "council", "state")
+    available = os.path.isdir(legacy) and os.path.realpath(legacy) != os.path.realpath(target)
+    return {"component": "legacyCouncilState", "present": available, "source": legacy,
+            "target": target,
+            "migrationCommand": f"{REPO_ROOT}/bin/leos-python {REPO_ROOT}/core/council/bin/council.py migrate-legacy-state"
+            if available else None}
 
 
 def main():
     problems, report = [], []
+    configured = configured_hosts()
+    report.append(check_runtime(configured, problems))
+    report.append(legacy_council_state_report())
     for tool in TOOLS:
-        check_tool(tool, problems, report)
+        check_tool(tool, tool in configured, problems, report)
     print(json.dumps({"ok": not problems, "problems": problems, "report": report}, indent=2))
     return 1 if problems else 0
 

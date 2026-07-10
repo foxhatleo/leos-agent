@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh -c 'CODEX_HOME=\"${CODEX_HOME:-$HOME/.codex}\"; S=\"$CODEX_HOME\"/hooks/bash-guard.py; [ -f \"$S\" ] || exit 2; python3 \"$S\"; ec=$?; [ \"$ec\" = 43 ] && exit 2; exit 0'",
+            "command": "sh -c 'CODEX_HOME=\"${CODEX_HOME:-$HOME/.codex}\"; S=\"$CODEX_HOME\"/hooks/bash-guard.py; P=\"$CODEX_HOME\"/leos-python; [ -f \"$S\" ] && [ -x \"$P\" ] || exit 2; \"$P\" \"$S\"; ec=$?; [ \"$ec\" = 0 ] && exit 0; exit 2'",
             "timeout": 10
           }
         ]
@@ -19,7 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh -c 'CODEX_HOME=\"${CODEX_HOME:-$HOME/.codex}\"; S=\"$CODEX_HOME\"/hooks/format-on-edit.py; [ -f \"$S\" ] || exit 0; python3 \"$S\"; ec=$?; [ \"$ec\" = 44 ] && exit 2; exit 0'",
+            "command": "sh -c 'CODEX_HOME=\"${CODEX_HOME:-$HOME/.codex}\"; S=\"$CODEX_HOME\"/hooks/format-on-edit.py; P=\"$CODEX_HOME\"/leos-python; [ -f \"$S\" ] && [ -x \"$P\" ] || exit 0; \"$P\" \"$S\"; ec=$?; [ \"$ec\" = 44 ] && exit 2; exit 0'",
             "timeout": 45
           }
         ]
@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh -c 'CODEX_HOME=\"${CODEX_HOME:-$HOME/.codex}\"; S=\"$CODEX_HOME\"/council/bin/council.py; [ -f \"$S\" ] || exit 0; python3 \"$S\" hook; ec=$?; [ \"$ec\" = 42 ] && exit 2; exit 0'",
+            "command": "sh -c 'CODEX_HOME=\"${CODEX_HOME:-$HOME/.codex}\"; S=\"$CODEX_HOME\"/council/bin/council.py; P=\"$CODEX_HOME\"/leos-python; [ -f \"$S\" ] && [ -x \"$P\" ] || exit 0; \"$P\" \"$S\" hook; ec=$?; [ \"$ec\" = 42 ] && exit 2; exit 0'",
             "timeout": 30
           }
         ]
@@ -42,7 +42,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh -c 'CODEX_HOME=\"${CODEX_HOME:-$HOME/.codex}\"; S=\"$CODEX_HOME\"/hooks/inject-instructions.py; [ -f \"$S\" ] || exit 0; python3 \"$S\"; exit 0'",
+            "command": "sh -c 'CODEX_HOME=\"${CODEX_HOME:-$HOME/.codex}\"; S=\"$CODEX_HOME\"/hooks/inject-instructions.py; P=\"$CODEX_HOME\"/leos-python; [ -f \"$S\" ] && [ -x \"$P\" ] || exit 0; \"$P\" \"$S\"; exit 0'",
             "timeout": 10
           }
         ]
