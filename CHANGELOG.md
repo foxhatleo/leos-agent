@@ -124,3 +124,15 @@ OpenCode and Cursor support.
   seat previously passed silently and ran the CLI's default model). Machines with an unpinned or
   non-Opus seat will newly fail doctor — the message says what to pin. New `seats` conformance +
   rejection battery (wired into CI, SETUP, and the runbook battery list).
+- `[all]` **Runner cancellation is race-free, bounded, and exactly classified.** Seat launch and
+  registration now happen atomically against the cancel handler (a signal in the old
+  post-`Popen`/pre-registration window left an unkillable seat running to its full timeout —
+  empirically 9/9 at 0.15–0.35 s; now a bounded ~0.6 s teardown), `seat-started` is emitted only
+  once the child is killable, and a cancelled run SIGTERMs then SIGKILLs within a 5 s grace.
+  Classification is exact: `cancelled` only under real cancellation, a seat that finished before
+  the signal stays `completed`, and an externally signalled seat is the new `signal-exit`.
+  Lifecycle stderr writes, the final summary print, and the interpreter's shutdown flush all
+  survive a dead orchestrator pipe (`result.json` is authoritative; no more exit-120). The unused
+  `LEOS_COUNCIL_ACTIVE_RUN` export to seats (the `--run-id` ownership token) is gone. The
+  cancellation test waits on lifecycle events instead of a fixed sleep, and a hung runner is a
+  failing check with diagnostics instead of a battery abort.

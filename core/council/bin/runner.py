@@ -161,8 +161,13 @@ class EventLog:
                 f.flush()
             label = fields.get("seat")
             suffix = f" ({label})" if label else ""
-            sys.stderr.write(f"[council-runner] {event}{suffix}\n")
-            sys.stderr.flush()
+            try:
+                sys.stderr.write(f"[council-runner] {event}{suffix}\n")
+                sys.stderr.flush()
+            except (OSError, ValueError):
+                # A dead orchestrator pipe must never kill the run; events.jsonl above is the
+                # authoritative record.
+                pass
 
 
 def tier_external_count(tier, available):
@@ -336,18 +341,53 @@ def _drain(stream, target):
             target["data"] += chunk[:MAX_OUTPUT_BYTES - len(target["data"])]
 
 
+def _killpg(proc, sig):
+    try:
+        os.killpg(proc.pid, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
 def cancel_active(_signum, _frame):
     CANCELLED.set()
+    # ACTIVE_LOCK also guards launch+registration in run_one, so a seat is either not yet
+    # launched (its worker sees CANCELLED inside the lock and refuses) or in this snapshot.
     with ACTIVE_LOCK:
         processes = list(ACTIVE_PROCESSES)
     for proc in processes:
-        try:
-            os.killpg(proc.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+        _killpg(proc, signal.SIGTERM)
 
 
-def run_one(work, cwd, run_id, seat, events):
+def _wait_bounded(proc, timeout):
+    """Wait with the TERM-at-deadline / KILL-after-5s timeout contract, plus a bounded exit on
+    cancellation: a cancelled run tears down within the grace window, never the full seat
+    timeout. Returns timed_out."""
+    deadline = time.monotonic() + timeout
+    kill_at = None
+    cancel_grace = None
+    timed_out = False
+    while proc.poll() is None:
+        now = time.monotonic()
+        if CANCELLED.is_set() and cancel_grace is None:
+            cancel_grace = now + 5
+            _killpg(proc, signal.SIGTERM)   # idempotent; covers a pre-snapshot registration
+        if cancel_grace is not None and now >= cancel_grace:
+            _killpg(proc, signal.SIGKILL)
+            proc.wait()
+            break
+        if not timed_out and now >= deadline:
+            timed_out = True
+            kill_at = now + 5
+            _killpg(proc, signal.SIGTERM)
+        elif timed_out and now >= kill_at:
+            _killpg(proc, signal.SIGKILL)
+            proc.wait()
+            break
+        time.sleep(0.05)
+    return timed_out
+
+
+def run_one(work, cwd, seat, events):
     name = seat["name"]
     started = time.monotonic()
     base = {"seat": name, "kind": seat["kind"], "status": "", "elapsedSeconds": 0.0}
@@ -363,38 +403,31 @@ def run_one(work, cwd, run_id, seat, events):
     env = dict(os.environ)
     env.update(extra_env)
     env["LEOS_COUNCIL_SEAT"] = "1"
-    env["LEOS_COUNCIL_ACTIVE_RUN"] = run_id
     stdin_handle = open(seat["promptPath"], "rb") if transport == "stdin" else subprocess.DEVNULL
     opened_stdin = transport == "stdin"
     out, err = {"data": b"", "total": 0}, {"data": b"", "total": 0}
+    proc = None
     try:
-        events.emit("seat-started", seat=name, timeoutSeconds=timeout, adapter=adapter)
-        proc = subprocess.Popen(
-            argv, cwd=cwd, env=env, stdin=stdin_handle, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            start_new_session=True,
-        )
+        # Launch and register atomically against the cancel handler: either the handler's
+        # snapshot has this proc, or CANCELLED was already set and we refuse to launch.
         with ACTIVE_LOCK:
+            if CANCELLED.is_set():
+                base.update(status="cancelled", reason="cancelled-before-launch")
+                events.emit("seat-finished", seat=name, status=base["status"])
+                return base
+            proc = subprocess.Popen(
+                argv, cwd=cwd, env=env, stdin=stdin_handle, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, start_new_session=True,
+            )
             ACTIVE_PROCESSES.add(proc)
+        if CANCELLED.is_set():
+            _killpg(proc, signal.SIGTERM)
+        events.emit("seat-started", seat=name, timeoutSeconds=timeout, adapter=adapter,
+                    pid=proc.pid)
         t_out = threading.Thread(target=_drain, args=(proc.stdout, out), daemon=True)
         t_err = threading.Thread(target=_drain, args=(proc.stderr, err), daemon=True)
         t_out.start(); t_err.start()
-        timed_out = False
-        try:
-            proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            try:
-                os.killpg(proc.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                proc.wait()
+        timed_out = _wait_bounded(proc, timeout)
         t_out.join(timeout=5); t_err.join(timeout=5)
         write_private(stdout_path, out["data"], binary=True)
         write_private(stderr_path, err["data"], binary=True)
@@ -404,13 +437,12 @@ def run_one(work, cwd, run_id, seat, events):
             "stdoutBytes": out["total"], "stderrBytes": err["total"],
             "outputTruncated": out["total"] > len(out["data"]) or err["total"] > len(err["data"]),
         })
-        if CANCELLED.is_set() or proc.returncode is not None and proc.returncode < 0 and not timed_out:
-            base["status"] = "cancelled"
-        elif timed_out:
+        # Exact classification: a seat that finished its work stays completed even if the run
+        # was cancelled afterwards; cancelled only ever means "this run's cancellation stopped
+        # the seat"; an externally signalled seat without cancellation/timeout is signal-exit.
+        if timed_out:
             base["status"] = "timed-out"
-        elif proc.returncode != 0:
-            base["status"] = "nonzero-exit"
-        else:
+        elif proc.returncode == 0:
             parsed, failure = extract_structured(adapter, out["data"].decode("utf-8", "replace"))
             if not failure and parsed and isinstance(parsed.get("reviewText"), str):
                 findings, failure = extract_findings(parsed["reviewText"], seat["checkpoint"])
@@ -419,12 +451,18 @@ def run_one(work, cwd, run_id, seat, events):
             base["status"] = failure or "completed"
             if parsed:
                 base["transportResult"] = parsed
+        elif CANCELLED.is_set():
+            base["status"] = "cancelled"
+        elif proc.returncode is not None and proc.returncode < 0:
+            base["status"] = "signal-exit"
+        else:
+            base["status"] = "nonzero-exit"
     except FileNotFoundError:
         base.update(status="unavailable", reason=f"command not found: {argv[0]}")
     except OSError as e:
         base.update(status="execution-error", reason=str(e))
     finally:
-        if "proc" in locals():
+        if proc is not None:
             with ACTIVE_LOCK:
                 ACTIVE_PROCESSES.discard(proc)
         if opened_stdin:
@@ -561,7 +599,7 @@ def cmd_run(args):
     write_json(work / "job.json", job)
     results = list(manual_native)
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(planned))) as pool:
-        futures = [pool.submit(run_one, work, cwd, run_id, seat, events) for seat in planned]
+        futures = [pool.submit(run_one, work, cwd, seat, events) for seat in planned]
         for future in futures:
             results.append(future.result())
     if args.checkpoint == "plan" and not args.external_only and planned \
@@ -579,7 +617,7 @@ def cmd_run(args):
             else:
                 fallback = dict(seat, tier=args.tier, checkpoint=args.checkpoint,
                                 prompt=prompt, promptPath=str(prompt_path), fallback=True)
-                results.append(run_one(work, cwd, run_id, fallback, events))
+                results.append(run_one(work, cwd, fallback, events))
     summary = dict(job, finishedAt=int(time.time()), results=results)
     summary["dispatchOk"] = bool(results) and all(
         r["status"] in ("completed", "orchestrator-native-subagent-required") for r in results)
@@ -595,7 +633,10 @@ def cmd_run(args):
                         "--status", "dispatch-failed"], cwd=cwd, text=True, capture_output=True)
     events.emit("runner-finished", runId=run_id, dispatchOk=summary["dispatchOk"],
                 reviewComplete=summary["reviewComplete"])
-    print(json.dumps(summary, indent=2))
+    try:
+        print(json.dumps(summary, indent=2))
+    except (OSError, ValueError):
+        pass   # result.json is already written; a dead stdout must not change the outcome
     return 0 if summary["ok"] else 1
 
 
@@ -669,5 +710,21 @@ def main():
     return args.fn(args)
 
 
+def _exit(code):
+    """A dead orchestrator pipe must not turn the runner's exit code into CPython's 120
+    (failed shutdown flush): point any broken std stream at devnull before exiting."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except (OSError, ValueError):
+            try:
+                devnull = os.open(os.devnull, os.O_WRONLY)
+                os.dup2(devnull, stream.fileno())
+                os.close(devnull)
+            except (OSError, ValueError):
+                pass
+    sys.exit(code)
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    _exit(main())

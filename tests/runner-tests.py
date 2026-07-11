@@ -120,8 +120,60 @@ def run(repo, prompt, env, tier="elevated", cwd=None, checkpoint="impl", externa
         argv.append("--approve-external")
     if redact_sensitive:
         argv.append("--redact-sensitive")
-    return subprocess.run(argv,
-                          capture_output=True, text=True, env=env)
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, env=env, timeout=120)
+    except subprocess.TimeoutExpired as e:
+        # One hung runner is a failing check with diagnostics, never a battery abort.
+        return subprocess.CompletedProcess(argv, -999, stdout=(e.stdout or b"").decode() if
+                                           isinstance(e.stdout, bytes) else (e.stdout or "{}"),
+                                           stderr="runner timed out after 120s")
+
+
+def wait_for_event(local, name, deadline=15):
+    """Poll every isolated work dir's events.jsonl for a named lifecycle event; the runner
+    flushes per event, so this observes progress live."""
+    import glob
+    end = time.time() + deadline
+    pattern = os.path.join(local, "council", "work", "*", "*", "events.jsonl")
+    while time.time() < end:
+        for path in glob.glob(pattern):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    for line in f:
+                        if json.loads(line).get("event") == name:
+                            return path
+            except (OSError, json.JSONDecodeError):
+                pass
+        time.sleep(0.05)
+    return None
+
+
+def communicate_checked(proc, name, timeout):
+    """communicate() that converts a hang into a failing check plus diagnostics instead of an
+    unhandled TimeoutExpired that would abort the whole battery."""
+    try:
+        stdout, _stderr = proc.communicate(timeout=timeout)
+        return stdout
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        stdout, stderr = proc.communicate()
+        check(name, False)
+        print("  diagnostics — stdout tail:", (stdout or "")[-400:])
+        print("  diagnostics — stderr tail:", (stderr or "")[-400:])
+        return None
+
+
+def pid_dead(pid, deadline=5):
+    end = time.time() + deadline
+    while time.time() < end:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            return False
+        time.sleep(0.05)
+    return False
 
 
 def main():
@@ -162,20 +214,117 @@ def main():
     check("event-only Codex output lacks reviewer content", result.returncode == 1 and
           data["results"][0]["status"] == "missing-review-content")
 
-    # Runner cancellation terminates the whole seat process group and records a typed failure.
+    # Runner cancellation after seat launch is typed, bounded, and kills the seat's own session:
+    # seat-started is emitted only once the child is registered (killable), so waiting on it is
+    # deterministic rather than a fixed sleep.
     _, repo, local, bindir, prompt, env = fresh()
     sleeper = os.path.join(bindir, "codex")
-    executable(sleeper, "cat >/dev/null\nsleep 30")
+    pid_receipt = os.path.join(local, "seat-pid.txt")
+    executable(sleeper, f"echo $$ >'{pid_receipt}'\ncat >/dev/null\nsleep 30")
     write_seats(local, [sleeper, "exec", "-"])
     proc = subprocess.Popen([sys.executable, RUNNER, "run", "--host", "codex", "--checkpoint", "impl",
                              "--tier", "low", "--prompt", prompt, "--cwd", repo, "--approve-external"],
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
-    time.sleep(0.5)
+    check("cancellation test observes a registered seat", wait_for_event(local, "seat-started") is not None)
+    # Wait until the shim has actually written its pid (it may be killed pre-exec otherwise —
+    # which is also a correct kill, but then there is nothing to assert against).
+    end = time.time() + 10
+    while time.time() < end and not os.path.exists(pid_receipt):
+        time.sleep(0.02)
+    check("cancellation test observes a running seat", os.path.exists(pid_receipt))
     proc.send_signal(signal.SIGTERM)
-    stdout, _ = proc.communicate(timeout=10)
-    cancelled = json.loads(stdout)
-    check("runner cancellation is typed and bounded", proc.returncode == 1 and
-          cancelled["results"][0]["status"] == "cancelled")
+    stdout = communicate_checked(proc, "runner cancellation is typed and bounded", timeout=15)
+    if stdout is not None:
+        cancelled = json.loads(stdout)
+        check("runner cancellation is typed and bounded", proc.returncode == 1 and
+              cancelled["results"][0]["status"] == "cancelled")
+        try:
+            seat_pid = int(open(pid_receipt).read().strip())
+        except (OSError, ValueError):
+            seat_pid = None
+        check("cancellation kills the seat process group", seat_pid is not None and pid_dead(seat_pid))
+
+    # Cancellation BEFORE any seat launches never leaks an unkillable child and still writes a
+    # typed result: the launch+registration critical section refuses under CANCELLED.
+    _, repo, local, bindir, prompt, env = fresh()
+    sleeper = os.path.join(bindir, "codex")
+    pid_receipt = os.path.join(local, "seat-pid.txt")
+    executable(sleeper, f"echo $$ >'{pid_receipt}'\ncat >/dev/null\nsleep 30")
+    write_seats(local, [sleeper, "exec", "-"])
+    proc = subprocess.Popen([sys.executable, RUNNER, "run", "--host", "codex", "--checkpoint", "impl",
+                             "--tier", "low", "--prompt", prompt, "--cwd", repo, "--approve-external"],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    check("early-cancel test observes runner start", wait_for_event(local, "runner-started") is not None)
+    proc.send_signal(signal.SIGTERM)
+    stdout = communicate_checked(proc, "pre-launch cancellation is bounded", timeout=15)
+    if stdout is not None:
+        early = json.loads(stdout)
+        check("pre-launch cancellation is bounded and typed", proc.returncode == 1 and
+              all(r["status"] == "cancelled" for r in early.get("results", [])) and
+              os.path.isfile(early.get("resultPath", "")))
+        if os.path.isfile(pid_receipt):
+            seat_pid = int(open(pid_receipt).read().strip())
+            check("no seat child survives an early cancel", pid_dead(seat_pid))
+        else:
+            check("no seat child survives an early cancel", True)   # never launched
+
+    # A seat that finished its review before the run-wide signal stays completed; only the
+    # still-running seat is cancelled.
+    _, repo, local, bindir, prompt, env = fresh()
+    fast = os.path.join(bindir, "codex")
+    slow = os.path.join(bindir, "claude")
+    executable(fast, "cat >/dev/null\nprintf '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"[]\"}}\\n'")
+    executable(slow, "cat >/dev/null\nsleep 30")
+    write_seats(local, [fast, "exec", "-"], [slow, "--print"])
+    proc = subprocess.Popen([sys.executable, RUNNER, "run", "--host", "codex", "--checkpoint", "impl",
+                             "--tier", "elevated", "--prompt", prompt, "--cwd", repo, "--approve-external"],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    check("mixed-cancel test sees the fast seat finish", wait_for_event(local, "seat-finished") is not None)
+    proc.send_signal(signal.SIGTERM)
+    stdout = communicate_checked(proc, "completed seat survives run-wide cancel", timeout=15)
+    if stdout is not None:
+        mixed = json.loads(stdout)
+        statuses = {r["seat"]: r["status"] for r in mixed.get("results", [])}
+        check("completed seat survives run-wide cancel",
+              statuses.get("native") == "completed" and statuses.get("opus") == "cancelled")
+
+    # An externally SIGKILLed seat with no cancellation is signal-exit, not cancelled.
+    _, repo, local, bindir, prompt, env = fresh()
+    suicidal = os.path.join(bindir, "codex")
+    executable(suicidal, "cat >/dev/null\nkill -KILL $$")
+    write_seats(local, [suicidal, "exec", "-"])
+    result = run(repo, prompt, env, tier="low")
+    data = json.loads(result.stdout)
+    check("external SIGKILL is signal-exit", result.returncode == 1 and
+          data["results"][0]["status"] == "signal-exit")
+
+    # A dead orchestrator stderr pipe must not kill the run before result.json is written.
+    _, repo, local, bindir, prompt, env = fresh()
+    fine = os.path.join(bindir, "codex")
+    executable(fine, "cat >/dev/null\nprintf '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"[]\"}}\\n'")
+    write_seats(local, [fine, "exec", "-"])
+    proc = subprocess.Popen([sys.executable, RUNNER, "run", "--host", "codex", "--checkpoint", "impl",
+                             "--tier", "low", "--prompt", prompt, "--cwd", repo, "--approve-external"],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    proc.stderr.close()
+    dead_out = proc.stdout.read()
+    rc = proc.wait(timeout=30)
+    dead_data = json.loads(dead_out)
+    check("dead orchestrator stderr does not kill the run", rc == 0 and
+          os.path.isfile(dead_data.get("resultPath", "")) and
+          dead_data["results"][0]["status"] == "completed")
+
+    # Seats get the recursion sentinel but never the run-ownership token.
+    _, repo, local, bindir, prompt, env = fresh()
+    env_receipt = os.path.join(local, "seat-env.txt")
+    envdump = os.path.join(bindir, "codex")
+    executable(envdump, f"cat >/dev/null\nenv >'{env_receipt}'\nprintf '{{\"type\":\"item.completed\",\"item\":{{\"type\":\"agent_message\",\"text\":\"[]\"}}}}\\n'")
+    write_seats(local, [envdump, "exec", "-"])
+    result = run(repo, prompt, env, tier="low")
+    seat_env = open(env_receipt).read()
+    check("seat env keeps LEOS_COUNCIL_SEAT and omits the run token",
+          result.returncode == 0 and "LEOS_COUNCIL_SEAT=1" in seat_env and
+          "LEOS_COUNCIL_ACTIVE_RUN" not in seat_env)
 
     # Nonempty reviewer prose is not enough: the committed prompts require a JSON findings array.
     _, repo, local, bindir, prompt, env = fresh()
