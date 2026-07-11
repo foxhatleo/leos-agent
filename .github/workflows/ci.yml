@@ -31,7 +31,7 @@ jobs:
         run: bin/leos-python bin/leos-render-policy.py --check
       - name: Test batteries (all must pass)
         run: |
-          for t in guard fmt council runner merge link block inject uninstall runtime; do bin/leos-python tests/$t-tests.py; done
+          for t in guard fmt council runner merge link block inject uninstall runtime seats; do bin/leos-python tests/$t-tests.py; done
       - name: Policy enforced-vs-advisory boundary
         run: bin/leos-python tests/contamination-check.py
       - name: Doctor

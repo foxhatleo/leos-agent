@@ -46,7 +46,7 @@ detected hosts are offered, not auto-configured, and only added when Leo explici
 host you configure: `leos-link` → `leos-merge` → `leos-block` (Claude only) → validated
 `leos-seats.py write` after driver smokes → verify. The
 per-host specifics live in `tools/<host>/SETUP-DELTA.md`. Before declaring done, run **all test
-batteries** (`tests/{guard,fmt,council,runner,merge,link,block,inject,uninstall,runtime}-tests.py`, contamination,
+batteries** (`tests/{guard,fmt,council,runner,merge,link,block,inject,uninstall,runtime,seats}-tests.py`, contamination,
 and policy checks) and `bin/leos-doctor.py`
 — all must pass.
 

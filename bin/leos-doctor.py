@@ -243,6 +243,13 @@ def _argv_of(seat):
     return [str(x) for x in seat.get("argv", [])]
 
 
+def _is_opus_line(model):
+    """The Anthropic seat rule from AGENTS.md, made mechanical: an Opus-line id (or the `opus`
+    alias) — never the Claude-5/Mythos-class line (Fable, Mythos)."""
+    m = model.lower()
+    return "opus" in m and "fable" not in m and "mythos" not in m
+
+
 def check_seat_flags(tool, seats):
     problems = []
     if not isinstance(seats, dict):
@@ -257,6 +264,14 @@ def check_seat_flags(tool, seats):
         return problems + ["native seat must be an object with mode subagent or exec"]
     if native["mode"] == "subagent" and not isinstance(native.get("model"), str):
         problems.append("native subagent seat requires a model")
+    elif native["mode"] == "subagent":
+        model = native["model"]
+        unresolved = sorted(set(re.findall(r"\{[A-Z][A-Z0-9_]*\}", model)))
+        if unresolved:
+            problems.append(f"native subagent model has unresolved placeholders {unresolved}: {model!r}")
+        elif tool == "claude" and not _is_opus_line(model):
+            problems.append(
+                f"claude native subagent must be the Opus line (never Fable/Mythos), got {model!r}")
     if native["mode"] == "exec" and not _argv_of(native):
         problems.append("native exec seat requires argv")
     seen = set()
@@ -292,7 +307,11 @@ def check_seat_flags(tool, seats):
             continue
         base = os.path.basename(argv[0])
         joined = " ".join(argv)
-        unresolved = sorted(set(re.findall(r"\{[A-Z][A-Z0-9_]*\}", joined)) - {"{PROMPT_TEXT}"})
+        # {PROMPT_TEXT} and {EFFORT} are RUNTIME placeholders the runner substitutes at dispatch
+        # (runner.prepare_command); every other leftover token — {MODEL} above all — means setup
+        # skipped its resolution step.
+        unresolved = sorted(set(re.findall(r"\{[A-Z][A-Z0-9_]*\}", joined))
+                            - {"{PROMPT_TEXT}", "{EFFORT}"})
         if unresolved:
             problems.append(f"seat has unresolved placeholders {unresolved}: {joined}")
         if base == "claude" and ("--safe-mode" not in argv or not _option_is(argv, "--permission-mode", "plan")):
@@ -321,8 +340,10 @@ def check_seat_flags(tool, seats):
             for i, value in enumerate(argv):
                 if value == "--model" and i + 1 < len(argv):
                     model = argv[i + 1]
-            if model and "opus" not in model.lower():
-                problems.append(f"Anthropic seat must use the Opus line, got {model!r}")
+            if not model:
+                problems.append(f"Anthropic seat must pin --model to an Opus-line id: {joined}")
+            elif not _is_opus_line(model):
+                problems.append(f"Anthropic seat must use the Opus line (never Fable/Mythos), got {model!r}")
     return problems
 
 

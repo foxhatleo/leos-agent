@@ -114,3 +114,13 @@ OpenCode and Cursor support.
   `bin/leos-python` honors `LEOS_LOCAL` like `leos-runtime`/`leos-doctor` already did, so the
   runtime setup builds and doctor validates is the one the launcher runs. New `runtime` test
   battery (wired into CI, SETUP, and the runbook battery list).
+- `[all]` **Seat validation matches the documented templates and enforces the model rules.**
+  `{EFFORT}` is a runtime placeholder the runner substitutes per review tier — doctor no longer
+  flags it as unresolved, so the exact rosters the catalog and SETUP.md prescribe now pass
+  `leos-seats.py validate`/`write` (previously every documented candidate was refused). The
+  Anthropic-seat rule is mechanical instead of prose: a Claude host's native subagent model must
+  be Opus-line (never Fable/Mythos), a literal `{MODEL}` is refused anywhere including the native
+  subagent model, and an external `opus` seat must pin `--model` to an Opus-line id (an unpinned
+  seat previously passed silently and ran the CLI's default model). Machines with an unpinned or
+  non-Opus seat will newly fail doctor — the message says what to pin. New `seats` conformance +
+  rejection battery (wired into CI, SETUP, and the runbook battery list).

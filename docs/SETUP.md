@@ -147,6 +147,7 @@ bin/leos-python tests/guard-tests.py && bin/leos-python tests/fmt-tests.py \
   && bin/leos-python tests/merge-tests.py && bin/leos-python tests/link-tests.py \
   && bin/leos-python tests/block-tests.py && bin/leos-python tests/inject-tests.py \
   && bin/leos-python tests/uninstall-tests.py && bin/leos-python tests/runtime-tests.py \
+  && bin/leos-python tests/seats-tests.py \
   && bin/leos-python tests/contamination-check.py && bin/leos-python bin/leos-render-policy.py --check
 bin/leos-python bin/leos-doctor.py
 ```
