@@ -7,7 +7,6 @@
       "git diff",
       "git log",
       "git show",
-      "git branch",
       "gh pr view",
       "gh pr list",
       "gh issue view",

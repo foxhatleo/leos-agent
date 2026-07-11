@@ -47,6 +47,18 @@ for host in ["claude", "codex", "opencode", "cursor"]:
     if "enforcement" not in json.dumps(r):
         problems.append(f"policy-data.json: renderer '{host}' missing an enforcement label")
 
+# `git branch` mutates (create/-D/-m) behind the same prefix as its read-only listing, and the
+# allow vocabularies are prefix-based — it must never reappear in the universal set or any
+# rendered allow surface.
+if "git branch" in pol.get("commandAllow", {}).get("universal", []):
+    problems.append("policy-data.json: 'git branch' must not be pre-approved (prefix admits -D/-m/-f)")
+for p, token in [("tools/claude/settings-fragment.json", "Bash(git branch"),
+                 ("tools/opencode/opencode-fragment.json", "git branch"),
+                 ("tools/cursor/permissions-fragment.json", "Shell(git branch"),
+                 ("tools/codex/command-policy-notes.json", "git branch")]:
+    if token in text_of(p):
+        problems.append(f"{p}: rendered allow surface still contains 'git branch'")
+
 if problems:
     for p in problems:
         print("FAIL:", p)

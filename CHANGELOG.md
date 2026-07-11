@@ -94,3 +94,14 @@ OpenCode and Cursor support.
   record ∪ live Leo links) so a lost `installed-hosts.json` entry can't cause deletion of the
   shared `~/.agents/skills/council` while another host still uses it; a hosts-less or non-dict
   registry no longer crashes `leos-link`/`leos-uninstall`.
+- `[all]` **Pre-approved command surface is now actually read-only.** `git branch` left the
+  universal allow set (its mutating forms `-d/-D/-m/-f/--delete` share the prefix with the
+  read-only listing and the hosts' prefix-based allow vocabularies cannot exclude flags) — hosts
+  prompt for it again. As defense in depth, `bash-guard` now blocks the write primitives those
+  vocabularies cannot express: `git diff/log/show --output=<file>` and the mutating `git branch`
+  flags, including behind wrappers and `git -C` global options. The guard's `$HOME`/`$PWD`
+  expansion is boundary-aware (`$HOME_old`/`$PWD_old` stay conservatively unknown instead of
+  mis-expanding to safe-looking home paths), and a `pwd`-module shadowing bug that made `~user`
+  expansion crash fail-open (silently allowing `rm -rf ~root/…`) is fixed. Installed machines see
+  a one-time doctor fragment-drift notice per host — re-run `leos-merge --tool <host>` to retire
+  the old `git branch` allow entry.

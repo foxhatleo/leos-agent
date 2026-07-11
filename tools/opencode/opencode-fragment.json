@@ -27,7 +27,6 @@
       "git diff *": "allow",
       "git log *": "allow",
       "git show *": "allow",
-      "git branch *": "allow",
       "gh pr view *": "allow",
       "gh pr list *": "allow",
       "gh issue view *": "allow",

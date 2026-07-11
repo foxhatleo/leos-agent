@@ -24,7 +24,6 @@
       "Shell(git diff)",
       "Shell(git log)",
       "Shell(git show)",
-      "Shell(git branch)",
       "Shell(gh pr view)",
       "Shell(gh pr list)",
       "Shell(gh issue view)",

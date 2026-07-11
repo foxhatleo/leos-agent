@@ -2,8 +2,11 @@
 """PreToolUse guard for Bash: blocks the catastrophic-deletion command class.
 
 Narrow tripwire for irreversible, home/system-scale damage — NOT a general command
-policy (the host's permission classifier handles that). False positives are cheap
-(the agent sees the reason and rephrases or asks); false negatives are not.
+policy (the host's permission classifier handles that) — plus write primitives smuggled
+through commands the policy layer pre-approves as read-only (git --output, git branch
+mutations), because the hosts' allow vocabularies cannot express flag exclusions.
+False positives are cheap (the agent sees the reason and rephrases or asks); false
+negatives are not.
 
 Exit 0 = allow. Exit 43 = block — the host's hook wrapper maps 43 -> 2 (deny) and
 everything else -> 0, so interpreter/script failures (python exits 1/2 on its own
@@ -61,7 +64,7 @@ def _home_toplevel():
 
 HOME_TOPLEVEL = _home_toplevel()
 HOME_REF = re.compile(r"(~([A-Za-z_][\w-]*)?(/|[\s*]|$)|\$\{?HOME\}?)")
-WATCHED = {"rm", "dd", "chmod", "xargs", "cd"}
+WATCHED = {"rm", "dd", "chmod", "xargs", "cd", "git"}
 ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 UNKNOWN_DIR = "<unknown>"
 UNKNOWN_PATH = "<unexpanded-shell-path>"
@@ -123,6 +126,13 @@ def strip_wrappers(tokens):
     return tokens
 
 
+def _subst_var(text, name, value):
+    """Boundary-aware $VAR/${VAR} substitution: never rewrites a longer variable that merely
+    shares the prefix ($PWD_old, $HOME2, ...) — those must stay unresolved so the caller's
+    conservative unknown-path block fires instead of a mis-expanded concrete path."""
+    return re.sub(r"\$\{" + name + r"\}|\$" + name + r"(?![A-Za-z0-9_])", lambda _m: value, text)
+
+
 def expand(target, cwd, cd_context):
     """Expand only stable shell path values and resolve relative paths against cd-context/tool cwd.
 
@@ -134,12 +144,12 @@ def expand(target, cwd, cd_context):
     if cd_context in (UNKNOWN_DIR, UNKNOWN_PATH):
         # `$PWD` follows the shell's last successful `cd`; falling back to the hook payload's
         # original cwd here would mis-model `cd $UNKNOWN && rm -rf $PWD` as a safe project delete.
-        pwd = None
+        workdir = None
     else:
-        pwd = cd_context or cwd
-    t = target.replace("${HOME}", HOME).replace("$HOME", HOME)
-    if pwd:
-        t = t.replace("${PWD}", pwd).replace("$PWD", pwd)
+        workdir = cd_context or cwd
+    t = _subst_var(target, "HOME", HOME)
+    if workdir:
+        t = _subst_var(t, "PWD", workdir)
     elif "$PWD" in t or "${PWD}" in t:
         return UNKNOWN_PATH
     if "$" in t or "`" in t or "$(`" in t:
@@ -243,6 +253,43 @@ def check_rm(tokens, cwd, cd_context):
     return None
 
 
+GIT_OUTPUT_SUBS = {"diff", "log", "show"}
+GIT_GLOBAL_VALUED = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
+BRANCH_MUTATING_LONG = {"--delete", "--force", "--move", "--copy", "--edit-description",
+                        "--unset-upstream"}
+BRANCH_MUTATING_SHORT = re.compile(r"^-[a-zA-Z]*[dDmMcCf]")
+
+
+def check_git(tokens):
+    """Write primitives smuggled through pre-approved read-only git commands: the host allow
+    vocabularies are prefix-based and cannot exclude flags, so the guard closes --output on the
+    diff family and the mutating git-branch forms. Branch CREATION is reversible and stays out
+    of scope."""
+    i = 1
+    while i < len(tokens):
+        t = tokens[i]
+        if t in GIT_GLOBAL_VALUED:
+            i += 2
+            continue
+        if t.startswith("-"):
+            i += 1
+            continue
+        break
+    if i >= len(tokens):
+        return None
+    sub, rest = tokens[i], tokens[i + 1:]
+    if sub in GIT_OUTPUT_SUBS:
+        for t in rest:
+            if t == "--output" or t.startswith("--output="):
+                return f"git {sub} --output writes an arbitrary file from a pre-approved read-only command"
+    if sub == "branch":
+        for t in rest:
+            if t in BRANCH_MUTATING_LONG or t.startswith("--set-upstream-to") \
+                    or (t.startswith("-") and not t.startswith("--") and BRANCH_MUTATING_SHORT.match(t)):
+                return "git branch with a mutating/deleting flag"
+    return None
+
+
 def handle_cd(tokens, cwd, cd_context):
     """Model cd: bare cd -> HOME; `cd -` -> unknown; skip flags/--."""
     args = [t for t in tokens[1:] if not (t.startswith("-") and t != "-")]
@@ -296,6 +343,10 @@ def check_statement(statement, cwd, cd_context):
                     for candidate in brace_variants(expand(t, cwd, cd_context)):
                         if is_critical(candidate):
                             return "recursive chmod on /, home, or system path", cd_context
+        if cmd == "git":
+            reason = check_git(tokens)
+            if reason:
+                return reason, cd_context
     return None, cd_context
 
 

@@ -21,9 +21,9 @@
   ],
 
   "commandAllow": {
-    "$doc": "Only read-only commands that do not execute repository hooks or package scripts are pre-approved. Mutating git commands and every package-manager lifecycle command fall through to the host's normal confirmation policy.",
+    "$doc": "Fixed-subcommand git/gh read commands pre-approved for convenience. The allow vocabulary is prefix-based on most hosts (Bash(<cmd>:*), '<cmd> *'), so flag-level write primitives — e.g. `--output=<file>` on diff/log/show — CANNOT be excluded here; core/hooks/bash-guard.py blocks those flags as defense in depth on every host that runs the guard (Cursor headless may not; its static allow list is the operative surface there). `git branch` is deliberately absent: its mutating forms (-d/-D/-m/-f, --delete, ...) share the prefix with the read-only listing, so it falls through to the host's normal confirmation policy, as do all other mutating git commands and every package-manager lifecycle command.",
     "universal": [
-      "git status", "git diff", "git log", "git show", "git branch",
+      "git status", "git diff", "git log", "git show",
       "gh pr view", "gh pr list", "gh issue view", "gh issue list", "gh run view", "gh run list"
     ],
     "pnpm": [],

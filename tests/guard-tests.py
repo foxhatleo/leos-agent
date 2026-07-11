@@ -50,6 +50,16 @@ BLOCK = [
     "for x in one; do rm -rf ~/Documents; done",
     "if rm -rf /etc; then true; fi",
     "cleanup(){ rm -rf /var; }",
+    "rm -rf $HOME_old",                # longer var sharing the $HOME prefix must stay unknown
+    "cd / && rm -rf $PWD_old",         # ditto for $PWD — never mis-expand to a concrete path
+    "rm -rf ~root/x",                  # ~user expansion resolves to another (root) home tree
+    "git diff --output=/tmp/pwn",      # write primitive inside a pre-approved read command
+    "git log --output ~/x",
+    "git show --output=x HEAD",
+    "git -C . diff --output=x",        # global options must not hide the subcommand
+    "git branch -D main",              # mutating branch forms share the read-only prefix
+    "git branch -m old new",
+    "sudo git branch --delete topic",
 ]
 
 ALLOW = [
@@ -68,6 +78,14 @@ ALLOW = [
     "chmod +x ./script.sh",            # non-recursive chmod
     "chmod -R 755 ./mydir",            # recursive chmod of a project dir
     "echo then rm -rf /",              # shell keywords as data are not executable positions
+    "rm -rf $HOME/project/dist",       # boundary char '/' after $HOME still expands
+    "rm -rf ${HOME}/project/build",
+    "git branch",                      # read-only branch forms stay allowed
+    "git branch --list",
+    "git branch -avv",
+    "git diff HEAD~1",
+    "git log --oneline -5",
+    "git show HEAD",
 ]
 
 
