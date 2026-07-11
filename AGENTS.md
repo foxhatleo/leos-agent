@@ -18,9 +18,12 @@ live in [`global/AGENTS.md`](global/AGENTS.md).)
    state/backups). Never commit anything under `local/`. Never write a token/key into a tracked file.
 4. **Resolve model slugs at setup, never commit them.** The council roster (`core/council/seats.catalog.json`)
    uses `{MODEL}` placeholders. You resolve each provider's CURRENT flagship at setup and write the
-   concrete slug into a gitignored candidate and install it with `bin/leos-seats.py`. **For OpenAI,
-   select GPT-5.6 Sol unless a GPT release with a higher numeric version is available.** The
-   Anthropic seat is always the Opus line — never Fable or Mythos.
+   concrete slug into a gitignored candidate and install it with `bin/leos-seats.py`. **For OpenAI
+   (Leo's standing rule): use the most capable flavor of the newest GPT generation. GPT-5.6 ships
+   three capability flavors — Sol > Terre > Luna (new names in 5.6, not lineages) — so 5.6
+   resolves to Sol, never Terre or Luna; a newer GPT generation supersedes 5.6 automatically and
+   its most capable flavor is selected.** The Anthropic seat is always the Opus line — never Fable
+   or Mythos.
 
 ## The model
 

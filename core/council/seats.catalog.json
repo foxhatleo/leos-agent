@@ -21,25 +21,25 @@
     },
     {
       "role": "gpt", "provider": "openai",
-      "modelGuidance": "Use GPT-5.6 Sol unless OpenAI has released a GPT model with a higher numeric version; only a higher version supersedes Sol. Resolve the exact transport-specific slug at setup and never commit it.",
+      "modelGuidance": "Leo's standing rule: the most capable flavor of the newest GPT generation. GPT-5.6 ships three capability flavors — Sol > Terre > Luna (new names in 5.6, not lineages) — so 5.6 resolves to Sol, never Terre or Luna; a newer GPT generation supersedes 5.6 automatically and its most capable flavor is selected. Resolve the exact transport-specific slug at setup and never commit it.",
       "recursionDisable": "LEOS_COUNCIL_SEAT sentinel + --ephemeral + --sandbox read-only; normal CODEX_HOME is retained for authentication",
       "asNative": {
         "mode": "exec", "transport": "stdin",
         "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort={EFFORT}", "-m", "{MODEL}", "-"],
         "efforts": { "default": "high", "max": "xhigh" },
-        "note": "native Codex pass pins the setup-resolved OpenAI model: GPT-5.6 Sol unless a higher numeric GPT version has been released"
+        "note": "native Codex pass pins the setup-resolved OpenAI model per the flavor rule in modelGuidance (5.6 → Sol)"
       },
       "asExternal": {
         "transport": "stdin",
         "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort={EFFORT}", "-m", "{MODEL}", "-"],
         "efforts": { "default": "high", "max": "xhigh" },
-        "note": "On any non-Codex host, use GPT-5.6 Sol unless a higher numeric GPT version has been released. Uses the host's normal authentication. --ephemeral prevents session files; the inherited LEOS_COUNCIL_SEAT sentinel mechanically refuses nested Leo councils."
+        "note": "On any non-Codex host, resolve per the flavor rule in modelGuidance (5.6 → Sol). Uses the host's normal authentication. --ephemeral prevents session files; the inherited LEOS_COUNCIL_SEAT sentinel mechanically refuses nested Leo councils."
       },
       "asExternalCursor": {
         "transport": "arg",
         "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
         "efforts": { "default": "high", "max": "xhigh" },
-        "note": "GPT/OpenAI model via Cursor when the codex CLI is absent: select GPT-5.6 Sol unless a higher numeric GPT version has been released, then confirm the exact Cursor slug with `cursor-agent --list-models`. Isolation = read-only `--mode plan` in the runner-provided empty scratch cwd instead of an isolated CODEX_HOME."
+        "note": "GPT/OpenAI model via Cursor when the codex CLI is absent: resolve per the flavor rule in modelGuidance (5.6 → Sol), then confirm the exact Cursor slug with `cursor-agent --list-models`. Isolation = read-only `--mode plan` in the runner-provided empty scratch cwd instead of an isolated CODEX_HOME."
       }
     },
     {
@@ -92,7 +92,7 @@
   ],
 
   "$runtimeSchema": {
-    "$doc": "Shape of the machine-local local/seats.<host>.json the installer writes and the council skill reads. `native` describes how THIS host runs its own-model read-only review pass; `seats` are the EXTERNAL seats = roster minus this host's own provider, strongest-first, with {MODEL} already resolved to a concrete slug.",
+    "$doc": "Shape of the machine-local local/seats.<host>.json the installer writes and the council skill reads. `native` describes how THIS host runs its native read-only review pass (its own provider's pinned reviewer: Opus on Claude, the OpenAI flavor rule on Codex, the host's own model on OpenCode/Cursor); `seats` are the EXTERNAL seats = roster minus this host's own provider, strongest-first, with {MODEL} already resolved to a concrete slug.",
     "host": "claude | codex | opencode | cursor",
     "adapter": "optional seat adapter, allow-listed: claude | codex | opencode | cursor-json | raw (raw is explicit-only — an unknown binary without an adapter is an invalid seat); cursor requires cursor-json after an output-contract smoke test",
     "responsePath": "cursor-json external seat only: dotted JSON string field containing reviewer text",

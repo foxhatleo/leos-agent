@@ -10,8 +10,9 @@ host IS Cursor. **Not installed by default** — the setup interview only offers
 **Model:** the flagship slug for whichever provider this seat carries. **Always confirm the exact
 slug with `cursor-agent --list-models`** — Cursor's slugs differ from OpenRouter's; an Opus seat
 must resolve to an Opus-line id, never Fable/Mythos. If a provider isn't
-listed, Cursor can't carry that seat — use another transport. For a GPT seat specifically, select
-GPT-5.6 Sol unless a GPT model with a higher numeric version has been released. Resolve at setup.
+listed, Cursor can't carry that seat — use another transport. For a GPT seat, apply the OpenAI
+flavor rule: the most capable flavor of the newest GPT generation (5.6 → Sol, never Terre/Luna).
+Resolve at setup.
 
 **Install / auth:** install the Cursor CLI (`cursor-agent --version`); auth via Cursor login.
 

@@ -3,10 +3,11 @@
 Serves the **GPT** external seat (when the host is NOT Codex). Also the NATIVE seat when the host
 IS Codex.
 
-**Model:** GPT-5.6 Sol unless OpenAI has released a GPT model with a higher numeric version. Only a
-higher version supersedes Sol; do not choose a same-version sibling merely because it is newer or
-differently named. Resolve the exact `-m` slug supported by this CLI at setup and store it only in
-`local/seats.<host>.json`.
+**Model:** the most capable flavor of the newest GPT generation (Leo's standing rule). GPT-5.6
+ships three capability flavors — Sol > Terre > Luna (new names in 5.6, not lineages) — so 5.6
+resolves to Sol, never a lower-capability flavor of the same generation (Terre, Luna). A newer GPT
+generation supersedes 5.6 automatically; select its most capable flavor. Resolve the exact `-m`
+slug supported by this CLI at setup and store it only in `local/seats.<host>.json`.
 
 **Install / auth:** `codex --version`; auth via the normal Codex login.
 
@@ -31,5 +32,7 @@ env LEOS_COUNCIL_SEAT=1 codex exec --ephemeral --sandbox read-only \
 Expect JSONL events with a final response. Never use `codex review` (its output contract differs
 from the findings JSON); the runner classifies missing/invalid JSONL explicitly.
 
-**Native use (host IS Codex):** use the same pinned `-m {MODEL}` argv. The setup-time OpenAI rule
-applies to both native and external Codex seats.
+**Native use (host IS Codex):** use the same pinned `-m {MODEL}` argv. The setup-time OpenAI
+flavor rule applies to both native and external Codex seats, so the native reviewer may differ
+from the host session's own model. (Exception: native-only fallback mode has no resolved
+`{MODEL}` — see `native-only.md`.)

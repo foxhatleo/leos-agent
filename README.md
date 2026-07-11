@@ -37,9 +37,10 @@ One `AGENTS.md` serves every tool for instructions; one `SKILL.md` for the counc
    to do the others on request. For each host it creates the symlinks, merges the settings
    fragments, adds the global-instruction reference (so your own instructions are never clobbered),
    and — for the council — asks which reviewer transports you want and resolves each model's current
-   flagship slug (stored machine-locally, never committed). Exact transport slugs are **never
-   hard-coded**; selection policy may name a baseline line (currently GPT-5.6 Sol) that is replaced
-   only when its stated upgrade condition is met.
+   flagship slug (stored machine-locally, never committed). Model versions are **never
+   hard-coded**; today's flagships are already about to be superseded. The tracked policy may name
+   the current generation's top capability flavor as Leo's standing selection rule (GPT-5.6 ships
+   Sol > Terre > Luna, so 5.6 → Sol) — a newer GPT generation supersedes it automatically.
 
 Nothing is installed until you run setup — cloning alone is inert.
 

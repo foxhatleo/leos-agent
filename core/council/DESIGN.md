@@ -1,8 +1,10 @@
 # Council Review — Design Spec
 
 A multi-model, multi-lineage adversarial review harness that works across agentic hosts (Claude
-Code, Codex, OpenCode, Cursor). The **host session's own model is the AUTHOR and the native
-reviewer**; a council of **other-lineage flagships** checks the work at two checkpoints — after
+Code, Codex, OpenCode, Cursor). The **host session's own model is the AUTHOR**, and the **host's
+provider supplies the native reviewer** (on Claude Code that seat is pinned to the Opus line, on
+Codex to the OpenAI flavor rule in §2 — so the native reviewer may differ from the session's
+model); a council of **other-lineage flagships** checks the work at two checkpoints — after
 **planning** and after **implementation**. The orchestrator reads their findings, adjudicates
 mechanically, fixes, and re-reviews once. Goal: catch training-lineage-correlated blind spots the
 author shares with itself.
@@ -52,15 +54,17 @@ committed (recipes carry a `{MODEL}` placeholder; see `seats.catalog.json`):
 
 - **The host's provider supplies the native reviewer.** For Claude Code the native seat is a
   read-only subagent **pinned to Opus** (`model: opus` — the Opus line specifically, never
-  Fable/Mythos). For Codex it is a `codex exec` read-only pass pinned at setup to GPT-5.6 Sol
-  unless a higher numeric GPT version has been released; for
-  OpenCode/Cursor a `--agent plan` / `--mode plan` self-pass.
+  Fable/Mythos). For Codex it is a `codex exec` read-only pass pinned at setup per the OpenAI
+  flavor rule below; for OpenCode/Cursor a `--agent plan` / `--mode plan` self-pass.
 - **External seats = roster minus the host's own provider.** Claude Code host → {GPT, GLM, Gemini,
   Grok}; Codex host → {Opus, GLM, Gemini, Grok}; etc. So the council is at most native + 4 = 5.
 - **The Anthropic role is always the Opus line** (alias `opus` tracks the latest Opus) — never the
   Claude-5 / Mythos-class line (Fable, Mythos).
-- **The OpenAI role uses GPT-5.6 Sol as its floor and preference.** Replace it only when a GPT
-  release with a higher numeric version exists; the exact supported slug remains machine-local.
+- **The OpenAI role uses the most capable flavor of the newest GPT generation** (Leo's standing
+  rule). GPT-5.6 ships three capability flavors — Sol > Terre > Luna, new names in 5.6, not
+  lineages — so 5.6 resolves to Sol, never Terre or Luna. A newer GPT generation supersedes 5.6
+  automatically and its most capable flavor is selected; the exact supported slug remains
+  machine-local.
 - **No runtime model discovery.** Setup resolves slugs and writes them to `local/seats.<host>.json`.
 - **Reviewers run with the transport's read-only restrictions** and may read/grep the repo to
   verify claims, but never modify it. OpenCode/Cursor plan modes are capability requests, not an

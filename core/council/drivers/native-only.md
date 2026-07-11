@@ -2,6 +2,9 @@
 
 When `local/seats.<host>.json` has an empty `seats: []` (or is missing), the council runs in
 **native-only mode**: every tier is served by independent read-only passes of the host's own model.
+(This genuinely means the session's own model on every host: with no seats file there is no
+setup-resolved `{MODEL}`, so even a Codex host's native-only passes run without `-m` — the OpenAI
+flavor pin applies only to installed seat configs.)
 
 This is the zero-dependency baseline — no external CLI, no OpenRouter key. It **loses lineage
 diversity** (the whole point of the council), so it is a fallback, not the target. When a review

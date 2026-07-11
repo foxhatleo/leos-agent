@@ -98,22 +98,24 @@ run `rustfmt` only; the hook never runs `cargo clippy`, builds, package scripts,
 For each host, prepare a candidate JSON under `local/`, then install it only through
 `bin/leos-seats.py`. The destination `local/seats.<host>.json` is mode 0600 and gitignored.
 
-1. **Native seat** = this host's own model:
+1. **Native seat** = this host's provider:
    - Claude Code → `{"native":{"mode":"subagent","model":"opus","efforts":{"default":"high","max":"xhigh"}}}`
      (Opus line only — confirm the resolved slug is an Opus id, never Fable/Mythos).
-   - Codex → resolve the OpenAI model using the rule below, then
+   - Codex → resolve the OpenAI model using the flavor rule below, then
      `{"native":{"mode":"exec","transport":"stdin","argv":["codex","exec","--ephemeral","--sandbox","read-only","--skip-git-repo-check","-c","model_reasoning_effort={EFFORT}","-m","{MODEL}","-"],"efforts":{...}}}`
      with `{MODEL}` replaced in the machine-local candidate.
-   - OpenCode/Cursor → the `--agent plan` / `--mode plan` self-pass with no `-m`.
+   - OpenCode/Cursor → the `--agent plan` / `--mode plan` self-pass with no `-m` (host's own model).
 2. **External seats** = the roster in `core/council/seats.catalog.json` **minus this host's own
    provider**, strongest-first. For each: enumerate its transport variants (`asExternal`,
    `asExternalCursor`, `asExternalOpencode`), pick one whose CLI is installed (ask Leo only when
    more than one is available), resolve the provider's CURRENT flagship slug for that transport,
    substitute it into the argv template, and add only non-secret per-seat environment values.
-   **OpenAI selection rule:** use GPT-5.6 Sol unless OpenAI has released a GPT model with a higher
-   numeric version; only then select that higher-version model. Resolve the exact slug supported by
-   the chosen transport and confirm it in the smoke test. Do not replace Sol with a same-version
-   sibling merely because it is newer or differently named.
+   **OpenAI flavor rule (Leo's standing rule):** use the most capable flavor of the newest GPT
+   generation. GPT-5.6 ships three capability flavors — Sol > Terre > Luna (new names in 5.6, not
+   lineages) — so 5.6 resolves to Sol, never a lower-capability flavor of the same generation
+   (Terre, Luna); a newer GPT generation supersedes 5.6 automatically and its most capable flavor
+   is selected. Resolve the exact slug supported by the chosen transport and confirm it in the
+   smoke test.
    Codex seats retain normal `CODEX_HOME` authentication and use `--ephemeral`; recursion is
    mechanically refused by `LEOS_COUNCIL_SEAT`. A seat is dropped only if NONE of its transports
    have an installed CLI. The runner recognizes Claude,

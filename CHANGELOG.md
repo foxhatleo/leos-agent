@@ -161,3 +161,14 @@ OpenCode and Cursor support.
   and the Stop-hook override text now include the `--signoff` requirement `mark` already enforces
   at the critical tier, so a critical review can actually be closed as documented (the printed
   override command previously always failed for critical-scoring diffs).
+- `[all]` **OpenAI council-seat rule clarified as generation-scoped (Leo's standing rule).**
+  GPT-5.6 introduced three capability flavors — Sol > Terre > Luna, new names in 5.6, not
+  lineages — and the rule's intent is "within a generation, pick the most capable flavor" (5.6 →
+  Sol, never Terre/Luna), with a newer GPT generation superseding automatically. The earlier
+  wording (an undocumented commit) read as version entrenchment — "floor and preference", "only a
+  higher numeric version supersedes", "never a same-version sibling" — which would have frozen
+  Sol against successors and never fired if OpenAI dropped numeric names. Reworded across the
+  runbook, README, catalog, drivers, and setup docs; stale "native seat = the host's own model"
+  statements reconciled with the Codex-native pin (native-only fallback mode genuinely runs the
+  session's own model — now stated explicitly); the README's "model versions are never
+  hard-coded" principle restored to full strength.
