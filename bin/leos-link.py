@@ -55,7 +55,9 @@ def _record_configured(tool):
             data = json.load(f)
     except (OSError, json.JSONDecodeError):
         data = {"hosts": []}
-    hosts = data.get("hosts") if isinstance(data, dict) else []
+    hosts = data.get("hosts", []) if isinstance(data, dict) else []
+    if not isinstance(hosts, list):
+        hosts = []
     hosts = [h for h in hosts if h in ("claude", "codex", "opencode", "cursor")]
     if tool not in hosts:
         hosts.append(tool)

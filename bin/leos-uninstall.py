@@ -44,20 +44,55 @@ def atomic_json(path, value):
             pass
 
 
+def _host_is_live(host, merges_state, ambiguous_dests):
+    """Physical-evidence check beyond the registry: a host with a seats file, a merge-state
+    record, or a live Leo symlink at one of its own (non-shared) link dests is still installed
+    even if local/installed-hosts.json lost track of it. The dests the removed tool also lists
+    are excluded as evidence — they are exactly what we are deciding about."""
+    if (LOCAL / f"seats.{host}.json").exists():
+        return True
+    lm = load_json(ROOT / "tools" / host / "linkmap.json", {})
+    for item in lm.get("merges", []):
+        dest_key = item["dest"]
+        legacy_key = dest_key.replace("{{CODEX_HOME}}", "~/.codex")
+        if dest_key in merges_state or legacy_key in merges_state:
+            return True
+    for item in lm.get("links", []):
+        dest = expand(item["dest"])
+        if dest in ambiguous_dests:
+            continue
+        if os.path.islink(dest) and os.path.realpath(dest).startswith(str(ROOT) + os.sep):
+            return True
+    return False
+
+
 def main():
     ap = argparse.ArgumentParser(prog="leos-uninstall.py")
     ap.add_argument("--tool", required=True, choices=HOSTS)
     args = ap.parse_args()
     registry_path = LOCAL / "installed-hosts.json"
     registry = load_json(registry_path, {"hosts": []})
-    configured = {host for host in registry.get("hosts", []) if host in HOSTS}
+    if not isinstance(registry, dict):
+        registry = {"hosts": []}
+    registry_hosts = registry.get("hosts", [])
+    if not isinstance(registry_hosts, list):
+        registry_hosts = []
+    configured = {host for host in registry_hosts if host in HOSTS}
+    merges_state = load_json(LOCAL / "merge-state.json", {})
+    merges_state = merges_state.get("merges", {}) if isinstance(merges_state, dict) else {}
+    if not isinstance(merges_state, dict):
+        merges_state = {}
+    own_linkmap = load_json(ROOT / "tools" / args.tool / "linkmap.json", {})
+    ambiguous_dests = {expand(item["dest"]) for item in own_linkmap.get("links", [])}
+    live = {host for host in HOSTS if host != args.tool
+            and (host in configured or _host_is_live(host, merges_state, ambiguous_dests))}
     remaining = configured - {args.tool}
     shared = set()
-    for host in remaining:
+    for host in live:
         lm = load_json(ROOT / "tools" / host / "linkmap.json", {})
         shared.update(expand(item["dest"]) for item in lm.get("links", []))
 
-    linkmap = load_json(ROOT / "tools" / args.tool / "linkmap.json", {})
+    linkmap = own_linkmap
     results = []
     # Migrate/remove legacy whole-file hook links before ownership removal.
     for item in linkmap.get("merges", []):

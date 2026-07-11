@@ -80,3 +80,17 @@ OpenCode and Cursor support.
   a Codex session `codex`; other detected hosts are offered, not auto-configured.
 - `[all]` Test batteries now seven (added `block`, `inject`); council battery rewritten around the
   delta/no-remote/loop-guard/cache cases.
+
+### Fixed (adversarial review remediation)
+- `[all]` **Ownership-honest merge state.** The merge snapshot now records only values Leo actually
+  introduced: a value the user already had identically is never claimed, so uninstall can no longer
+  delete it and a later fragment change conflicts instead of silently "update-owning" it (machines
+  merged before this fix keep their old over-claimed snapshots — the pre-merge state is
+  unrecoverable — but every re-merge rewrites an honest one). Removal can now retire Leo's leaves
+  individually out of a dict the user also populated (previously the whole uninstall refused), a
+  fully-Leo dict is still pruned whole, and `--remove` refuses a foreign destination symlink the
+  same way merge does instead of replacing the user's symlink with a regular file.
+  `leos-uninstall`'s shared-link protection is now evidence-based (registry ∪ seats file ∪ merge
+  record ∪ live Leo links) so a lost `installed-hosts.json` entry can't cause deletion of the
+  shared `~/.agents/skills/council` while another host still uses it; a hosts-less or non-dict
+  registry no longer crashes `leos-link`/`leos-uninstall`.

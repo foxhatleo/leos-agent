@@ -221,6 +221,78 @@ def main():
     shutil.rmtree(host_home, ignore_errors=True)
     shutil.rmtree(host_local, ignore_errors=True)
 
+    # 10. Ownership honesty: values the user already had are never claimed, user keys inside a
+    #     Leo-owned dict survive removal, a fully-Leo dict is pruned whole, and a foreign symlink
+    #     is refused on remove exactly as it is on merge.
+    oh_home = tempfile.mkdtemp(prefix="ownhome.")
+    oh_local = tempfile.mkdtemp(prefix="ownlocal.")
+    oh_env = dict(os.environ, HOME=oh_home, LEOS_LOCAL=oh_local, _TMP=oh_local)
+    oh_dest = os.path.join(oh_home, ".claude", "settings.json")
+    os.makedirs(os.path.dirname(oh_dest), exist_ok=True)
+    json.dump({"theme": "dark", "shared": {"userLeaf": "U"}}, open(oh_dest, "w"))
+    frag10 = {"theme": "dark", "shared": {"leoLeaf": "L"}, "leoOnly": {"x": 1, "y": 2}}
+    ec, r = run(oh_env, "~/.claude/settings.json", frag10, "merge-json")
+    ostate = json.load(open(os.path.join(oh_local, "merge-state.json")))
+    ovalues = ostate["merges"]["~/.claude/settings.json"]["values"]
+    check("pre-existing identical value is not claimed", r.get("applied") and "theme" not in ovalues)
+    check("Leo's additions inside a shared dict are claimed", ovalues.get("shared") == {"leoLeaf": "L"})
+    check("fresh dicts are claimed whole", ovalues.get("leoOnly") == {"x": 1, "y": 2})
+    ec, r = run(oh_env, "~/.claude/settings.json", dict(frag10, theme="light"), "merge-json")
+    check("never-owned value conflicts instead of update-owned",
+          ec == 1 and not r.get("applied") and r.get("conflicts"))
+    rm = subprocess.run([sys.executable, MERGE, "--dest", "~/.claude/settings.json",
+                         "--strategy", "merge-json", "--remove"],
+                        capture_output=True, text=True, env=oh_env)
+    left = json.load(open(oh_dest))
+    check("remove keeps the user's pre-existing value", rm.returncode == 0 and left.get("theme") == "dark")
+    check("remove keeps user keys inside a shared dict", left.get("shared") == {"userLeaf": "U"})
+    check("remove prunes an unchanged Leo dict whole", "leoOnly" not in left)
+
+    # Fully-Leo dict with a user-deleted leaf still collapses cleanly (no {} litter).
+    ec, r = run(oh_env, "~/.claude/settings.json", {"d": {"a": 1, "b": 2}}, "merge-json")
+    cur = json.load(open(oh_dest)); del cur["d"]["b"]; json.dump(cur, open(oh_dest, "w"))
+    rm = subprocess.run([sys.executable, MERGE, "--dest", "~/.claude/settings.json",
+                         "--strategy", "merge-json", "--remove"],
+                        capture_output=True, text=True, env=oh_env)
+    left = json.load(open(oh_dest))
+    check("partially-deleted Leo dict is pruned without litter", rm.returncode == 0 and "d" not in left)
+
+    # Mixed-dict end-to-end through the real claude linkmap.
+    mx_home = tempfile.mkdtemp(prefix="mixhome.")
+    mx_local = tempfile.mkdtemp(prefix="mixlocal.")
+    mx_env = dict(os.environ, HOME=mx_home, LEOS_LOCAL=mx_local)
+    subprocess.run([sys.executable, MERGE, "--tool", "claude"], capture_output=True, text=True, env=mx_env)
+    mx_dest = os.path.join(mx_home, ".claude", "settings.json")
+    settings = json.load(open(mx_dest))
+    settings["permissions"]["ask"] = ["Bash(custom:*)"]
+    settings["permissions"]["deny"].append("Read(user-secret)")
+    json.dump(settings, open(mx_dest, "w"))
+    rm = subprocess.run([sys.executable, MERGE, "--tool", "claude", "--remove"],
+                        capture_output=True, text=True, env=mx_env)
+    settings = json.load(open(mx_dest))
+    check("tool remove succeeds with user keys inside Leo dicts", rm.returncode == 0)
+    check("user permission key survives tool remove", settings.get("permissions", {}).get("ask") == ["Bash(custom:*)"])
+    check("user deny element survives tool remove", "Read(user-secret)" in settings.get("permissions", {}).get("deny", []))
+    check("Leo deny elements are retired", "Read(**/.env)" not in settings.get("permissions", {}).get("deny", []))
+    check("untouched Leo hooks dict is pruned whole", "hooks" not in settings)
+
+    # Foreign symlink swapped in AFTER a merge is refused on remove.
+    fs_home = tempfile.mkdtemp(prefix="fsrmhome.")
+    fs_local = tempfile.mkdtemp(prefix="fsrmlocal.")
+    fs_codex = os.path.join(fs_home, ".codex")
+    fs_env = dict(os.environ, HOME=fs_home, LEOS_LOCAL=fs_local, CODEX_HOME=fs_codex)
+    subprocess.run([sys.executable, MERGE, "--tool", "codex"], capture_output=True, text=True, env=fs_env)
+    fs_cfg = os.path.join(fs_codex, "config.toml")
+    fs_target = os.path.join(fs_home, "dotfiles-config.toml")
+    os.replace(fs_cfg, fs_target)
+    os.symlink(fs_target, fs_cfg)
+    rm = subprocess.run([sys.executable, MERGE, "--tool", "codex", "--remove"],
+                        capture_output=True, text=True, env=fs_env)
+    check("remove refuses a foreign destination symlink", rm.returncode == 1 and
+          os.path.islink(fs_cfg) and os.path.isfile(fs_target))
+    for extra in (oh_home, oh_local, mx_home, mx_local, fs_home, fs_local):
+        __import__("shutil").rmtree(extra, ignore_errors=True)
+
     total = passed + failed
     print(f"merge-tests: {passed}/{total} PASS" + (" — ALL PASS" if not failed else f" ({failed} FAIL)"))
     import shutil

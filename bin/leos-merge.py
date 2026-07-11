@@ -91,6 +91,33 @@ def _deep_union(base, extra):
     return base
 
 
+def _claimed_values(fragment, pre_merge, prev_owned):
+    """Subset of the fragment Leo may honestly record as owned: values that were already present
+    and identical in the destination BEFORE this merge — and were never previously Leo-owned —
+    belong to the user, so removal must not retire them and a later fragment change must conflict
+    rather than update-owned them. Anything in prev_owned stays claimed so a re-merge does not
+    misclassify Leo's own previously-applied values."""
+    out = {}
+    prev_owned = prev_owned if isinstance(prev_owned, dict) else {}
+    for k, v in fragment.items():
+        pv = prev_owned.get(k)
+        cv = pre_merge.get(k) if isinstance(pre_merge, dict) else None
+        if isinstance(v, dict) and isinstance(cv, dict):
+            sub = _claimed_values(v, cv, pv if isinstance(pv, dict) else {})
+            if sub:
+                out[k] = sub
+        elif isinstance(v, list) and isinstance(cv, list):
+            prev_list = pv if isinstance(pv, list) else []
+            claimed = [x for x in v if x not in cv or x in prev_list]
+            if claimed:
+                out[k] = claimed
+        elif cv == v and pv != v:
+            continue
+        else:
+            out[k] = _copy(v)
+    return out
+
+
 def _expand_tokens(obj, mapping):
     """Recursively replace token substrings in every string value (e.g. {{CLONE_ROOT}} -> the clone
     path). Committed fragments carry the token so a machine-local absolute path is never committed;
@@ -301,6 +328,17 @@ def merge_preview(fragment, current, owned_values, retire_missing=True, retire_s
                 continue
             if cur[k] == ov:
                 actions.append({"op": "retire", "path": p})
+            elif isinstance(ov, dict) and isinstance(cur[k], dict):
+                # A user may have added their own keys inside a Leo-owned dict; retire Leo's
+                # leaves individually and collapse to one dict-level retire only when every
+                # remaining key retired cleanly (the dict was fully Leo's).
+                conflict_mark, action_mark = len(conflicts), len(actions)
+                retire(frag.get(k) if isinstance(frag.get(k), dict) else {}, cur[k], ov, p)
+                retired = {tuple(a["path"]) for a in actions[action_mark:] if a["op"] == "retire"}
+                if len(conflicts) == conflict_mark \
+                        and all(tuple(p + [ck]) in retired for ck in cur[k]):
+                    del actions[action_mark:]
+                    actions.append({"op": "retire", "path": p})
             elif isinstance(ov, list) and isinstance(cur[k], list):
                 present = [o for o in ov if o in cur[k]]
                 if present:
@@ -479,6 +517,9 @@ def do_merge(dest_key, fragment_path, strategy, force, extra_values=None, extra_
         current = load_toml(dest, {}) if strategy == "merge-toml" else load_json(dest, {})
     except (OSError, json.JSONDecodeError, ValueError) as e:
         return {"applied": False, "dest": dest_key, "reason": f"cannot parse destination: {e}"}
+    # apply_actions mutates `current` in place; keep the pre-merge shape so the ownership
+    # snapshot can exclude values the user already had before Leo ever touched this file.
+    pre_merge = _copy(current)
     try:
         state = load_state()
     except (OSError, json.JSONDecodeError, ValueError) as e:
@@ -496,7 +537,8 @@ def do_merge(dest_key, fragment_path, strategy, force, extra_values=None, extra_
         return {"applied": False, "dest": dest_key, "conflicts": conflicts}
     if not actions and not conflicts and not legacy_fragment_link:
         # No-op: keep the drift snapshot honest without rewriting the dest.
-        state["merges"][dest_key] = {"values": _deep_union(_copy(fragment), {}), "extraValues": extra_values,
+        state["merges"][dest_key] = {"values": _claimed_values(fragment, pre_merge, entry.get("values", {})),
+                                      "extraValues": extra_values,
                                       "fragmentSha": template_sha, "strategy": strategy, **extra_meta}
         if legacy_key != dest_key:
             state["merges"].pop(legacy_key, None)
@@ -522,7 +564,8 @@ def do_merge(dest_key, fragment_path, strategy, force, extra_values=None, extra_
         _atomic_write(dest, text, mode=old_mode)
     except (OSError, TypeError, ValueError) as e:
         return {"applied": False, "dest": dest_key, "reason": f"write failed: {e}"}
-    state["merges"][dest_key] = {"values": _deep_union(_copy(fragment), {}), "extraValues": extra_values,
+    state["merges"][dest_key] = {"values": _claimed_values(fragment, pre_merge, entry.get("values", {})),
+                                 "extraValues": extra_values,
                                  "fragmentSha": template_sha, "strategy": strategy, **extra_meta,
                                  "backup": backup}
     if legacy_key != dest_key:
@@ -541,6 +584,11 @@ def do_remove(dest_key, strategy):
         entry = state.get("merges", {}).get(dest_key, state.get("merges", {}).get(legacy_key))
         if not isinstance(entry, dict):
             return {"applied": True, "dest": dest_key, "actions": [], "note": "not owned"}
+        if os.path.islink(dest):
+            # Mirrors do_merge's refusal: writing through would replace the user's symlink with
+            # a regular file. Post-merge dests are regular files, so a symlink here is foreign.
+            return {"applied": False, "dest": dest_key,
+                    "reason": "foreign destination symlink refused; remove Leo's values from its target manually"}
         current = load_toml(dest, {}) if strategy == "merge-toml" else load_json(dest, {})
     except (OSError, json.JSONDecodeError, ValueError) as e:
         return {"applied": False, "dest": dest_key, "reason": f"cannot prepare removal: {e}"}
@@ -577,7 +625,8 @@ def main():
     ap.add_argument("--package-manager", choices=["pnpm", "yarn", "npm"],
                     help="legacy Claude metadata compatibility; package scripts are not pre-approved")
     ap.add_argument("--force", action="store_true")
-    ap.add_argument("--remove", action="store_true", help="with --tool, remove only Leo-owned values")
+    ap.add_argument("--remove", action="store_true",
+                    help="with --tool (or --dest/--strategy), remove only Leo-owned values")
     args = ap.parse_args()
 
     results = []
@@ -602,6 +651,8 @@ def main():
                 else:
                     frag = os.path.join(REPO_ROOT, m["fragment"])
                     results.append(do_merge(m["dest"], frag, m["strategy"], args.force, extras, extra_meta))
+        elif args.dest and args.strategy and args.remove:
+            results.append(do_remove(args.dest, args.strategy))
         elif args.dest and args.fragment and args.strategy:
             results.append(do_merge(args.dest, args.fragment, args.strategy, args.force))
         else:
