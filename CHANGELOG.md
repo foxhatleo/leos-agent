@@ -136,3 +136,15 @@ OpenCode and Cursor support.
   `LEOS_COUNCIL_ACTIVE_RUN` export to seats (the `--run-id` ownership token) is gone. The
   cancellation test waits on lifecycle events instead of a fixed sleep, and a hung runner is a
   failing check with diagnostics instead of a battery abort.
+- `[all]` **Dispatch safety: adapter allow-list, typed plan fallback, real scratch-cwd isolation.**
+  Seat adapters are allow-listed (`claude`/`codex`/`opencode`/`cursor-json`/explicit `raw`): an
+  unknown binary is `invalid-seat-config` instead of silently inferred `raw`, unrecognized
+  structured output can never classify `completed` (`unsupported-adapter`), and external seat
+  names are path-safe-validated. A plan review whose externals all fail no longer crashes on a
+  missing/invalid native block — it records a typed fallback error, writes `result.json`, and
+  releases the marker instead of leaking it for the full TTL. CLI seats now actually launch in a
+  per-seat empty scratch directory under `local/council/work` (removed after the seat) with the
+  reviewed repo's absolute path injected as a prompt header — making the catalog/driver "clean
+  dir" isolation real, so repo-local agent config (`.cursor/rules`, `AGENTS.md`) no longer loads
+  into reviewers; a per-seat `"cwd": "repo"` opt-out carries the documented residual risk. The
+  skill's status taxonomy now lists every terminal state the runner produces.

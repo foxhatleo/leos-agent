@@ -16,7 +16,7 @@
         "transport": "arg",
         "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
         "efforts": { "default": "high", "max": "xhigh" },
-        "note": "Opus-line model via Cursor when the claude CLI is absent (confirm the Cursor slug is an Opus id with `cursor-agent --list-models`). Isolation = read-only `--mode plan` in a clean dir — weaker than native `--safe-mode`; acceptable fallback."
+        "note": "Opus-line model via Cursor when the claude CLI is absent (confirm the Cursor slug is an Opus id with `cursor-agent --list-models`). Isolation = read-only `--mode plan` in the runner-provided empty scratch cwd — weaker than native `--safe-mode`; acceptable fallback."
       }
     },
     {
@@ -39,13 +39,13 @@
         "transport": "arg",
         "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
         "efforts": { "default": "high", "max": "xhigh" },
-        "note": "GPT/OpenAI model via Cursor when the codex CLI is absent: select GPT-5.6 Sol unless a higher numeric GPT version has been released, then confirm the exact Cursor slug with `cursor-agent --list-models`. Isolation = read-only `--mode plan` in a clean dir instead of an isolated CODEX_HOME."
+        "note": "GPT/OpenAI model via Cursor when the codex CLI is absent: select GPT-5.6 Sol unless a higher numeric GPT version has been released, then confirm the exact Cursor slug with `cursor-agent --list-models`. Isolation = read-only `--mode plan` in the runner-provided empty scratch cwd instead of an isolated CODEX_HOME."
       }
     },
     {
       "role": "glm", "provider": "zhipu",
       "modelGuidance": "Latest GLM via OpenRouter for the opencode transport, or the Cursor GLM slug (confirm with `cursor-agent --list-models`) for the cursor transport. Resolve at setup; never commit it.",
-      "recursionDisable": "opencode --agent plan (read-only) + clean config dir; or cursor-agent --mode plan (read-only) in a clean dir. Neither loads CLAUDE.md-style council mandates.",
+      "recursionDisable": "opencode --agent plan (read-only); or cursor-agent --mode plan (read-only). Both launch in the runner-provided empty scratch cwd, so repo-local agent config never loads. Neither loads CLAUDE.md-style council mandates.",
       "asExternal": {
         "transport": "arg",
         "argv": ["opencode", "run", "--agent", "plan", "-m", "openrouter/{MODEL}", "--variant", "{EFFORT}", "{PROMPT_TEXT}"],
@@ -61,7 +61,7 @@
     {
       "role": "gemini", "provider": "google",
       "modelGuidance": "Latest Gemini flagship via OpenRouter, or the Cursor Gemini slug (confirm with `cursor-agent --list-models`) for the cursor transport. Native Gemini-CLI plan mode is experimental, so OpenCode+OpenRouter (or Cursor) is the firm route. Resolve at setup; never commit it.",
-      "recursionDisable": "opencode --agent plan (read-only) + clean config dir; or cursor-agent --mode plan (read-only) in a clean dir",
+      "recursionDisable": "opencode --agent plan (read-only); or cursor-agent --mode plan (read-only) — both in the runner-provided empty scratch cwd",
       "asExternal": {
         "transport": "arg",
         "argv": ["opencode", "run", "--agent", "plan", "-m", "openrouter/{MODEL}", "--variant", "{EFFORT}", "{PROMPT_TEXT}"],
@@ -77,7 +77,7 @@
     {
       "role": "grok", "provider": "xai",
       "modelGuidance": "Latest Grok flagship in Cursor or via OpenRouter. For cursor-agent, confirm the exact slug with `cursor-agent --list-models`. Resolve at setup; never commit it.",
-      "recursionDisable": "cursor-agent --mode plan (read-only) in a clean project dir; or opencode --agent plan via OpenRouter",
+      "recursionDisable": "cursor-agent --mode plan (read-only) in the runner-provided empty scratch cwd; or opencode --agent plan via OpenRouter",
       "asExternalCursor": {
         "transport": "arg",
         "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
@@ -94,8 +94,9 @@
   "$runtimeSchema": {
     "$doc": "Shape of the machine-local local/seats.<host>.json the installer writes and the council skill reads. `native` describes how THIS host runs its own-model read-only review pass; `seats` are the EXTERNAL seats = roster minus this host's own provider, strongest-first, with {MODEL} already resolved to a concrete slug.",
     "host": "claude | codex | opencode | cursor",
-    "adapter": "optional external-seat adapter; cursor requires cursor-json after an output-contract smoke test",
+    "adapter": "optional seat adapter, allow-listed: claude | codex | opencode | cursor-json | raw (raw is explicit-only — an unknown binary without an adapter is an invalid seat); cursor requires cursor-json after an output-contract smoke test",
     "responsePath": "cursor-json external seat only: dotted JSON string field containing reviewer text",
+    "cwd": "optional per-seat working-directory mode: \"scratch\" (default — the runner creates an empty private dir under local/council/work/<run>/ and removes it after the seat, so repo-local agent config like .cursor/rules or AGENTS.md never loads into a reviewer; the reviewed repo's absolute path is injected as a prompt header) | \"repo\" (run inside the reviewed repo — opt-out for transports that cannot read outside their workspace; re-opens repo-local instruction injection)",
     "native": {
       "mode": "subagent | exec",
       "model": "(subagent only) resolved model, e.g. opus",

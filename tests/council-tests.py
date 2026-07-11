@@ -437,6 +437,26 @@ def main():
     vr = subprocess.run([sys.executable, seat_writer, "validate", "--host", "codex", "--input", candidate],
                         capture_output=True, text=True, env=seat_env)
     check("seat writer refuses unresolved model slug", vr.returncode == 1 and "unresolved" in vr.stdout)
+    with open(candidate, "w") as f:
+        json.dump({"host": "codex", "native": {"mode": "exec", "transport": "stdin",
+                   "argv": ["some-unknown-cli", "review", "-"]}, "seats": []}, f)
+    vr = subprocess.run([sys.executable, seat_writer, "validate", "--host", "codex", "--input", candidate],
+                        capture_output=True, text=True, env=seat_env)
+    check("seat writer refuses an unknown adapter/binary", vr.returncode == 1 and "adapter" in vr.stdout)
+    with open(candidate, "w") as f:
+        json.dump({"host": "codex", "native": {"mode": "exec", "transport": "stdin", "cwd": "repo",
+                   "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "-"]},
+                   "seats": []}, f)
+    vr = subprocess.run([sys.executable, seat_writer, "validate", "--host", "codex", "--input", candidate],
+                        capture_output=True, text=True, env=seat_env)
+    check("seat writer accepts the documented cwd values", vr.returncode == 0)
+    with open(candidate, "w") as f:
+        json.dump({"host": "codex", "native": {"mode": "exec", "transport": "stdin", "cwd": "elsewhere",
+                   "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "-"]},
+                   "seats": []}, f)
+    vr = subprocess.run([sys.executable, seat_writer, "validate", "--host", "codex", "--input", candidate],
+                        capture_output=True, text=True, env=seat_env)
+    check("seat writer refuses an unknown cwd mode", vr.returncode == 1 and "cwd" in vr.stdout)
 
     total = passed + failed
     print(f"council-tests: {passed}/{total} PASS" + (" — ALL PASS" if not failed else f" ({failed} FAIL)"))

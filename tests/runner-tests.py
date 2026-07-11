@@ -66,16 +66,17 @@ def fresh():
     return root, repo, local, bindir, prompt, env
 
 
-def write_seats(local, native_argv, external_argv=None):
+def write_seats(local, native_argv, external_argv=None, native_extra=None, external_extra=None):
     seats = {
         "host": "codex",
-        "native": {"mode": "exec", "transport": "stdin", "argv": native_argv,
-                   "efforts": {"default": "high", "max": "xhigh"}},
+        "native": dict({"mode": "exec", "transport": "stdin", "argv": native_argv,
+                        "efforts": {"default": "high", "max": "xhigh"}}, **(native_extra or {})),
         "seats": [],
     }
     if external_argv:
-        seats["seats"].append({"name": "opus", "transport": "stdin", "argv": external_argv,
-                               "efforts": {"default": "high", "max": "xhigh"}, "timeoutSeconds": 10})
+        seats["seats"].append(dict({"name": "opus", "transport": "stdin", "argv": external_argv,
+                                    "efforts": {"default": "high", "max": "xhigh"},
+                                    "timeoutSeconds": 10}, **(external_extra or {})))
     with open(os.path.join(local, "seats.codex.json"), "w") as f:
         json.dump(seats, f)
 
@@ -450,6 +451,101 @@ def main():
     data = json.loads(result.stdout)
     check("zero selected seats is incomplete", result.returncode == 1 and
           data["dispatchOk"] is False and data["reviewComplete"] is False)
+
+    # An unknown binary without an explicit adapter is an invalid seat, never inferred raw.
+    _, repo, local, bindir, prompt, env = fresh()
+    mystery = os.path.join(bindir, "mystery-cli")
+    executable(mystery, "cat >/dev/null\nprintf '{\"anything\": true}\\n'")
+    write_seats(local, [mystery, "exec", "-"])
+    result = run(repo, prompt, env, tier="low")
+    data = json.loads(result.stdout)
+    check("unknown binary is invalid-seat-config", result.returncode == 1 and
+          data["results"][0]["status"] == "invalid-seat-config" and
+          "adapter" in data["results"][0].get("reason", ""))
+    executable(mystery, "cat >/dev/null\nprintf 'not json'")
+    write_seats(local, [mystery, "exec", "-"], native_extra={"adapter": "weird"})
+    result = run(repo, prompt, env, tier="low")
+    data = json.loads(result.stdout)
+    check("bogus adapter string is refused", result.returncode == 1 and
+          data["results"][0]["status"] == "invalid-seat-config")
+
+    # Explicit raw stays available and still enforces the findings contract. (Each completing
+    # run holds its checkpoint marker, so scenarios that follow a success need a fresh repo.)
+    _, repo, local, bindir, prompt, env = fresh()
+    rawcli = os.path.join(bindir, "custom-reviewer")
+    executable(rawcli, "cat >/dev/null\nprintf '[]'")
+    write_seats(local, [rawcli, "exec", "-"], native_extra={"adapter": "raw"})
+    result = run(repo, prompt, env, tier="low")
+    data = json.loads(result.stdout)
+    check("explicit raw adapter completes", result.returncode == 0 and
+          data["results"][0]["status"] == "completed")
+    _, repo, local, bindir, prompt, env = fresh()
+    rawcli = os.path.join(bindir, "custom-reviewer")
+    executable(rawcli, "cat >/dev/null\nprintf 'looks good to me'")
+    write_seats(local, [rawcli, "exec", "-"], native_extra={"adapter": "raw"})
+    result = run(repo, prompt, env, tier="low")
+    data = json.loads(result.stdout)
+    check("explicit raw adapter still enforces the findings contract", result.returncode == 1 and
+          data["results"][0]["status"] == "invalid-review-findings")
+
+    # A plan review whose externals all fail and whose native block is missing yields a typed
+    # fallback error and releases the marker — never an uncaught crash + leaked marker.
+    _, repo, local, bindir, prompt, env = fresh()
+    failing = os.path.join(bindir, "claude")
+    executable(failing, "cat >/dev/null\nexit 7")
+    with open(os.path.join(local, "seats.codex.json"), "w") as f:
+        json.dump({"host": "codex", "seats": [{"name": "opus", "transport": "stdin",
+                   "argv": [failing, "--print"], "efforts": {"default": "high", "max": "xhigh"},
+                   "timeoutSeconds": 10}]}, f)
+    result = run(repo, prompt, env, tier="low", checkpoint="plan")
+    data = json.loads(result.stdout)
+    fallback_rows = [r for r in data.get("results", []) if r.get("fallback")]
+    check("plan fallback without native is typed", result.returncode == 1 and
+          fallback_rows and fallback_rows[0]["status"] == "invalid-seat-config" and
+          os.path.isfile(data.get("resultPath", "")))
+    retry = run(repo, prompt, env, tier="low", checkpoint="plan")
+    check("typed fallback failure releases the marker",
+          "nested-leos-council-refused" not in retry.stdout)
+
+    # Seats run in an empty per-seat scratch cwd under the work dir, removed afterwards; the
+    # prompt header names the reviewed repo; "cwd": "repo" opts back into the repo cwd.
+    _, repo, local, bindir, prompt, env = fresh()
+    pwd_receipt = os.path.join(local, "seat-pwd.txt")
+    prompt_receipt = os.path.join(local, "seat-prompt.txt")
+    pwdcli = os.path.join(bindir, "codex")
+    executable(pwdcli, f"pwd >'{pwd_receipt}'\ncat >'{prompt_receipt}'\nprintf '{{\"type\":\"item.completed\",\"item\":{{\"type\":\"agent_message\",\"text\":\"[]\"}}}}\\n'")
+    write_seats(local, [pwdcli, "exec", "-"])
+    result = run(repo, prompt, env, tier="low")
+    data = json.loads(result.stdout)
+    seat_pwd = open(pwd_receipt).read().strip()
+    work_dir = os.path.dirname(data["resultPath"])
+    check("seat runs in a scratch cwd under the work dir", result.returncode == 0 and
+          seat_pwd.endswith("cwd-native") and
+          os.path.realpath(os.path.dirname(seat_pwd)) == os.path.realpath(work_dir) and
+          seat_pwd != os.path.realpath(repo))
+    check("scratch cwd is removed after the seat", not os.path.exists(os.path.join(work_dir, "cwd-native")))
+    check("result rows carry cwdMode", data["results"][0].get("cwdMode") == "scratch")
+    header = open(prompt_receipt).read()
+    check("prompt header names the reviewed repo",
+          header.startswith(f"Repository under review (absolute path): {os.path.realpath(repo)}"))
+    _, repo, local, bindir, prompt, env = fresh()
+    pwd_receipt = os.path.join(local, "seat-pwd.txt")
+    pwdcli = os.path.join(bindir, "codex")
+    executable(pwdcli, f"pwd >'{pwd_receipt}'\ncat >/dev/null\nprintf '{{\"type\":\"item.completed\",\"item\":{{\"type\":\"agent_message\",\"text\":\"[]\"}}}}\\n'")
+    write_seats(local, [pwdcli, "exec", "-"], native_extra={"cwd": "repo"})
+    result = run(repo, prompt, env, tier="low")
+    data = json.loads(result.stdout)
+    check("cwd:repo opts back into the reviewed repo", result.returncode == 0 and
+          open(pwd_receipt).read().strip() == os.path.realpath(repo) and
+          data["results"][0].get("cwdMode") == "repo")
+    _, repo, local, bindir, prompt, env = fresh()
+    pwdcli = os.path.join(bindir, "codex")
+    executable(pwdcli, "cat >/dev/null\nprintf 'x'")
+    write_seats(local, [pwdcli, "exec", "-"], native_extra={"cwd": "home"})
+    result = run(repo, prompt, env, tier="low")
+    data = json.loads(result.stdout)
+    check("invalid cwd value is invalid-seat-config", result.returncode == 1 and
+          data["results"][0]["status"] == "invalid-seat-config")
 
     # A runner launched from a package directory normalizes to the git root, so the engine's
     # active marker blocks a second root-level council instead of permitting recursion by path.

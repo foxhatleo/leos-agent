@@ -31,8 +31,9 @@ machine-local `local/seats.<host>.json`.
    sample of rejections.
 6. **Prove and tune with data.** Every finding + disposition is logged to a per-project ledger.
 7. **A terminal state is evidence.** Blank output, structured bookkeeping with no reviewer message,
-   malformed structured output, a nonzero exit, cancellation, and timeout are failures with
-   distinct records, never an implicit clean review.
+   malformed structured output, a nonzero exit, cancellation, timeout, an invalid seat/adapter
+   configuration, and an externally signalled seat are failures with distinct records, never an
+   implicit clean review.
 
 ---
 
@@ -45,9 +46,9 @@ committed (recipes carry a `{MODEL}` placeholder; see `seats.catalog.json`):
 |---|---|---|---|---|
 | **Opus** | Anthropic | `claude --safe-mode --no-session-persistence --print` | plan mode | `--safe-mode` (real) |
 | **GPT** | OpenAI | `codex exec --ephemeral --sandbox read-only -m {MODEL}` | sandbox read-only | sentinel + ephemeral session |
-| **GLM** | Zhipu | `opencode run --agent plan -m openrouter/{MODEL}` | plan agent | clean config dir |
-| **Gemini** | Google | `opencode run --agent plan -m openrouter/{MODEL}` | plan agent | clean config dir |
-| **Grok** | xAI | `cursor-agent -p --mode plan` *or* `opencode … openrouter/{MODEL}` | plan mode | clean project dir |
+| **GLM** | Zhipu | `opencode run --agent plan -m openrouter/{MODEL}` | plan agent | runner scratch cwd |
+| **Gemini** | Google | `opencode run --agent plan -m openrouter/{MODEL}` | plan agent | runner scratch cwd |
+| **Grok** | xAI | `cursor-agent -p --mode plan` *or* `opencode … openrouter/{MODEL}` | plan mode | runner scratch cwd |
 
 - **The host's provider supplies the native reviewer.** For Claude Code the native seat is a
   read-only subagent **pinned to Opus** (`model: opus` — the Opus line specifically, never
@@ -179,8 +180,13 @@ Layered, deterministic-first — tool-agnostic across the available hook/plugin/
 5. **Prompt clause** — prompts prohibit Leo council recursion, while permitting ordinary subagents
    when the transport allows them.
 6. **Mechanical isolation per seat** — Claude `--safe-mode` (disables CLAUDE.md/skills/hooks/MCP);
-   Codex seat on an isolated neutral `CODEX_HOME`; OpenCode/Cursor `--agent plan`/`--mode plan` in a
-   clean dir. Only Claude has a true `--safe-mode`; the others rely on read-only + dir/env hygiene.
+   Codex `--ephemeral --sandbox read-only`; OpenCode/Cursor `--agent plan`/`--mode plan`. Every CLI
+   seat additionally launches in a **runner-provided empty scratch directory under `local/`**
+   (removed after the seat), so repo-local agent config (`.cursor/rules`, `AGENTS.md`, opencode
+   project config) never gains instruction authority inside a reviewer — the reviewed repo's path
+   travels in a prompt header. A per-seat `"cwd": "repo"` opt-out exists for transports that cannot
+   read outside their workspace, with that injection risk documented. Only Claude has a true
+   `--safe-mode`; the others rely on read-only + cwd/env hygiene.
 
 Registration keeps only the `Stop` event (never `SubagentStop`), so native subagents are never
 hook-nudged. Bounds retained as backstops: a **persistent loop guard** (`nudge-state.json`, scoped

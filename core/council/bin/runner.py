@@ -18,6 +18,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import signal
 import subprocess
 import sys
@@ -182,6 +183,12 @@ def substitute(value, substitutions):
     return value
 
 
+# Every adapter with a verified output contract. "raw" is EXPLICIT-ONLY: an unknown binary is an
+# invalid seat, never silently raw — the raw path still enforces the findings contract, but a
+# typo'd adapter must not pick a parser by accident.
+ALLOWED_ADAPTERS = ("claude", "codex", "opencode", "cursor-json", "raw")
+
+
 def adapter_for(argv):
     base = os.path.basename(argv[0]) if argv else ""
     if base == "claude":
@@ -192,7 +199,7 @@ def adapter_for(argv):
         return "opencode"
     if base == "cursor-agent":
         return "cursor-unverified"
-    return "raw"
+    return None
 
 
 def insert_before_prompt(argv, flags):
@@ -228,9 +235,16 @@ def prepare_command(seat, tier, prompt):
         argv = [prompt if v == "{PROMPT_TEXT}" else v for v in argv]
     elif "{PROMPT_TEXT}" in argv:
         raise ValueError("stdin seat must not contain {PROMPT_TEXT}")
+    cwd_mode = seat.get("cwd", "scratch")
+    if cwd_mode not in ("scratch", "repo"):
+        raise ValueError('seat cwd must be "scratch" (default) or "repo"')
     adapter = seat.get("adapter") if isinstance(seat.get("adapter"), str) else adapter_for(argv)
     if adapter == "cursor-unverified":
         raise ValueError("Cursor seat needs an explicit adapter: cursor-json after setup validates its JSON output contract")
+    if adapter not in ALLOWED_ADAPTERS:
+        raise ValueError(
+            f"no known adapter for {argv[0]!r} (got {adapter!r}); set \"adapter\" to one of: "
+            + ", ".join(ALLOWED_ADAPTERS))
     if adapter == "cursor-json":
         response_path = seat.get("responsePath")
         if not isinstance(response_path, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*", response_path):
@@ -296,7 +310,9 @@ def extract_structured(adapter, raw):
         if not isinstance(value, str) or not value.strip():
             return None, "missing-review-content"
         return {"format": "json", "reviewText": value}, None
-    return {"format": "json", "response": value}, None
+    # Defense in depth: prepare_command's allow-list makes this unreachable, but an unrecognized
+    # adapter's output must never classify as a completed review with no findings validation.
+    return None, "unsupported-adapter"
 
 
 def extract_findings(review_text, checkpoint):
@@ -403,6 +419,18 @@ def run_one(work, cwd, seat, events):
     env = dict(os.environ)
     env.update(extra_env)
     env["LEOS_COUNCIL_SEAT"] = "1"
+    # Default isolation: an empty per-seat scratch cwd, so repo-local agent config
+    # (.cursor/rules, AGENTS.md, opencode project config) never gains instruction authority
+    # inside a reviewer. The prompt header carries the repo path; "cwd": "repo" opts out for
+    # transports that cannot read outside their workspace (documented residual risk).
+    cwd_mode = seat.get("cwd", "scratch")
+    scratch = work / f"cwd-{name}"
+    if cwd_mode == "scratch":
+        secure_dir(scratch)
+        seat_cwd = str(scratch)
+    else:
+        seat_cwd = cwd
+    base["cwdMode"] = cwd_mode
     stdin_handle = open(seat["promptPath"], "rb") if transport == "stdin" else subprocess.DEVNULL
     opened_stdin = transport == "stdin"
     out, err = {"data": b"", "total": 0}, {"data": b"", "total": 0}
@@ -416,7 +444,7 @@ def run_one(work, cwd, seat, events):
                 events.emit("seat-finished", seat=name, status=base["status"])
                 return base
             proc = subprocess.Popen(
-                argv, cwd=cwd, env=env, stdin=stdin_handle, stdout=subprocess.PIPE,
+                argv, cwd=seat_cwd, env=env, stdin=stdin_handle, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, start_new_session=True,
             )
             ACTIVE_PROCESSES.add(proc)
@@ -467,6 +495,8 @@ def run_one(work, cwd, seat, events):
                 ACTIVE_PROCESSES.discard(proc)
         if opened_stdin:
             stdin_handle.close()
+        if cwd_mode == "scratch":
+            shutil.rmtree(scratch, ignore_errors=True)
     base["elapsedSeconds"] = round(time.monotonic() - started, 3)
     events.emit("seat-finished", seat=name, status=base["status"], elapsedSeconds=base["elapsedSeconds"])
     return base
@@ -503,6 +533,9 @@ def select_seats(config, checkpoint, tier, include_native):
     for i, item in enumerate(external[:wanted]):
         if not isinstance(item, dict) or not isinstance(item.get("name"), str):
             raise ValueError(f"invalid external seat at index {i}")
+        # Seat names feed work-dir file and scratch-cwd names — keep them path-safe.
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", item["name"]):
+            raise ValueError(f"invalid external seat name {item['name']!r}")
         chosen.append(dict(item, kind="external", mode="exec"))
     return chosen
 
@@ -513,9 +546,14 @@ def native_seats(config, count=1):
         raise ValueError("native seat missing")
     if native.get("mode") not in ("subagent", "exec"):
         raise ValueError("native mode must be subagent or exec")
-    return [dict(native, name="native" if index == 0 else f"native-{index + 1}",
-                 kind="native", status="orchestrator-native-subagent-required")
-            for index in range(count)]
+    seats = []
+    for index in range(count):
+        seat = dict(native, name="native" if index == 0 else f"native-{index + 1}", kind="native")
+        if native.get("mode") == "subagent":
+            # Only a subagent seat is orchestrator-owned; an exec seat is dispatched normally.
+            seat["status"] = "orchestrator-native-subagent-required"
+        seats.append(seat)
+    return seats
 
 
 def cmd_run(args):
@@ -547,6 +585,12 @@ def cmd_run(args):
         prompt = ("[REDACTED-SENSITIVE-PROMPT]\n"
                   "The review context was withheld because probable credential material was detected.\n")
         prompt_redacted = True
+    # Seats launch in an empty scratch cwd by default, so the reviewed repo's location must
+    # travel in the prompt itself (after redaction: the path is machine-local metadata, not
+    # credential material) for read-capable transports to verify claims.
+    prompt = (f"Repository under review (absolute path): {cwd}\n"
+              f"Verify claims by reading files under that path; do not modify the repository.\n\n"
+              + prompt)
     config = read_json(LOCAL / f"seats.{args.host}.json")
     if not isinstance(config, dict):
         print(json.dumps({"ok": False, "status": "seats-unavailable", "host": args.host}, indent=2))
@@ -606,7 +650,18 @@ def cmd_run(args):
             and all(seat.get("kind") == "external" for seat in planned) \
             and not any(result["status"] == "completed" for result in results):
         events.emit("fallback-fired", reason="all-plan-external-seats-failed")
-        for seat in native_seats(config):
+        try:
+            fallback_seats = native_seats(config)
+        except ValueError as e:
+            # The plan+external selection path never validated the native block; a broken one
+            # must yield a typed result (dispatchOk false -> the end path below releases the
+            # marker) instead of an uncaught crash that leaks the marker for its full TTL.
+            events.emit("fallback-unavailable", reason=str(e))
+            fallback_seats = []
+            results.append({"seat": "native", "kind": "native", "status": "invalid-seat-config",
+                            "reason": f"plan fallback unavailable: {e}", "fallback": True,
+                            "elapsedSeconds": 0.0})
+        for seat in fallback_seats:
             if seat.get("mode") == "subagent":
                 manual = {"seat": seat["name"], "status": "orchestrator-native-subagent-required",
                           "model": seat.get("model", ""), "promptPath": str(prompt_path),
