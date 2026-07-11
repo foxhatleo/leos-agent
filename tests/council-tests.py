@@ -128,6 +128,25 @@ def main():
     ec, _ = hook(repo, env)
     check("impl mark clears nudge", ec == 0)
 
+    # 6b. opt-in mark ownership: a mark carrying its runId can never close ANOTHER run's fresh
+    # marker; the owning runId (or a plain legacy mark) still clears it.
+    repo, env = make_repo()
+    write_code(repo, "app.py", 200)
+    council(repo, env, "begin", "--checkpoint", "impl", "--run-id", "owner-run")
+    ec, out, _ = council(repo, env, "mark", "--checkpoint", "impl", "--tier", "elevated",
+                         "--run-id", "someone-else")
+    ec2, _ = hook(repo, env)
+    check("mark with a foreign --run-id refuses and leaves the marker",
+          ec == 3 and "active-run-not-owned" in out and ec2 == 0)
+    ec, _, _ = council(repo, env, "mark", "--checkpoint", "impl", "--tier", "elevated",
+                       "--run-id", "owner-run")
+    check("mark with the owning --run-id clears the marker", ec == 0)
+    repo, env = make_repo()
+    write_code(repo, "app.py", 200)
+    council(repo, env, "begin", "--checkpoint", "impl", "--run-id", "legacy-run")
+    ec, _, _ = council(repo, env, "mark", "--checkpoint", "impl", "--tier", "elevated")
+    check("plain mark keeps legacy checkpoint-scoped clearing", ec == 0)
+
     repo, env = make_repo()
     write_code(repo, "critical.py", 200)
     ec, _, err = council(repo, env, "mark", "--checkpoint", "impl", "--tier", "critical")

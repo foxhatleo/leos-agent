@@ -600,19 +600,61 @@ def cmd_run(args):
     except ValueError as e:
         print(json.dumps({"ok": False, "status": "invalid-seats", "reason": str(e)}, indent=2))
         return 2
+    if args.seat:
+        if not args.follow_up:
+            print(json.dumps({"ok": False, "status": "seat-requires-follow-up",
+                              "reason": "--seat selects the single re-review seat of a --follow-up pass"}, indent=2))
+            return 2
+        selected = [seat for seat in selected if seat.get("name") == args.seat]
+        if not selected:
+            print(json.dumps({"ok": False, "status": "seat-not-configured", "seat": args.seat}, indent=2))
+            return 2
     if any(seat.get("kind") == "external" for seat in selected) and not args.approve_external:
         print(json.dumps({"ok": False, "status": "external-send-approval-required",
                           "reason": "confirm this project's prompt may be sent to configured external providers"}, indent=2))
         return 2
 
-    run_id = args.run_id or secrets.token_hex(12)
     active = fresh_active_run(cwd)
-    if active and active.get("run_id") != run_id:
-        print(json.dumps({"ok": False, "status": "nested-leos-council-refused", "activeRun": active.get("run_id", ""),
-                          "reason": "an active Leo council marker already owns this checkpoint"}, indent=2))
-        return 3
+    if args.follow_up:
+        # The mandated single fix->re-review pass reuses the ACTIVE run's marker and run id and
+        # writes under <run>/pass-2/, so round-1 artifacts stay immutable.
+        if not active:
+            print(json.dumps({"ok": False, "status": "no-active-run-for-follow-up",
+                              "reason": "a follow-up pass needs the original run's fresh marker; dispatch a new run instead"}, indent=2))
+            return 2
+        if active.get("checkpoint") != args.checkpoint:
+            print(json.dumps({"ok": False, "status": "follow-up-checkpoint-mismatch",
+                              "activeCheckpoint": active.get("checkpoint", "")}, indent=2))
+            return 2
+        if args.run_id and args.run_id != active.get("run_id"):
+            print(json.dumps({"ok": False, "status": "follow-up-run-mismatch",
+                              "activeRun": active.get("run_id", "")}, indent=2))
+            return 2
+        run_id = active.get("run_id")
+    else:
+        run_id = args.run_id or secrets.token_hex(12)
+        if active and active.get("run_id") != run_id:
+            print(json.dumps({"ok": False, "status": "nested-leos-council-refused", "activeRun": active.get("run_id", ""),
+                              "reason": "an active Leo council marker already owns this checkpoint"}, indent=2))
+            return 3
 
-    work = WORK_ROOT / project_slug(cwd) / run_id
+    base_work = WORK_ROOT / project_slug(cwd) / run_id
+    if args.follow_up:
+        if not (base_work / "result.json").is_file():
+            print(json.dumps({"ok": False, "status": "follow-up-without-first-pass",
+                              "reason": "no completed first pass exists for the active run"}, indent=2))
+            return 2
+        if (base_work / "pass-2" / "result.json").is_file():
+            print(json.dumps({"ok": False, "status": "follow-up-passes-exhausted",
+                              "reason": "maximum two total passes"}, indent=2))
+            return 2
+        work = base_work / "pass-2"
+    else:
+        if (base_work / "result.json").is_file():
+            print(json.dumps({"ok": False, "status": "run-id-work-exists",
+                              "reason": "refusing to overwrite a finished run's artifacts; use --follow-up for the re-review pass"}, indent=2))
+            return 2
+        work = base_work
     secure_dir(work)
     events = EventLog(work / "events.jsonl")
     prompt_path = work / f"prompt-{args.checkpoint}.md"
@@ -638,6 +680,7 @@ def cmd_run(args):
                             prompt=prompt, promptPath=str(prompt_path)))
     job = {"schema": 1, "runId": run_id, "host": args.host, "checkpoint": args.checkpoint,
            "tier": args.tier, "cwd": cwd, "promptPath": str(prompt_path), "promptRedacted": prompt_redacted,
+           "pass": 2 if args.follow_up else 1,
            "externalSendApproved": bool(args.approve_external), "startedAt": int(time.time()),
            "seats": [{"name": s["name"], "kind": s["kind"]} for s in planned], "manualNative": manual_native}
     write_json(work / "job.json", job)
@@ -751,6 +794,9 @@ def main():
     p.add_argument("--cwd", help="repository being reviewed (default: current directory)")
     p.add_argument("--external-only", action="store_true", help="do not run/report the native seat")
     p.add_argument("--run-id", help="resume only the matching active runner job")
+    p.add_argument("--follow-up", action="store_true",
+                   help="dispatch the single re-review pass under the active run's marker (writes <run>/pass-2/)")
+    p.add_argument("--seat", help="with --follow-up: dispatch exactly this configured seat")
     p.add_argument("--approve-external", action="store_true",
                    help="explicitly approve sending this project prompt to configured external providers")
     p.add_argument("--redact-sensitive", action="store_true",

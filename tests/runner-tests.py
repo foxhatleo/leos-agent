@@ -112,7 +112,7 @@ def write_cursor_external(local, native_argv, cursor_argv, response_path="result
 
 
 def run(repo, prompt, env, tier="elevated", cwd=None, checkpoint="impl", external_only=False,
-        approve_external=True, redact_sensitive=False):
+        approve_external=True, redact_sensitive=False, run_id=None, follow_up=False, seat=None):
     argv = [sys.executable, RUNNER, "run", "--host", "codex", "--checkpoint", checkpoint,
             "--tier", tier, "--prompt", prompt, "--cwd", cwd or repo]
     if external_only:
@@ -121,6 +121,12 @@ def run(repo, prompt, env, tier="elevated", cwd=None, checkpoint="impl", externa
         argv.append("--approve-external")
     if redact_sensitive:
         argv.append("--redact-sensitive")
+    if run_id:
+        argv.extend(["--run-id", run_id])
+    if follow_up:
+        argv.append("--follow-up")
+    if seat:
+        argv.extend(["--seat", seat])
     try:
         return subprocess.run(argv, capture_output=True, text=True, env=env, timeout=120)
     except subprocess.TimeoutExpired as e:
@@ -546,6 +552,49 @@ def main():
     data = json.loads(result.stdout)
     check("invalid cwd value is invalid-seat-config", result.returncode == 1 and
           data["results"][0]["status"] == "invalid-seat-config")
+
+    # The fix->re-review pass is first-class: a finished --run-id cannot be reused (round-1
+    # artifacts immutable), --follow-up reuses the active marker into <run>/pass-2/, a third
+    # pass is refused, and --seat selects exactly the named re-review seat.
+    _, repo, local, bindir, prompt, env = fresh()
+    okc = os.path.join(bindir, "codex")
+    okcl = os.path.join(bindir, "claude")
+    executable(okc, "cat >/dev/null\nprintf '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"[]\"}}\\n'")
+    executable(okcl, "cat >/dev/null\nprintf '{\"result\":\"[]\"}\\n'")
+    write_seats(local, [okc, "exec", "-"], [okcl, "--print"])
+    first = run(repo, prompt, env, tier="elevated", run_id="r1pass")
+    first_data = json.loads(first.stdout)
+    check("follow-up fixture first pass completes", first.returncode == 0)
+    pass1_result = first_data["resultPath"]
+    pass1_bytes = open(pass1_result, "rb").read()
+    reuse = run(repo, prompt, env, tier="elevated", run_id="r1pass")
+    check("reusing a finished run-id without --follow-up is refused",
+          reuse.returncode == 2 and "run-id-work-exists" in reuse.stdout and
+          open(pass1_result, "rb").read() == pass1_bytes)
+    bad_seat = run(repo, prompt, env, tier="elevated", follow_up=True, seat="nosuch")
+    check("follow-up with an unconfigured seat is typed", bad_seat.returncode == 2 and
+          "seat-not-configured" in bad_seat.stdout)
+    seat_no_fu = run(repo, prompt, env, tier="elevated", seat="opus")
+    check("--seat without --follow-up is refused", seat_no_fu.returncode == 2 and
+          "seat-requires-follow-up" in seat_no_fu.stdout)
+    second = run(repo, prompt, env, tier="elevated", follow_up=True, seat="opus")
+    second_data = json.loads(second.stdout)
+    check("follow-up dispatches exactly the named seat under pass-2", second.returncode == 0 and
+          [r["seat"] for r in second_data["results"]] == ["opus"] and
+          second_data["resultPath"] == os.path.join(os.path.dirname(pass1_result), "pass-2", "result.json") and
+          second_data.get("pass") == 2)
+    check("follow-up preserves round-1 artifacts", open(pass1_result, "rb").read() == pass1_bytes)
+    third = run(repo, prompt, env, tier="elevated", follow_up=True, seat="opus")
+    check("a third pass is refused", third.returncode == 2 and
+          "follow-up-passes-exhausted" in third.stdout)
+
+    # Follow-up without any active marker is a typed refusal.
+    _, repo, local, bindir, prompt, env = fresh()
+    executable(os.path.join(bindir, "codex"), "cat >/dev/null\nprintf '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"[]\"}}\\n'")
+    write_seats(local, [os.path.join(bindir, "codex"), "exec", "-"])
+    fu = run(repo, prompt, env, tier="low", follow_up=True)
+    check("follow-up without an active run is typed", fu.returncode == 2 and
+          "no-active-run-for-follow-up" in fu.stdout)
 
     # A runner launched from a package directory normalizes to the git root, so the engine's
     # active marker blocks a second root-level council instead of permitting recursion by path.

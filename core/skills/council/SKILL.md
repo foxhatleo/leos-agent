@@ -159,11 +159,25 @@ every finding in a private JSON file, then ledger it without placing reviewer te
 
 After fixes, send only the affected patch/finding to one seat for one re-review. Maximum two total
 passes—no debate loops. Sample one rejected finding with a different seat when any rejection exists.
-
-Finally close the active marker and write the reviewed baseline:
+The re-review is a first-class runner pass:
 
 ```
-"$RUNTIME" "$ENGINE" mark --checkpoint impl --tier <tier>
+"$RUNTIME" "$RUNNER" run \
+  --host "$HOST" --checkpoint impl --tier <tier> --prompt "$PROMPT_FIX" --cwd "$PWD" \
+  --approve-external --follow-up --seat <seat-name>
+```
+
+`--follow-up` reuses the active run's marker and run id and writes under `<run>/pass-2/` — round-1
+artifacts stay immutable — and the runner refuses a third pass (`follow-up-passes-exhausted`) and
+refuses reusing a finished `--run-id` without it (`run-id-work-exists`). `--seat` is also how the
+different-seat reject-audit is dispatched. If the marker's TTL lapsed mid-fix, `--follow-up`
+returns `no-active-run-for-follow-up`; dispatch a fresh run instead.
+
+Finally close the active marker and write the reviewed baseline, passing the run id from
+`result.json` so another run's fresh marker can never be closed by mistake:
+
+```
+"$RUNTIME" "$ENGINE" mark --checkpoint impl --tier <tier> --run-id <runId>
 ```
 
 For an intentional skip on elevated+ work, record the explicit override instead. Critical work

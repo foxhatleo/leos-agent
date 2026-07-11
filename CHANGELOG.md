@@ -148,3 +148,12 @@ OpenCode and Cursor support.
   dir" isolation real, so repo-local agent config (`.cursor/rules`, `AGENTS.md`) no longer loads
   into reviewers; a per-seat `"cwd": "repo"` opt-out carries the documented residual risk. The
   skill's status taxonomy now lists every terminal state the runner produces.
+- `[all]` **Fix→re-review is a first-class second pass.** `runner.py run --follow-up
+  [--seat <name>]` reuses the active run's marker and run id for the mandated single-seat
+  re-review, writes under `<run>/pass-2/` with round-1 artifacts immutable, refuses a third pass,
+  and a finished `--run-id` can no longer be silently overwritten without it
+  (`run-id-work-exists` — previously reuse clobbered `result.json`/`job.json` and interleaved the
+  event log). `council.py mark` gained an opt-in `--run-id` ownership check (exit 3
+  `active-run-not-owned`) so an orchestrator that knows its run id can never close another run's
+  fresh marker; plain `mark` keeps the legacy checkpoint-scoped clearing for manual and Stop-hook
+  override flows. The skill documents both commands.

@@ -848,6 +848,15 @@ def cmd_end(args):
 
 def cmd_mark(args):
     cwd = os.getcwd()
+    # Opt-in ownership: an orchestrator that knows its runId (from result.json) must not be able
+    # to close ANOTHER run's fresh marker of the same checkpoint. Plain mark keeps the legacy
+    # checkpoint-scoped clearing for manual and Stop-hook override flows.
+    ir = _read_pointer(cwd, "in-review.json") or {}
+    ir_fresh = int(time.time()) - int(ir.get("ts", 0)) < IN_REVIEW_TTL
+    if args.run_id and ir_fresh and ir.get("run_id") and ir.get("run_id") != args.run_id:
+        print(json.dumps({"ok": False, "status": "active-run-not-owned",
+                          "activeRun": ir.get("run_id", "")}, indent=2))
+        return 3
     diff_text, _, untracked, uc, _ = get_diff(cwd)
     h = _hash_all(cwd, diff_text, untracked, uc)
     status = "overridden" if args.override else "reviewed"
@@ -1056,6 +1065,8 @@ def main():
     p.add_argument("--override", action="store_true")
     p.add_argument("--reason", default="")
     p.add_argument("--signoff", default="", help="required human acknowledgement for critical tier")
+    p.add_argument("--run-id", default="",
+                   help="opt-in ownership check: refuse to close another run's fresh marker")
     p.set_defaults(fn=cmd_mark)
 
     p = sub.add_parser("ledger")
