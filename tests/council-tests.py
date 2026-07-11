@@ -110,6 +110,14 @@ def main():
     ec, err = hook(repo, env)
     check("nudge fires with no marker", ec == 42)
     check("nudge text warns seats to ignore", "council seat" in err.lower())
+    check("elevated nudge does not demand signoff", "--signoff" not in err)
+
+    # A critical-scoring tree's nudge must print an override command that can actually succeed:
+    # mark hard-requires --signoff at the critical tier, overrides included.
+    repo, env = make_repo()
+    write_code(repo, "auth.py", 500)
+    ec, err = hook(repo, env)
+    check("critical nudge includes the required --signoff", ec == 42 and "--signoff" in err)
 
     # 5. begin (in-review pointer) suppresses the nudge
     repo, env = make_repo()

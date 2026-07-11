@@ -157,3 +157,7 @@ OpenCode and Cursor support.
   `active-run-not-owned`) so an orchestrator that knows its run id can never close another run's
   fresh marker; plain `mark` keeps the legacy checkpoint-scoped clearing for manual and Stop-hook
   override flows. The skill documents both commands.
+- `[all]` **Critical-tier close path documented end-to-end.** The council skill's close command
+  and the Stop-hook override text now include the `--signoff` requirement `mark` already enforces
+  at the critical tier, so a critical review can actually be closed as documented (the printed
+  override command previously always failed for critical-scoring diffs).

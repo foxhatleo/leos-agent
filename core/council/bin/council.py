@@ -1012,12 +1012,15 @@ def cmd_hook(_args):
         reasons = "; ".join(risk["reasons"][:3])
         scope = ("the incremental change since your last council review" if incremental
                  else "this diff")
+        # mark hard-requires --signoff whenever the EFFECTIVE tier is critical (overrides
+        # included); a nudge that omits it would print a command that cannot succeed.
+        signoff = ' --signoff "<developer ack>"' if risk["tier"] == "critical" else ""
         sys.stderr.write(
             f"[council] {scope} scores '{risk['tier']}' risk ({reasons}) and has no fresh council "
             f"review marker. Before finishing: EITHER run the council implementation checkpoint "
             f"(invoke the 'council' skill with checkpoint=impl), OR — if review is genuinely "
             f"unwarranted — record a logged override:\n"
-            f"  {REPO_ROOT}/bin/leos-python {_SELF} mark --checkpoint impl --override --reason \"<why>\"\n"
+            f"  {REPO_ROOT}/bin/leos-python {_SELF} mark --checkpoint impl --override --reason \"<why>\"{signoff}\n"
             f"If you are running as a council seat or subagent, ignore this nudge entirely — "
             f"do not convene a council or write an override marker. "
             f"Overrides are logged and surfaced to the developer. This nudge does not repeat "

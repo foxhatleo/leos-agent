@@ -178,10 +178,13 @@ Finally close the active marker and write the reviewed baseline, passing the run
 
 ```
 "$RUNTIME" "$ENGINE" mark --checkpoint impl --tier <tier> --run-id <runId>
+# critical tier additionally requires: --signoff "<developer acknowledgement>"
 ```
 
 For an intentional skip on elevated+ work, record the explicit override instead. Critical work
-requires a deduplicated digest and explicit developer acknowledgment before completion.
+requires a deduplicated digest and explicit developer acknowledgment **recorded via `--signoff`**
+before completion — `mark` exits 1 without it (the effective tier is the max of the computed risk
+and the requested tier, so a critical-scoring diff cannot bypass it by requesting a lower tier).
 
 ## Never
 
