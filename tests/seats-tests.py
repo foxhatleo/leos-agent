@@ -126,6 +126,26 @@ def main():
     ec, out = validate(cand, "codex")
     check("fable external opus seat is refused",
           ec == 1 and any("Opus line" in p for p in out.get("problems", [])))
+    cand = codex_candidate()
+    cand["seats"][0]["name"] = "anthropic"
+    cand["seats"][0]["argv"] = [a.replace("claude-opus-4-8", "claude-fable-5")
+                                 for a in cand["seats"][0]["argv"]]
+    ec, out = validate(cand, "codex")
+    check("renaming an Anthropic seat cannot bypass the Opus rule",
+          ec == 1 and any("Opus line" in p for p in out.get("problems", [])))
+
+    for bogus in ("not-opus", "opus-impersonator", "claude-not-opus"):
+        cand = claude_candidate()
+        cand["native"]["model"] = bogus
+        ec, out = validate(cand, "claude")
+        check(f"substring-only Opus impostor {bogus!r} is refused",
+              ec == 1 and any("Opus line" in p for p in out.get("problems", [])))
+
+    cand = codex_candidate()
+    cand["seats"][0].pop("provider")
+    ec, out = validate(cand, "codex")
+    check("external seat provider identity is required",
+          ec == 1 and any("provider" in p for p in out.get("problems", [])))
 
     # 4. An external opus seat that never pins --model runs the CLI default — refused.
     cand = codex_candidate()

@@ -109,7 +109,9 @@ For each host, prepare a candidate JSON under `local/`, then install it only thr
    provider**, strongest-first. For each: enumerate its transport variants (`asExternal`,
    `asExternalCursor`, `asExternalOpencode`), pick one whose CLI is installed (ask Leo only when
    more than one is available), resolve the provider's CURRENT flagship slug for that transport,
-   substitute it into the argv template, and add only non-secret per-seat environment values.
+   substitute it into the argv template, preserve the recipe's required `provider` identity, and
+   add only non-secret per-seat environment values. The display `name` does not determine provider
+   policy; `leos-seats.py` refuses a missing/unknown provider.
    **OpenAI flavor rule (Leo's standing rule):** use the most capable flavor of the newest GPT
    generation. GPT-5.6 ships three capability flavors — Sol > Terre > Luna (new names in 5.6, not
    lineages) — so 5.6 resolves to Sol, never a lower-capability flavor of the same generation

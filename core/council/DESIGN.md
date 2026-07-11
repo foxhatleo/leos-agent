@@ -185,12 +185,13 @@ Layered, deterministic-first — tool-agnostic across the available hook/plugin/
    when the transport allows them.
 6. **Mechanical isolation per seat** — Claude `--safe-mode` (disables CLAUDE.md/skills/hooks/MCP);
    Codex `--ephemeral --sandbox read-only`; OpenCode/Cursor `--agent plan`/`--mode plan`. Every CLI
-   seat additionally launches in a **runner-provided empty scratch directory under `local/`**
-   (removed after the seat), so repo-local agent config (`.cursor/rules`, `AGENTS.md`, opencode
-   project config) never gains instruction authority inside a reviewer — the reviewed repo's path
-   travels in a prompt header. A per-seat `"cwd": "repo"` opt-out exists for transports that cannot
-   read outside their workspace, with that injection risk documented. Only Claude has a true
-   `--safe-mode`; the others rely on read-only + cwd/env hygiene.
+   seat additionally launches in a **runner-provided scratch directory under `local/` with its own
+   synthetic Git root** (removed after the seat). The distinct project root prevents repo-local
+   agent config (`.cursor/rules`, `AGENTS.md`, OpenCode project config) from gaining instruction
+   authority inside a reviewer even when this clone reviews itself; the reviewed repo's path travels
+   in a prompt header. A per-seat `"cwd": "repo"` opt-out exists for transports that cannot read
+   outside their workspace, with that injection risk documented. Only Claude has a true
+   `--safe-mode`; the others rely on read-only + project-root/cwd/env hygiene.
 
 Registration keeps only the `Stop` event (never `SubagentStop`), so native subagents are never
 hook-nudged. Bounds retained as backstops: a **persistent loop guard** (`nudge-state.json`, scoped

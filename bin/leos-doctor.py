@@ -243,11 +243,15 @@ def _argv_of(seat):
     return [str(x) for x in seat.get("argv", [])]
 
 
+EXTERNAL_PROVIDERS = {"anthropic", "openai", "zhipu", "google", "xai", "custom"}
+
+
 def _is_opus_line(model):
     """The Anthropic seat rule from AGENTS.md, made mechanical: an Opus-line id (or the `opus`
     alias) — never the Claude-5/Mythos-class line (Fable, Mythos)."""
     m = model.lower()
-    return "opus" in m and "fable" not in m and "mythos" not in m
+    concrete = re.fullmatch(r"(?:[a-z0-9._-]+/)*claude-opus-[a-z0-9][a-z0-9._-]*", m)
+    return m == "opus" or bool(concrete and "fable" not in m and "mythos" not in m)
 
 
 def check_seat_flags(tool, seats):
@@ -287,6 +291,13 @@ def check_seat_flags(tool, seats):
             problems.append(f"duplicate external seat name: {name}")
         else:
             seen.add(name)
+        provider = seat.get("provider")
+        if provider not in EXTERNAL_PROVIDERS:
+            problems.append(
+                f"external seat {name or '<unnamed>'} provider must be one of "
+                + ", ".join(sorted(EXTERNAL_PROVIDERS)))
+        if name == "opus" and provider != "anthropic":
+            problems.append("external opus role must declare provider 'anthropic'")
         if not _argv_of(seat):
             problems.append(f"external seat {name or '<unnamed>'} requires argv")
         if seat.get("transport") not in ("stdin", "arg"):
@@ -335,10 +346,13 @@ def check_seat_flags(tool, seats):
             if not isinstance(response_path, str) or not re.fullmatch(
                     r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*", response_path):
                 problems.append(f"cursor-agent seat needs a simple responsePath to reviewer text: {joined}")
-        if seat.get("name") == "opus":
+        # Provider identity—not a freely chosen display name—makes the standing Anthropic rule
+        # mechanical across direct Claude and Cursor/OpenRouter fallback transports. The direct
+        # claude binary remains defense-in-depth even for an invalid/missing provider field.
+        if base == "claude" or seat.get("provider") == "anthropic" or seat.get("name") == "opus":
             model = ""
             for i, value in enumerate(argv):
-                if value == "--model" and i + 1 < len(argv):
+                if value in ("--model", "-m") and i + 1 < len(argv):
                     model = argv[i + 1]
             if not model:
                 problems.append(f"Anthropic seat must pin --model to an Opus-line id: {joined}")

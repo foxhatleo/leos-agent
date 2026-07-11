@@ -20,10 +20,11 @@ opencode run --agent plan -m openrouter/{MODEL} --variant {EFFORT} {PROMPT_TEXT}
 - `--agent plan` requests OpenCode's plan-policy mode. Verify the installed version's actual
   edit/shell behavior during setup; it is not an OS-level read-only containment guarantee.
   Recursion isolation also uses the runner sentinel and OpenCode's own config (it does not load
-  CLAUDE.md-style council mandates). The runner launches the seat in an empty scratch cwd by
-  default so the reviewed project's local agent config never loads; the repo's absolute path
-  arrives in a prompt header. Set seat `"cwd": "repo"` only if the installed version cannot read
-  outside its cwd (re-opens repo-local instruction injection).
+  CLAUDE.md-style council mandates). The runner launches the seat in a scratch cwd with its own
+  synthetic Git root by default so the reviewed project's local agent config never loads, including
+  during self-review; the repo's absolute path arrives in a prompt header. Set seat `"cwd": "repo"`
+  only if the installed version cannot read outside its cwd (re-opens repo-local instruction
+  injection).
 - `{PROMPT_TEXT}` is replaced in-memory with the prompt-file content, then shell-quoted — never
   interpolated into an unquoted fragment.
 - efforts (GLM): `{ "default": "high", "max": "max" }`; (Gemini): `{ "default": "xhigh", "max": "max" }`.

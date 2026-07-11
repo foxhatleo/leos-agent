@@ -109,10 +109,11 @@ process-group timeout, and emits a typed result. It does not use a shell or inte
 into a command line except where a chosen legacy `arg` transport explicitly requires it.
 It also appends private `events.jsonl` lifecycle records and emits terse stderr start/finish
 progress, so a long tool loop cannot look indistinguishable from a blank return.
-Each CLI seat runs in a private empty scratch directory under the run's work dir (per-seat
-`"cwd": "repo"` opt-out), and the runner injects the reviewed repo's absolute path as a prompt
-header — the orchestrator's prompt template does not need to include it, and the header is added
-even for a redacted prompt.
+Each CLI seat runs in a private scratch directory under the run's work dir with its own synthetic
+Git root (per-seat `"cwd": "repo"` opt-out). The project-root boundary prevents parent repo
+instructions from loading even when this clone reviews itself. The runner injects the reviewed
+repo's absolute path as a prompt header — the orchestrator's prompt template does not need to
+include it, and the header is added even for a redacted prompt.
 
 ```
 "$RUNTIME" "$RUNNER" run \
@@ -134,9 +135,9 @@ under `$ROOT/local/council/work/.../result.json`.
   `dispatchOk: true` but `reviewComplete: false`; never present it as complete.
 - `completed` is the only successful CLI response. `empty-output`, `missing-review-content`,
   `invalid-structured-output`, `invalid-review-findings`, `unsupported-adapter`, `nonzero-exit`,
-  `timed-out`, `cancelled`, `signal-exit`, `invalid-seat-config`, `unavailable`, and
-  `execution-error` are distinct failures. Report each one; never infer a successful review from a
-  blank terminal or a transport bookkeeping event with no reviewer message.
+  `timed-out`, `cancelled`, `signal-exit`, `invalid-seat-config`, `isolation-error`, `unavailable`,
+  and `execution-error` are distinct failures. Report each one; never infer a successful review
+  from a blank terminal or a transport bookkeeping event with no reviewer message.
 - If all external seats fail, continue native-only and append a `fallback-fired` ledger entry. Do
   not state that the council passed.
 

@@ -69,6 +69,30 @@ def secure_dir(path):
         pass
 
 
+def prepare_scratch_root(path):
+    """Create a private, empty worktree that is also its own Git project root.
+
+    Merely placing a scratch directory under ``local/`` is insufficient when this repository
+    reviews itself: the parent clone would still be the discovered project root, giving its
+    AGENTS.md/.cursor/rules/OpenCode config instruction authority inside the reviewer.  A nested,
+    template-free Git repository preserves the local-only runtime invariant while establishing a
+    hard project-discovery boundary.  Refuse dispatch if that boundary cannot be created.
+    """
+    secure_dir(path)
+    git_env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+    git_env.pop("GIT_TEMPLATE_DIR", None)
+    try:
+        result = subprocess.run(
+            ["git", "init", "--quiet", "--template=", str(path)],
+            cwd=str(path), env=git_env, capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(f"cannot create isolated scratch project root: {exc}") from exc
+    if result.returncode != 0:
+        reason = (result.stderr or result.stdout).strip()[-500:] or f"git init exited {result.returncode}"
+        raise RuntimeError(f"cannot create isolated scratch project root: {reason}")
+
+
 def write_private(path, data, binary=False):
     secure_dir(path.parent)
     fd, tmp = tempfile.mkstemp(prefix="runner-", dir=path.parent)
@@ -419,14 +443,21 @@ def run_one(work, cwd, seat, events):
     env = dict(os.environ)
     env.update(extra_env)
     env["LEOS_COUNCIL_SEAT"] = "1"
-    # Default isolation: an empty per-seat scratch cwd, so repo-local agent config
-    # (.cursor/rules, AGENTS.md, opencode project config) never gains instruction authority
-    # inside a reviewer. The prompt header carries the repo path; "cwd": "repo" opts out for
-    # transports that cannot read outside their workspace (documented residual risk).
+    # Default isolation: a private per-seat scratch cwd with its own synthetic Git root, so
+    # repo-local agent config (.cursor/rules, AGENTS.md, OpenCode project config) never gains
+    # instruction authority inside a reviewer — including when this clone reviews itself. The
+    # prompt header carries the reviewed repo path; "cwd": "repo" opts out for transports that
+    # cannot read outside their workspace (documented residual risk).
     cwd_mode = seat.get("cwd", "scratch")
     scratch = work / f"cwd-{name}"
     if cwd_mode == "scratch":
-        secure_dir(scratch)
+        try:
+            prepare_scratch_root(scratch)
+        except RuntimeError as exc:
+            shutil.rmtree(scratch, ignore_errors=True)
+            base.update(status="isolation-error", reason=str(exc))
+            events.emit("seat-finished", seat=name, status=base["status"])
+            return base
         seat_cwd = str(scratch)
     else:
         seat_cwd = cwd
@@ -585,9 +616,9 @@ def cmd_run(args):
         prompt = ("[REDACTED-SENSITIVE-PROMPT]\n"
                   "The review context was withheld because probable credential material was detected.\n")
         prompt_redacted = True
-    # Seats launch in an empty scratch cwd by default, so the reviewed repo's location must
-    # travel in the prompt itself (after redaction: the path is machine-local metadata, not
-    # credential material) for read-capable transports to verify claims.
+    # Seats launch in an isolated scratch project root by default, so the reviewed repo's
+    # location must travel in the prompt itself (after redaction: the path is machine-local
+    # metadata, not credential material) for read-capable transports to verify claims.
     prompt = (f"Repository under review (absolute path): {cwd}\n"
               f"Verify claims by reading files under that path; do not modify the repository.\n\n"
               + prompt)

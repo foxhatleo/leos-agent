@@ -513,7 +513,7 @@ def main():
     check("typed fallback failure releases the marker",
           "nested-leos-council-refused" not in retry.stdout)
 
-    # Seats run in an empty per-seat scratch cwd under the work dir, removed afterwards; the
+    # Seats run in a per-seat scratch project root under the work dir, removed afterwards; the
     # prompt header names the reviewed repo; "cwd": "repo" opts back into the repo cwd.
     _, repo, local, bindir, prompt, env = fresh()
     pwd_receipt = os.path.join(local, "seat-pwd.txt")
@@ -552,6 +552,30 @@ def main():
     data = json.loads(result.stdout)
     check("invalid cwd value is invalid-seat-config", result.returncode == 1 and
           data["results"][0]["status"] == "invalid-seat-config")
+
+    # Self-review regression: when LEOS_LOCAL (and therefore the scratch work dir) is physically
+    # inside the reviewed repository, the seat still sees the scratch as its own Git root. Parent
+    # AGENTS.md/project config must not regain authority through repository discovery.
+    _, repo, _unused_local, bindir, prompt, env = fresh()
+    self_local = os.path.join(repo, "local")
+    os.makedirs(self_local)
+    real_venv = os.path.join(ROOT, "local", ".venv")
+    if os.path.isdir(real_venv):
+        os.symlink(real_venv, os.path.join(self_local, ".venv"))
+    env = dict(env, LEOS_LOCAL=self_local,
+               LEOS_COUNCIL_STATE=os.path.join(self_local, "council", "state"))
+    root_receipt = os.path.join(os.path.dirname(repo), "seat-git-root.txt")
+    self_cli = os.path.join(bindir, "codex")
+    executable(self_cli, f"git rev-parse --show-toplevel >'{root_receipt}'\ncat >/dev/null\n"
+               "printf '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"[]\"}}\\n'")
+    write_seats(self_local, [self_cli, "exec", "-"])
+    result = run(repo, prompt, env, tier="low")
+    data = json.loads(result.stdout)
+    discovered_root = open(root_receipt).read().strip()
+    check("self-review scratch establishes a distinct project root", result.returncode == 0 and
+          discovered_root != os.path.realpath(repo) and
+          discovered_root.endswith("cwd-native") and
+          discovered_root.startswith(os.path.realpath(os.path.join(self_local, "council", "work"))))
 
     # The fix->re-review pass is first-class: a finished --run-id cannot be reused (round-1
     # artifacts immutable), --follow-up reuses the active marker into <run>/pass-2/, a third

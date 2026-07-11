@@ -19,9 +19,10 @@ codex exec --ephemeral --sandbox read-only --skip-git-repo-check -c model_reason
 - Codex has no `--safe-mode`. It retains normal `CODEX_HOME` authentication; `--ephemeral` prevents
   session-file persistence, the inherited `LEOS_COUNCIL_SEAT=1` suppresses council hooks, and the
   runner refuses any nested council attempt.
-- The runner launches the seat in an empty scratch cwd (not a git repo), which is why
-  `--skip-git-repo-check` stays mandatory in the argv; the reviewed repo's absolute path arrives
-  in a prompt header and the read-only sandbox can still read it by path.
+- The runner launches the seat in a scratch cwd with a synthetic empty Git root. This prevents
+  parent-repo `AGENTS.md` discovery during self-review; `--skip-git-repo-check` remains in the
+  portable argv, while the reviewed repo's absolute path arrives in a prompt header and the
+  read-only sandbox can still read it by path.
 - efforts: `{ "default": "high", "max": "xhigh" }`.
 
 **Smoke test:**

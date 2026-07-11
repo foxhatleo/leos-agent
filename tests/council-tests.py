@@ -383,15 +383,18 @@ def main():
     spec = importlib.util.spec_from_file_location("leos_doctor", os.path.join(ROOT, "bin", "leos-doctor.py"))
     doc = importlib.util.module_from_spec(spec); spec.loader.exec_module(doc)
     bad = doc.check_seat_flags("claude", {"host": "claude", "native": {"mode": "subagent", "model": "opus"}, "seats": [
-        {"name": "opus", "transport": "stdin", "argv": ["claude", "--print", "--model", "opus", "--permission-mode", "plan"]}]})
+        {"name": "opus", "provider": "anthropic", "transport": "stdin",
+         "argv": ["claude", "--print", "--model", "opus", "--permission-mode", "plan"]}]})
     check("doctor flags claude seat missing --safe-mode", any("safe-mode" in p for p in bad))
     good = doc.check_seat_flags("claude", {"host": "claude", "native": {"mode": "subagent", "model": "opus"}, "seats": [
-        {"name": "opus", "transport": "stdin", "argv": ["claude", "--safe-mode", "--print", "--no-session-persistence", "--model", "opus", "--permission-mode", "plan"]}]})
+        {"name": "opus", "provider": "anthropic", "transport": "stdin",
+         "argv": ["claude", "--safe-mode", "--print", "--no-session-persistence",
+                  "--model", "opus", "--permission-mode", "plan"]}]})
     check("doctor passes schema-valid claude seat", not good)
     unresolved = doc.check_seat_flags("codex", {"host": "codex",
         "native": {"mode": "exec", "transport": "stdin",
                    "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "-"]},
-        "seats": [{"name": "opus", "transport": "stdin",
+        "seats": [{"name": "opus", "provider": "anthropic", "transport": "stdin",
                    "argv": ["claude", "--safe-mode", "--print", "--no-session-persistence",
                             "--permission-mode", "plan", "--model", "{MODEL}"]}]})
     check("doctor rejects unresolved model placeholders", any("unresolved" in p for p in unresolved))

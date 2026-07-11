@@ -40,14 +40,13 @@ def secure_dir(path: Path) -> None:
         pass
 
 
-def atomic_json(path: Path, data: dict) -> None:
+def atomic_bytes(path: Path, data: bytes) -> None:
     secure_dir(path.parent)
     fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
         os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, sort_keys=True)
-            f.write("\n")
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)
@@ -60,6 +59,10 @@ def atomic_json(path: Path, data: dict) -> None:
             os.unlink(tmp)
         except FileNotFoundError:
             pass
+
+
+def atomic_json(path: Path, data: dict) -> None:
+    atomic_bytes(path, (json.dumps(data, indent=2, sort_keys=True) + "\n").encode("utf-8"))
 
 
 def requirements_sha() -> str:
@@ -191,6 +194,36 @@ def _fix_stale_shebangs(venv: Path) -> None:
             continue
 
 
+def _rollback_runtime_swap(old: Path, previous_state: Optional[bytes]):
+    """Restore the pre-setup runtime and state after a post-swap failure.
+
+    Returns ``(ok, detail)``.  On an incomplete rollback the failed replacement is deliberately
+    retained at the reported path rather than deleting the only remaining recovery artifact.
+    """
+    failed = LOCAL / f".venv-failed-{os.getpid()}"
+    shutil.rmtree(failed, ignore_errors=True)
+    restored = False
+    try:
+        if VENV.exists():
+            os.replace(VENV, failed)
+        if old.exists():
+            os.replace(old, VENV)
+        if previous_state is None:
+            try:
+                STATE.unlink()
+            except FileNotFoundError:
+                pass
+        else:
+            atomic_bytes(STATE, previous_state)
+        restored = True
+        return True, "prior runtime restored" if VENV.exists() else "failed fresh runtime removed"
+    except OSError as exc:
+        return False, f"rollback failed: {exc}; replacement retained at {failed}"
+    finally:
+        if restored:
+            shutil.rmtree(failed, ignore_errors=True)
+
+
 def setup(args) -> int:
     if not REQUIREMENTS.is_file():
         print(f"runtime requirements missing: {REQUIREMENTS}", file=sys.stderr)
@@ -217,6 +250,10 @@ def _setup_locked(args) -> int:
         return 1
     staging = LOCAL / f".venv-staging-{os.getpid()}"
     old = LOCAL / f".venv-old-{os.getpid()}"
+    try:
+        previous_state = STATE.read_bytes()
+    except FileNotFoundError:
+        previous_state = None
     shutil.rmtree(staging, ignore_errors=True); shutil.rmtree(old, ignore_errors=True)
     r = subprocess.run([bootstrap, "-m", "venv", str(staging)], text=True)
     staging_python = staging / "bin" / "python"
@@ -243,7 +280,6 @@ def _setup_locked(args) -> int:
         if VENV.exists():
             os.replace(VENV, old)
         os.replace(staging, VENV)
-        shutil.rmtree(old, ignore_errors=True)
     except OSError as exc:
         if old.exists() and not VENV.exists():
             os.replace(old, VENV)
@@ -254,26 +290,36 @@ def _setup_locked(args) -> int:
     # on the final path rewrites them non-destructively (site-packages and existing interpreter
     # symlinks are kept; --without-pip skips ensurepip churn). Same bootstrap interpreter, so
     # `home =` stays consistent. A fixup failure is a warning — `python -m` entry points work.
-    fixup = subprocess.run([bootstrap, "-m", "venv", "--without-pip", str(VENV)],
-                           text=True, capture_output=True)
-    if fixup.returncode != 0:
-        print("warning: venv path fixup failed; `python -m` entry points remain correct",
-              file=sys.stderr)
-    _fix_stale_shebangs(VENV)
-    current = version_of(str(VENV_PYTHON))
-    atomic_json(STATE, {
-        "requirementsSha": requirements_sha(),
-        "venvPython": str(VENV_PYTHON),
-        "pythonVersion": list(current or ()),
-        "bootstrapPython": bootstrap,
-        "bootstrapVersion": list(bootstrap_version or ()),
-    })
-    final = status()
+    post_swap_error = None
+    try:
+        fixup = subprocess.run([bootstrap, "-m", "venv", "--without-pip", str(VENV)],
+                               text=True, capture_output=True)
+        if fixup.returncode != 0:
+            print("warning: venv path fixup failed; `python -m` entry points remain correct",
+                  file=sys.stderr)
+        _fix_stale_shebangs(VENV)
+        current = version_of(str(VENV_PYTHON))
+        atomic_json(STATE, {
+            "requirementsSha": requirements_sha(),
+            "venvPython": str(VENV_PYTHON),
+            "pythonVersion": list(current or ()),
+            "bootstrapPython": bootstrap,
+            "bootstrapVersion": list(bootstrap_version or ()),
+        })
+        final = status()
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        post_swap_error = str(exc)
+        final = {"ok": False, "postSwapError": post_swap_error}
     print(json.dumps(final, indent=2))
     if not final["ok"]:
-        print("runtime rebuilt but the post-swap health check failed — see status above",
+        restored, detail = _rollback_runtime_swap(old, previous_state)
+        suffix = f" ({post_swap_error})" if post_swap_error else ""
+        print(f"runtime rebuilt but the post-swap health check failed{suffix}; {detail}",
               file=sys.stderr)
         return 1
+    # The prior runtime remains available until every replacement probe passes. Only now is the
+    # upgrade committed and the rollback copy retired.
+    shutil.rmtree(old, ignore_errors=True)
     return 0
 
 

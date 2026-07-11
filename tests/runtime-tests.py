@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 TEST_TMP = os.path.join(ROOT, "local", "test-work")
@@ -93,10 +94,56 @@ def main():
     finally:
         os.environ.pop("LEOS_LOCAL", None)
 
+    # 7. A replacement that fails its post-swap health probe restores both the previous venv and
+    #    its exact state bytes; the known prior runtime is not deleted merely because pip passed.
+    rollback_local = tempfile.mkdtemp(prefix="rtrollback.")
+    os.environ["LEOS_LOCAL"] = rollback_local
+    try:
+        spec2 = importlib.util.spec_from_file_location("leos_runtime_rollback_t", RUNTIME)
+        rollback = importlib.util.module_from_spec(spec2)
+        spec2.loader.exec_module(rollback)
+        old_python = rollback.VENV / "bin" / "python"
+        old_python.parent.mkdir(parents=True)
+        old_python.write_text("old-runtime", encoding="utf-8")
+        previous_state = b'{"requirementsSha":"old-lock","sentinel":"keep-exact"}\n'
+        rollback.STATE.write_bytes(previous_state)
+        calls = {"status": 0}
+
+        def fake_status():
+            calls["status"] += 1
+            return {"ok": False, "phase": "before" if calls["status"] == 1 else "after"}
+
+        def fake_run(argv, **_kwargs):
+            if "venv" in argv and "--without-pip" not in argv:
+                staged_python = rollback.LOCAL / f".venv-staging-{os.getpid()}" / "bin" / "python"
+                staged_python.parent.mkdir(parents=True)
+                staged_python.write_text("new-runtime", encoding="utf-8")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        rollback.status = fake_status
+        rollback.choose_bootstrap = lambda _explicit: ("/fake/bootstrap", (3, 12, 0))
+        real_subprocess_run = rollback.subprocess.run
+        rollback.subprocess.run = fake_run
+        rollback.version_of = lambda _path: (3, 12, 0)
+        rollback.requirements_sha = lambda: "new-lock"
+        rc = rollback._setup_locked(SimpleNamespace(python=None))
+        check("post-swap health failure returns nonzero", rc == 1)
+        check("post-swap health failure restores the prior venv",
+              old_python.read_text(encoding="utf-8") == "old-runtime")
+        check("post-swap health failure restores exact prior state",
+              rollback.STATE.read_bytes() == previous_state)
+        check("post-swap rollback leaves no staging or rollback directories",
+              not any(name.startswith((".venv-staging-", ".venv-old-", ".venv-failed-"))
+                      for name in os.listdir(rollback_local)))
+    finally:
+        if "rollback" in locals() and "real_subprocess_run" in locals():
+            rollback.subprocess.run = real_subprocess_run
+        os.environ.pop("LEOS_LOCAL", None)
+
     total = passed + failed
     print(f"runtime-tests: {passed}/{total} PASS" + (" — ALL PASS" if not failed else f" ({failed} FAIL)"))
     import shutil
-    for d in (local, empty_local, lock_local):
+    for d in (local, empty_local, lock_local, rollback_local):
         shutil.rmtree(d, ignore_errors=True)
     return 1 if failed else 0
 

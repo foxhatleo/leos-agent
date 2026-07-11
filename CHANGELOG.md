@@ -172,3 +172,15 @@ OpenCode and Cursor support.
   statements reconciled with the Codex-native pin (native-only fallback mode genuinely runs the
   session's own model — now stated explicitly); the README's "model versions are never
   hard-coded" principle restored to full strength.
+- `[all]` **Close three residual post-review gaps.** Council scratch directories now establish a
+  synthetic Git project root, so parent-repo instructions cannot regain authority when this clone
+  reviews itself while all state/work remains under `local/`; dispatch fails typed
+  `isolation-error` if the boundary cannot be created. Runtime upgrades retain the prior venv and
+  exact runtime-state bytes until the replacement passes its final health probe, rolling both back
+  on any post-swap failure instead of returning with a broken replacement. Anthropic validation
+  now keys policy to a required external-seat `provider` identity (with the `claude` transport as
+  defense-in-depth) rather than the freely chosen seat display name, including Cursor/OpenRouter
+  fallback transports. The Opus-id recognizer accepts only the `opus` alias or a Claude-namespaced
+  Opus slug—not arbitrary strings that merely contain `opus`. Existing machine-local rosters that
+  predate the `provider` field must be regenerated through SETUP step 5 and reinstalled with
+  `leos-seats.py`; doctor refuses them rather than guessing identity from a display name.

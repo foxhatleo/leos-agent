@@ -21,11 +21,12 @@ Resolve at setup.
 cursor-agent -p --model {MODEL} --mode plan {PROMPT_TEXT}
 ```
 - `--mode plan` requests a read-only agent. Cursor has no `--safe-mode`; recursion isolation =
-  plan mode + the runner launching the seat in an empty scratch cwd by default (Cursor reads
-  `.cursor/rules` / `AGENTS.md` from its cwd, so the reviewed project's agent config never loads
-  into the reviewer; the repo's absolute path arrives in a prompt header instead) — not an
-  absolute OS-level containment guarantee. Set seat `"cwd": "repo"` only if this Cursor version
-  cannot read outside its cwd; that re-opens repo-local instruction injection.
+  plan mode + the runner launching the seat in a scratch cwd with its own synthetic Git root by
+  default (Cursor reads `.cursor/rules` / `AGENTS.md` from its project, so the reviewed project's
+  agent config never loads into the reviewer even during self-review; the repo's absolute path
+  arrives in a prompt header instead) — not an absolute OS-level containment guarantee. Set seat
+  `"cwd": "repo"` only if this Cursor version cannot read outside its cwd; that re-opens repo-local
+  instruction injection.
 - `{PROMPT_TEXT}` replaced in-memory, then shell-quoted.
 
 **Smoke test:**
