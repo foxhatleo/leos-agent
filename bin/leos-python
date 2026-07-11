@@ -13,10 +13,12 @@ while [ -h "$SELF" ]; do
   esac
 done
 ROOT=$(CDPATH= cd -- "$(dirname -- "$SELF")/.." && pwd -P)
-PY="$ROOT/local/.venv/bin/python"
+# Honor LEOS_LOCAL like leos-runtime.py and leos-doctor.py do, so the runtime that setup builds
+# and doctor validates is the one this launcher actually runs.
+PY="${LEOS_LOCAL:-$ROOT/local}/.venv/bin/python"
 
 if [ ! -x "$PY" ]; then
-  echo "Leo's Agents runtime is not installed. Run: python3 $ROOT/bin/leos-runtime.py setup" >&2
+  echo "Leo's Agents runtime is not installed at ${LEOS_LOCAL:-$ROOT/local}/.venv. Run: python3 $ROOT/bin/leos-runtime.py setup" >&2
   exit 127
 fi
 

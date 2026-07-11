@@ -10,6 +10,7 @@ does not exist or needs refreshing.
 """
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -80,17 +81,25 @@ def version_of(executable: str):
 
 
 def choose_bootstrap(explicit: Optional[str]):
-    """Return the first executable CPython >= 3.9, without installing anything globally."""
-    candidates = []
-    if explicit:
-        candidates.append(explicit)
-    elif os.environ.get("LEOS_PYTHON"):
-        candidates.append(os.environ["LEOS_PYTHON"])
-    candidates.extend([f"python3.{n}" for n in range(14, 8, -1)])
-    candidates.extend(["python3", "python"])
+    """Return the first executable CPython >= 3.9, without installing anything globally.
+
+    An EXPLICITLY requested interpreter (--python / LEOS_PYTHON) is authoritative: when it is
+    missing or too old, that is a hard error to surface — never a reason to silently fall back to
+    guessing an ambient python3, which would contradict the error text this tool itself prints."""
+    requested = explicit or os.environ.get("LEOS_PYTHON")
+    if requested:
+        path = requested if os.path.sep in requested else shutil.which(requested)
+        version = version_of(path) if path else None
+        if not path or not version or version < MIN_PYTHON:
+            raise SystemExit(
+                f"requested bootstrap Python {requested!r} (--python/LEOS_PYTHON) is missing or "
+                f"older than {'.'.join(map(str, MIN_PYTHON))}; fix the selection — no ambient "
+                f"interpreter is guessed in its place")
+        return path, version
+    candidates = [f"python3.{n}" for n in range(14, 8, -1)] + ["python3", "python"]
     seen = set()
     for candidate in candidates:
-        path = candidate if os.path.sep in candidate else shutil.which(candidate)
+        path = shutil.which(candidate)
         if not path or os.path.realpath(path) in seen:
             continue
         seen.add(os.path.realpath(path))
@@ -135,11 +144,63 @@ def status() -> dict:
     }
 
 
+@contextlib.contextmanager
+def _runtime_lock():
+    """Serialize venv rebuilds the same way leos-link/merge/block serialize their writes; two
+    concurrent `setup --refresh` runs must not race the stage+swap."""
+    secure_dir(LOCAL)
+    with open(LOCAL / "runtime.lock", "a+") as lock:
+        try:
+            os.chmod(LOCAL / "runtime.lock", 0o600)
+        except OSError:
+            pass
+        try:
+            import fcntl
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        except (ImportError, OSError):
+            pass
+        try:
+            yield
+        finally:
+            try:
+                import fcntl
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            except (ImportError, OSError):
+                pass
+
+
+def _fix_stale_shebangs(venv: Path) -> None:
+    """pip console scripts embed the staging path in their shebangs after the swap; point them at
+    the final interpreter. Everything Leo runs goes through `python -m`, so this is hygiene, not
+    correctness — failures are non-fatal."""
+    python = venv / "bin" / "python"
+    try:
+        entries = list((venv / "bin").iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        try:
+            if entry.is_symlink() or not entry.is_file():
+                continue
+            with open(entry, "rb") as f:
+                first = f.readline()
+            if first.startswith(b"#!") and b".venv-staging-" in first:
+                rest = entry.read_bytes()[len(first):]
+                entry.write_bytes(b"#!" + str(python).encode() + b"\n" + rest)
+        except OSError:
+            continue
+
+
 def setup(args) -> int:
     if not REQUIREMENTS.is_file():
         print(f"runtime requirements missing: {REQUIREMENTS}", file=sys.stderr)
         return 1
     secure_dir(LOCAL)
+    with _runtime_lock():
+        return _setup_locked(args)
+
+
+def _setup_locked(args) -> int:
     # `setup --refresh` is the normal post-pull command. If the lock is unchanged and the private
     # runtime is healthy, it must be an offline no-op rather than making every upgrade depend on a
     # package-index lookup. An unhealthy/stale runtime is rebuilt beside the live one and swapped
@@ -189,6 +250,16 @@ def setup(args) -> int:
         shutil.rmtree(staging, ignore_errors=True)
         print(f"Runtime atomic swap failed; prior runtime restored: {exc}", file=sys.stderr)
         return 1
+    # The renamed venv's pyvenv.cfg/activate scripts still carry the staging path; re-running venv
+    # on the final path rewrites them non-destructively (site-packages and existing interpreter
+    # symlinks are kept; --without-pip skips ensurepip churn). Same bootstrap interpreter, so
+    # `home =` stays consistent. A fixup failure is a warning — `python -m` entry points work.
+    fixup = subprocess.run([bootstrap, "-m", "venv", "--without-pip", str(VENV)],
+                           text=True, capture_output=True)
+    if fixup.returncode != 0:
+        print("warning: venv path fixup failed; `python -m` entry points remain correct",
+              file=sys.stderr)
+    _fix_stale_shebangs(VENV)
     current = version_of(str(VENV_PYTHON))
     atomic_json(STATE, {
         "requirementsSha": requirements_sha(),
@@ -197,7 +268,12 @@ def setup(args) -> int:
         "bootstrapPython": bootstrap,
         "bootstrapVersion": list(bootstrap_version or ()),
     })
-    print(json.dumps(status(), indent=2))
+    final = status()
+    print(json.dumps(final, indent=2))
+    if not final["ok"]:
+        print("runtime rebuilt but the post-swap health check failed — see status above",
+              file=sys.stderr)
+        return 1
     return 0
 
 

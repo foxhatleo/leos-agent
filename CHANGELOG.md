@@ -105,3 +105,12 @@ OpenCode and Cursor support.
   expansion crash fail-open (silently allowing `rm -rf ~root/…`) is fixed. Installed machines see
   a one-time doctor fragment-drift notice per host — re-run `leos-merge --tool <host>` to retire
   the old `git branch` allow entry.
+- `[all]` **Runtime lifecycle honesty.** An explicitly requested bootstrap interpreter
+  (`--python`/`LEOS_PYTHON`) that is missing or older than 3.9 is now a hard error naming the
+  request instead of a silent fallback to an ambient `python3`; `setup` exits nonzero when the
+  freshly swapped runtime fails its own health probe; the venv stage+swap is serialized by
+  `local/runtime.lock` and followed by a path fixup (re-run `venv` + shebang rewrite) so no
+  `.venv-staging-*` path survives in `pyvenv.cfg`/`activate`/console scripts; and
+  `bin/leos-python` honors `LEOS_LOCAL` like `leos-runtime`/`leos-doctor` already did, so the
+  runtime setup builds and doctor validates is the one the launcher runs. New `runtime` test
+  battery (wired into CI, SETUP, and the runbook battery list).

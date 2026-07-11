@@ -47,6 +47,11 @@ def fresh():
     cleanup.append(root)
     repo, local, bindir = (os.path.join(root, n) for n in ("repo", "local", "bin"))
     os.makedirs(repo); os.makedirs(local); os.makedirs(bindir)
+    # bin/leos-python honors LEOS_LOCAL; the runner's council begin/end subprocesses go through
+    # it, so the isolated local needs the real private venv reachable.
+    real_venv = os.path.join(ROOT, "local", ".venv")
+    if os.path.isdir(real_venv):
+        os.symlink(real_venv, os.path.join(local, ".venv"))
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     subprocess.run(["git", "config", "user.email", "t@t.t"], cwd=repo, check=True)
     subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
