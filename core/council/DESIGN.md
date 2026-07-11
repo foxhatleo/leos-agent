@@ -49,14 +49,17 @@ committed (recipes carry a `{MODEL}` placeholder; see `seats.catalog.json`):
 | **Gemini** | Google | `opencode run --agent plan -m openrouter/{MODEL}` | plan agent | clean config dir |
 | **Grok** | xAI | `cursor-agent -p --mode plan` *or* `opencode … openrouter/{MODEL}` | plan mode | clean project dir |
 
-- **The host session's own model is the native reviewer.** For Claude Code the native seat is a
+- **The host's provider supplies the native reviewer.** For Claude Code the native seat is a
   read-only subagent **pinned to Opus** (`model: opus` — the Opus line specifically, never
-  Fable/Mythos). For Codex it is a `codex exec` read-only pass on the host's own model; for
+  Fable/Mythos). For Codex it is a `codex exec` read-only pass pinned at setup to GPT-5.6 Sol
+  unless a higher numeric GPT version has been released; for
   OpenCode/Cursor a `--agent plan` / `--mode plan` self-pass.
 - **External seats = roster minus the host's own provider.** Claude Code host → {GPT, GLM, Gemini,
   Grok}; Codex host → {Opus, GLM, Gemini, Grok}; etc. So the council is at most native + 4 = 5.
 - **The Anthropic role is always the Opus line** (alias `opus` tracks the latest Opus) — never the
   Claude-5 / Mythos-class line (Fable, Mythos).
+- **The OpenAI role uses GPT-5.6 Sol as its floor and preference.** Replace it only when a GPT
+  release with a higher numeric version exists; the exact supported slug remains machine-local.
 - **No runtime model discovery.** Setup resolves slugs and writes them to `local/seats.<host>.json`.
 - **Reviewers run with the transport's read-only restrictions** and may read/grep the repo to
   verify claims, but never modify it. OpenCode/Cursor plan modes are capability requests, not an

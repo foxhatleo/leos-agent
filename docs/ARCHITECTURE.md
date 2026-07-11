@@ -66,7 +66,8 @@ gains and the guardrails:
 ## Council: host = native, roster minus host = external
 
 The five flagship roles are fixed; the exact model slug is resolved at setup and never committed
-(provider versions change). The host's own model is the
+(provider versions change). OpenAI resolves to GPT-5.6 Sol unless a higher numeric GPT version has
+been released. The host's native seat is the
 native reviewer; the other four flagships (minus the host's provider) are external. The Anthropic
 seat is always the **Opus line** — never Fable or Mythos.
 

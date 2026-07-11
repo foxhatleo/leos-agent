@@ -3,7 +3,9 @@
 Serves the **GPT** external seat (when the host is NOT Codex). Also the NATIVE seat when the host
 IS Codex.
 
-**Model:** the latest Codex/GPT flagship. Resolve its `-m` slug at setup and store it only in
+**Model:** GPT-5.6 Sol unless OpenAI has released a GPT model with a higher numeric version. Only a
+higher version supersedes Sol; do not choose a same-version sibling merely because it is newer or
+differently named. Resolve the exact `-m` slug supported by this CLI at setup and store it only in
 `local/seats.<host>.json`.
 
 **Install / auth:** `codex --version`; auth via the normal Codex login.
@@ -26,4 +28,5 @@ env LEOS_COUNCIL_SEAT=1 codex exec --ephemeral --sandbox read-only \
 Expect JSONL events with a final response. Never use `codex review` (its output contract differs
 from the findings JSON); the runner classifies missing/invalid JSONL explicitly.
 
-**Native use (host IS Codex):** same argv without `-m` (uses the host's own model).
+**Native use (host IS Codex):** use the same pinned `-m {MODEL}` argv. The setup-time OpenAI rule
+applies to both native and external Codex seats.

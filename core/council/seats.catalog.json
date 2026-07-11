@@ -21,25 +21,25 @@
     },
     {
       "role": "gpt", "provider": "openai",
-      "modelGuidance": "The latest Codex/GPT flagship. Resolve its transport-specific slug at setup; never commit it.",
+      "modelGuidance": "Use GPT-5.6 Sol unless OpenAI has released a GPT model with a higher numeric version; only a higher version supersedes Sol. Resolve the exact transport-specific slug at setup and never commit it.",
       "recursionDisable": "LEOS_COUNCIL_SEAT sentinel + --ephemeral + --sandbox read-only; normal CODEX_HOME is retained for authentication",
       "asNative": {
         "mode": "exec", "transport": "stdin",
-        "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort={EFFORT}", "-"],
+        "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort={EFFORT}", "-m", "{MODEL}", "-"],
         "efforts": { "default": "high", "max": "xhigh" },
-        "note": "native pass uses the host's own configured model (no -m); it IS the host's model by definition"
+        "note": "native Codex pass pins the setup-resolved OpenAI model: GPT-5.6 Sol unless a higher numeric GPT version has been released"
       },
       "asExternal": {
         "transport": "stdin",
         "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort={EFFORT}", "-m", "{MODEL}", "-"],
         "efforts": { "default": "high", "max": "xhigh" },
-        "note": "Uses the host's normal authentication. --ephemeral prevents session files; the inherited LEOS_COUNCIL_SEAT sentinel mechanically refuses nested Leo councils."
+        "note": "On any non-Codex host, use GPT-5.6 Sol unless a higher numeric GPT version has been released. Uses the host's normal authentication. --ephemeral prevents session files; the inherited LEOS_COUNCIL_SEAT sentinel mechanically refuses nested Leo councils."
       },
       "asExternalCursor": {
         "transport": "arg",
         "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
         "efforts": { "default": "high", "max": "xhigh" },
-        "note": "GPT/OpenAI model via Cursor when the codex CLI is absent (confirm the Cursor slug with `cursor-agent --list-models`). Isolation = read-only `--mode plan` in a clean dir instead of an isolated CODEX_HOME."
+        "note": "GPT/OpenAI model via Cursor when the codex CLI is absent: select GPT-5.6 Sol unless a higher numeric GPT version has been released, then confirm the exact Cursor slug with `cursor-agent --list-models`. Isolation = read-only `--mode plan` in a clean dir instead of an isolated CODEX_HOME."
       }
     },
     {

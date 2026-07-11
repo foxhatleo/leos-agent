@@ -16,8 +16,8 @@ Host-specific steps layered on the shared `docs/SETUP.md` interview.
    is **advisory** (model guidance), and secret-*reads* are hook/sandbox-mediated only, NOT
    pattern-enforced. Do NOT paste Claude `permissions.allow`/`deny` strings into Codex config.
 5. **Council seats** — use `bin/leos-seats.py` as described in shared setup: native = `codex exec
-   --ephemeral` read-only pass on the
-   host's own model (no `-m`); externals = roster minus OpenAI = {Opus, GLM, Gemini, Grok}. For the
+   --ephemeral` read-only pass pinned with `-m` to GPT-5.6 Sol, unless a GPT model with a higher
+   numeric version has been released; externals = roster minus OpenAI = {Opus, GLM, Gemini, Grok}. For the
    Opus seat use `claude --safe-mode --no-session-persistence` (Opus line only). Codex external
    seats retain normal authentication and use `--ephemeral`. Resolve slugs and run driver smokes.
 6. **Restart** Codex so hooks load, and **trust `hooks.json` once** via `/hooks` (or use

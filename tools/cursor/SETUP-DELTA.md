@@ -19,7 +19,9 @@ installed.
    static fallback that is not present.
 5. **Council seats** — install through `bin/leos-seats.py`: native = `cursor-agent -p --mode plan` on the
    host's own model (usually Grok); externals = roster minus xAI = {Opus, GPT, GLM, Gemini}. Resolve
-   the Grok slug via `cursor-agent --list-models`.
+   the Grok slug via `cursor-agent --list-models`. For the external GPT seat, select the Cursor slug
+   for GPT-5.6 Sol unless a GPT model with a higher numeric version has been released; confirm the
+   exact slug with `cursor-agent --list-models`.
 6. **Caveats:** no verified global CLI instruction file (coverage is per-project `AGENTS.md`); no
    Stop-event hook (council runs via the skill, not an automatic nudge). No session-persistence-off
    flag is assumed; disclose this before approving Cursor as an external transport.

@@ -9,7 +9,7 @@ Cursor** — from one repo, one source of truth. It installs a small, shared lay
   a complete command-policy sandbox.
 - **A trust-gated format-on-edit hook** (auto-format + lint feedback for JS/TS, Python, Go, Rust
   only after the project root is explicitly listed in gitignored `local/format-trust.json`).
-- **A multi-model review council**: your host's own model reviews your work alongside other-lineage
+- **A multi-model review council**: your host's native review seat checks your work alongside other-lineage
   flagships (Opus, GPT, GLM, Gemini, Grok), at plan and implementation checkpoints. An explicit
   runner records every CLI seat's completed/empty/invalid/error/timeout result and prevents nested
   Leo's Agents councils; seats may still use ordinary subagents.
@@ -37,8 +37,9 @@ One `AGENTS.md` serves every tool for instructions; one `SKILL.md` for the counc
    to do the others on request. For each host it creates the symlinks, merges the settings
    fragments, adds the global-instruction reference (so your own instructions are never clobbered),
    and — for the council — asks which reviewer transports you want and resolves each model's current
-   flagship slug (stored machine-locally, never committed). Model versions are **never hard-coded**;
-   today's Opus/GPT are already about to be superseded.
+   flagship slug (stored machine-locally, never committed). Exact transport slugs are **never
+   hard-coded**; selection policy may name a baseline line (currently GPT-5.6 Sol) that is replaced
+   only when its stated upgrade condition is met.
 
 Nothing is installed until you run setup — cloning alone is inert.
 
