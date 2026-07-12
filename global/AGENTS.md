@@ -27,6 +27,13 @@ council scores the diff's risk and convenes your native model plus other-lineage
 as the tier warrants. If a `Stop`-hook nudge says a council marker is missing, either run the
 council or record a logged override — don't finish silently.
 
+Project controls: a repository-root `.council-off` disables council for that project; do not
+convene one or record an override. A canonical project path in the machine-local
+`local/council/config.json` `disabledProjects` list does the same without a repository file. A
+repository-root `.council.json` can tune `riskGlobs`, `defaultBranch`, and the `smallLines`,
+`smallFiles`, `largeLines`, and `largeFiles` thresholds; these settings can raise sensitivity or
+alter blast-radius classification, but never lower the computed risk floor.
+
 **Seat exemption (critical):** if the environment variable `LEOS_COUNCIL_SEAT` is set, **you are a
 council seat, not an orchestrator** — do your single read-only review and return only your findings.
 Do NOT convene Leo's Agents' council, do NOT run the council skill, and do NOT write an override

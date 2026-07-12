@@ -47,6 +47,15 @@ creates `local/.venv` and installs the hash-locked TOML dependency in `requireme
 Every subsequent Leo command below uses `bin/leos-python`; do not activate the venv or rely on the
 interpreter a host happens to find.
 
+Configure Git's global excludes for the repository-local council controls. This uses the existing
+`core.excludesFile` when one is configured; otherwise it creates `~/.gitignore` and configures Git
+to use it. It backs up an existing file before appending `.council-off` and `.council.json`, and is
+idempotent:
+
+```
+bin/leos-python bin/leos-gitignore.py
+```
+
 ## Step 3 — per host: link → merge → seats → verify
 
 For EACH chosen host `<H>`, read `tools/<H>/SETUP-DELTA.md` and do:
@@ -148,6 +157,7 @@ Run all batteries and the doctor; ALL must pass:
 ```
 bin/leos-python tests/guard-tests.py && bin/leos-python tests/fmt-tests.py \
   && bin/leos-python tests/council-tests.py && bin/leos-python tests/runner-tests.py \
+  && bin/leos-python tests/gitignore-tests.py \
   && bin/leos-python tests/merge-tests.py && bin/leos-python tests/link-tests.py \
   && bin/leos-python tests/block-tests.py && bin/leos-python tests/inject-tests.py \
   && bin/leos-python tests/uninstall-tests.py && bin/leos-python tests/runtime-tests.py \

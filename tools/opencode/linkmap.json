@@ -5,7 +5,7 @@
     { "dest": "~/.config/opencode/plugins/leos-guard.ts", "src": "tools/opencode/plugin/leos-guard.ts", "note": "OpenCode loads local plugins from plugins/; the plugin self-locates the shared guard" },
     { "dest": "~/.config/opencode/leos-python", "src": "bin/leos-python", "note": "private-runtime launcher for plugin-backed guard" },
     { "dest": "~/.config/opencode/council/bin/council.py", "src": "core/council/bin/council.py", "note": "BIN for the council skill on OpenCode host" },
-    { "dest": "~/.agents/skills/council", "src": "core/skills/council", "type": "dir", "note": "OpenCode reads ~/.agents/skills natively; shared symlink" }
+    { "dest": "~/.agents/skills/council", "src": "core/skills/council", "type": "dir", "shared": true, "note": "OpenCode reads ~/.agents/skills natively; shared symlink" }
   ],
   "retiredLinks": [
     { "dest": "~/.config/opencode/AGENTS.md", "was": "global/AGENTS.md", "note": "REMOVED: the whole-file symlink clobbered the user's global instructions — replaced by an additive `instructions[]` entry ({{CLONE_ROOT}}/global/AGENTS.md) in the merged opencode.json. leos-doctor flags a leftover clone-symlink here." }

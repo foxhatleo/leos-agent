@@ -5,7 +5,7 @@
     { "dest": "~/.cursor/leos-python", "src": "bin/leos-python", "note": "private-runtime launcher for the Cursor guard adapter" },
     { "dest": "~/.cursor/hooks/guard-adapter.py", "src": "tools/cursor/guard-adapter.py" },
     { "dest": "~/.cursor/council/bin/council.py", "src": "core/council/bin/council.py", "note": "BIN for the council skill on Cursor host" },
-    { "dest": "~/.agents/skills/council", "src": "core/skills/council", "type": "dir", "note": "Cursor reads ~/.agents/skills natively (v2.4+); shared symlink" }
+    { "dest": "~/.agents/skills/council", "src": "core/skills/council", "type": "dir", "shared": true, "note": "Cursor reads ~/.agents/skills natively (v2.4+); shared symlink" }
   ],
   "merges": [
     { "dest": "~/.cursor/hooks.json", "fragment": "tools/cursor/hooks.json", "strategy": "merge-json" },

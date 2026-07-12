@@ -42,14 +42,15 @@ live in [`global/AGENTS.md`](global/AGENTS.md).)
 ## Do it
 
 Run the interview in [`docs/SETUP.md`](docs/SETUP.md) top to bottom. Create the private runtime
-before any link/merge operation. It detects the installed hosts
+before any link/merge operation, then run `bin/leos-python bin/leos-gitignore.py` to add the two
+repository-local council controls to Git's global excludes without duplicating entries. It detects the installed hosts
 (Claude Code / Codex / OpenCode / Cursor) but **by default configures only your own host** — the
 one you (the installing agent) are running on (Claude→`claude`, Codex→`codex`, etc.); the other
 detected hosts are offered, not auto-configured, and only added when Leo explicitly asks. For each
 host you configure: `leos-link` → `leos-merge` → `leos-block` (Claude only) → validated
 `leos-seats.py write` after driver smokes → verify. The
 per-host specifics live in `tools/<host>/SETUP-DELTA.md`. Before declaring done, run **all test
-batteries** (`tests/{guard,fmt,council,runner,merge,link,block,inject,uninstall,runtime,seats}-tests.py`, contamination,
+batteries** (`tests/{guard,fmt,council,runner,gitignore,merge,link,block,inject,uninstall,runtime,seats}-tests.py`, contamination,
 and policy checks) and `bin/leos-doctor.py`
 — all must pass.
 

@@ -7,6 +7,7 @@ Run: bin/leos-python tests/link-tests.py
 """
 
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -106,6 +107,15 @@ def main():
     check("CODEX_HOME link install succeeds", r.returncode == 0)
     check("CODEX_HOME receives Codex hooks", os.path.islink(cguard) and
           os.path.realpath(cguard) == os.path.join(ROOT, "core", "hooks", "bash-guard.py"))
+
+    # A shared council skill link appears in multiple host link maps, but must not make doctor
+    # classify every consumer host as configured. At this point only Claude and Codex were linked.
+    doctor = subprocess.run([sys.executable, os.path.join(ROOT, "bin", "leos-doctor.py")],
+                            capture_output=True, text=True, env=env)
+    report = json.loads(doctor.stdout).get("report", [])
+    configured = {item.get("tool") for item in report if item.get("configured")}
+    check("shared skill link does not imply other configured hosts",
+          configured == {"claude", "codex"})
 
     # 8. OpenCode's automatic plugin discovery is the plural plugins/ directory.
     env = dict(os.environ, HOME=home, LEOS_LOCAL=os.path.join(home, "local"))

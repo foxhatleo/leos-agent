@@ -6,7 +6,7 @@
     { "dest": "{{CODEX_HOME}}/hooks/bash-guard.py", "src": "core/hooks/bash-guard.py" },
     { "dest": "{{CODEX_HOME}}/hooks/format-on-edit.py", "src": "core/hooks/format-on-edit.py" },
     { "dest": "{{CODEX_HOME}}/council/bin/council.py", "src": "core/council/bin/council.py" },
-    { "dest": "~/.agents/skills/council", "src": "core/skills/council", "type": "dir", "note": "Codex reads ~/.agents/skills natively; shared with OpenCode/Cursor" },
+    { "dest": "~/.agents/skills/council", "src": "core/skills/council", "type": "dir", "shared": true, "note": "Codex reads ~/.agents/skills natively; shared with OpenCode/Cursor" },
     { "dest": "{{CODEX_HOME}}/hooks/inject-instructions.py", "src": "core/hooks/inject-instructions.py", "note": "SessionStart injector — emits global/AGENTS.md as additionalContext (additive; the user's ~/.codex/AGENTS.md is untouched and still loads)" }
   ],
   "retiredLinks": [

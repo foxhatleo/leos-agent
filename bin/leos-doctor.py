@@ -386,7 +386,10 @@ def configured_hosts():
             hosts.add(tool)
             continue
         lm = load_json(os.path.join(REPO_ROOT, "tools", tool, "linkmap.json"), {})
-        if any(os.path.islink(expand_path(e["dest"])) for e in lm.get("links", [])):
+        # A shared cross-host link (currently ~/.agents/skills/council) is installed once and
+        # appears in several host link maps. It cannot prove which of those hosts was configured.
+        if any(not e.get("shared") and os.path.islink(expand_path(e["dest"]))
+               for e in lm.get("links", [])):
             hosts.add(tool)
             continue
         if any(m["dest"] in merges or m["dest"].replace("{{CODEX_HOME}}", "~/.codex") in merges
