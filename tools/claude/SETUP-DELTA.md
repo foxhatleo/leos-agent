@@ -16,11 +16,13 @@ Host-specific steps layered on the shared `docs/SETUP.md` interview.
    mutating Git commands use normal host confirmation.
 5. **Council seats** — install through `bin/leos-seats.py` into the unified `seats[]` array (no
    top-level `native`). Claude's own-provider seat is `{"mode":"subagent","model":"opus",...}`
-   (Opus line only — never Fable/Mythos; minTier 1). The seven target roles, their transport
+   (Opus line only — never Fable/Mythos; minTier 2 — diversity-first: the own-provider seat is
+   never the sole tier-1 reviewer, so the lead-foreign GPT seat takes minTier 1). The seven target roles, their transport
    preference (best → fallback), and `minTier` presets: **opus** (subagent on Claude = the
    own-provider seat; or `claude` CLI → cursor → opencode elsewhere, `opus-4.8` /
-   `claude-opus-4-8`, minTier 1), **gpt** (codex → cursor → opencode; `gpt-5.6-sol` per the OpenAI
-   flavor rule — most capable flavor of the newest GPT generation, minTier 2), **grok** (cursor →
+   `claude-opus-4-8`, minTier 2 — own-provider, never the sole tier-1 reviewer), **gpt** (codex →
+   cursor → opencode; `gpt-5.6-sol` per the OpenAI flavor rule — most capable flavor of the newest
+   GPT generation; the lead-foreign tier-1 seat, minTier 1), **grok** (cursor →
    opencode; `grok-4.5`, minTier 3), **glm** (cursor → opencode; `glm-5.2`, minTier 4), **gemini**
    (cursor → opencode; `gemini-3.1-pro`, minTier 4), **mimo** (opencode only;
    `xiaomi/mimo-v2.5-pro`, minTier 4), **deepseek** (opencode only; `deepseek/deepseek-v4-pro`,
