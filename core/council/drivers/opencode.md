@@ -23,9 +23,10 @@ experimental.
 | DeepSeek | `deepseek/deepseek-v4-pro` |
 
 OpenRouter's canonical vendor prefixes are hyphenated: xAI is **`x-ai/`** (not `xai/`) and Zhipu/GLM
-is **`z-ai/`** (not `zhipu/`); `google/`, `openai/`, `anthropic/`, `deepseek/` are as written. **Verify
-each slug on openrouter.ai at setup** — in particular confirm the `xiaomi/` MiMo namespace actually
-exists there (it could not be confirmed) before relying on it; MiMo has no alternate transport.
+is **`z-ai/`** (not `zhipu/`); `google/`, `openai/`, `anthropic/`, `deepseek/` are as written. The
+`xiaomi/` MiMo namespace is live on OpenRouter (`xiaomi/mimo-v2.5-pro` verified). Still **re-verify
+each slug on openrouter.ai at setup** — model IDs get renamed and retired — and note MiMo has no
+alternate transport, so if its slug ever drops, the seat drops with it.
 
 **Install / auth:** `opencode --version`; set `OPENROUTER_API_KEY` (or configure the provider).
 
