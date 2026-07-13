@@ -1,0 +1,21 @@
+bin/leos-merge.py
+  s_cead55dca6b296::t_083752c24dc296 520-528,565-566,568-573
+tests/merge-tests.py
+  s_cead55dca6b296::t_4360e573da6146 205-206,208-212
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "c1f79c5a4f2dfcaf05e11ac67fb9bcb1eb5d47b6",
+  "prompts": {},
+  "sessions": {
+    "s_cead55dca6b296": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "07b8b475-9b3d-427a-af7c-758b41269020",
+        "model": "unknown"
+      },
+      "human_author": "Wenhao \"Leo\" Liang <36321327+foxhatleo@users.noreply.github.com>"
+    }
+  }
+}
