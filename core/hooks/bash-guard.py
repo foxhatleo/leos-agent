@@ -264,10 +264,12 @@ def check_rm(tokens, cwd, cd_context):
 
 
 def check_find(tokens, cwd, cd_context, statement):
-    """find -delete and find -exec/-ok rm are recursive deletes wearing a find hat; block
-    when any path operand in the statement is critical or home-level. Bare `find -delete`
-    with no path (cwd-relative) stays allowed when cwd is a known project dir, matching
-    the rm branch's cwd handling."""
+    """find -delete and find -exec/-ok/-execdir/-okdir rm are recursive deletes wearing a find
+    hat; block when any path operand (after expand) is critical or unexpanded/unknown. Bare
+    `find -delete` with no path (cwd-relative) stays allowed when cwd is a known project dir,
+    matching the rm branch's cwd handling. Path operands are expanded and classified via
+    is_critical (the caller's own home subtree is exempt there), so ~/$HOME spellings of the
+    caller's own project behave like `rm -rf ~/project/...` rather than false-blocking."""
     rest = tokens[1:]
     deleting = False
     i = 0
@@ -275,8 +277,8 @@ def check_find(tokens, cwd, cd_context, statement):
         t = rest[i]
         if t == "-delete":
             deleting = True
-        elif t in ("-exec", "-ok"):
-            # The token after -exec/-ok (skipping find's own flags) is the command to run.
+        elif t in ("-exec", "-ok", "-execdir", "-okdir"):
+            # The token after the -exec* predicate (skipping find's own flags) is the command.
             j = i + 1
             while j < len(rest) and rest[j].startswith("-") and rest[j] not in (";", "+"):
                 j += 1
@@ -285,15 +287,23 @@ def check_find(tokens, cwd, cd_context, statement):
         i += 1
     if not deleting:
         return None
-    # Unknown working directory: a bare `find -delete` sweeps cwd unverifiably.
-    has_path_operand = any(
-        not t.startswith("-") and (t.startswith("/") or t == "~" or t.startswith("~/") or t.startswith("~"))
-        for t in rest
-    )
+    # Collect path operands: non-flag tokens that are not the find predicate payload. A bare
+    # `find -delete` (no path) sweeps cwd; that is unverifiable without a known cwd.
+    path_operands = []
+    has_path_operand = False
+    for t in rest:
+        if t.startswith("-") or t in (";", "+") or t.startswith("{}"):
+            continue
+        has_path_operand = True
+        path_operands.append(t)
     if not has_path_operand and not (cwd or cd_context):
         return "find -delete / find -exec rm with unknown working directory"
-    if HOME_REF.search(statement) or statement_has_critical_literal(statement, cwd, cd_context):
-        return "find -delete / find -exec rm targeting a home/root/system path"
+    for raw in path_operands:
+        for candidate in brace_variants(expand(raw, cwd, cd_context)):
+            if candidate == UNKNOWN_PATH:
+                return f"find delete/exec with unexpanded shell path '{raw}'"
+            if is_critical(candidate):
+                return f"find -delete / find -exec rm targeting '{raw}'"
     return None
 
 
@@ -421,7 +431,18 @@ def main():
         if not isinstance(command, str) or not command:
             return 0
         cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else None
-        reason = check(command, cwd)
+        try:
+            reason = check(command, cwd)
+        except Exception:
+            # Fail CLOSED: a bug inside check()/is_critical() during a guardable Bash command must
+            # not let a catastrophic deletion through. The host wrappers map any non-zero -> deny,
+            # so re-raise as a block rather than swallowing it as exit 0. (Non-Bash tool_names and
+            # unparseable payloads are still returned 0 above, since those are not guardable.)
+            sys.stderr.write(
+                "[bash-guard] BLOCKED — internal error while evaluating the command. "
+                "Failing closed: this command class is irreversible, so a guard fault denies it.\n"
+            )
+            return 43
         if reason:
             sys.stderr.write(
                 f"[bash-guard] BLOCKED — {reason}. This command class is irreversible at "

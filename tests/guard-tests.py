@@ -72,6 +72,11 @@ BLOCK = [
     "find /etc -delete",
     r"find /etc -exec rm -rf {} \;",
     "find / -delete",
+    "find / -execdir rm -rf {} +",          # -execdir variant (was a bypass)
+    "find /etc -okdir rm -rf {} +",         # -okdir variant (was a bypass)
+    "find /Users/$USER -delete",            # unexpanded var operand (was a bypass)
+    "find $(echo /) -delete",               # command-substitution operand (was a bypass)
+    "find /private -delete",
     # --- xargs rm without -r (recursion flag is irrelevant for a fed critical path) ---
     "find /etc | xargs rm",
     "echo /etc/passwd | xargs rm",
@@ -109,6 +114,8 @@ ALLOW = [
     r'find . -name "*.tmp" -delete',
     "find . -name node_modules -exec rm -rf {} +",
     r'find src -name "*.pyc" -exec rm {} +',
+    "find ~/project -name '*.tmp' -delete",  # own home subtree (exempt like rm -rf ~/project/...)
+    "find $HOME/project/build -delete",
 ]
 
 

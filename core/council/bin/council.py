@@ -923,7 +923,12 @@ def cmd_mark(args):
     _write_pointer(cwd, "nudge-state.json", ns)
     with _in_review_lock(cwd):
         ir = _read_pointer(cwd, "in-review.json") or {}
-        if ir.get("checkpoint") == args.checkpoint:
+        # Re-validate under the lock: only clear a marker this mark actually owns. Without this,
+        # a mark for run A could clear run B's fresh marker (same checkpoint) if A's ownership
+        # check raced ahead of B's begin. Require checkpoint match AND run_id match (or the legacy
+        # no-run_id path, which keeps checkpoint-scoped clearing for manual/Stop-hook flows).
+        if ir.get("checkpoint") == args.checkpoint and (
+                not args.run_id or not ir.get("run_id") or ir.get("run_id") == args.run_id):
             _remove_pointer(cwd, "in-review.json")
     append_ledger(cwd, {"type": "marker", **data})
     print(f"marked {status}: {h}")

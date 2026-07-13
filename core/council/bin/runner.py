@@ -211,12 +211,15 @@ def follow_up_preflight(cwd, args):
 
 def resolve_follow_up(cwd, run_id, follow_up_flag):
     """Pick the work-dir pass for status/stop. When the caller did NOT pass --follow-up,
-    auto-detect a dispatched pass-2 (launcher.json present) so `stop --run-id R` and
-    `status --run-id R` target pass-2 even when the caller forgot the flag — the SKILL.md
-    stop example documents exactly that bare form. --follow-up remains an explicit override."""
+    auto-detect a dispatched pass-2 so `stop --run-id R` and `status --run-id R` target pass-2
+    even when the caller forgot the flag — the SKILL.md stop example documents exactly that bare
+    form. --follow-up remains an explicit override. Detection keys on ANY pass-2 scaffolding
+    (reservation.json is written before Popen, launcher.json after), so the bare form also covers
+    the window between mkdir and launcher.json being written."""
     if follow_up_flag:
         return True
-    return (run_work(cwd, run_id, False) / "pass-2" / "launcher.json").is_file()
+    pass2 = run_work(cwd, run_id, False) / "pass-2"
+    return any((pass2 / name).is_file() for name in ("launcher.json", "reservation.json", "job.json"))
 
 
 def read_events(path, limit=20):
@@ -1035,14 +1038,29 @@ def cmd_start(args):
     # child printed instead of the generic launcher-exited-without-result.
     if proc.poll() is not None and not (work / "result.json").exists():
         child_status = _read_child_status(stdout_path)
+        # Preserve the launcher logs (they live under work/) before tearing the work dir down,
+        # so an operator can inspect why the detached launch failed. Stage them under the parent
+        # run dir, which the reservation owns and a retry cleans up.
+        log_keep = []
+        for log_src, log_name in ((stdout_path, "pass-2-launcher.stdout.txt" if args.follow_up else "launcher.stdout.txt"),
+                                  (stderr_path, "pass-2-launcher.stderr.txt" if args.follow_up else "launcher.stderr.txt")):
+            try:
+                if os.path.exists(log_src):
+                    kept = work.parent / log_name
+                    os.replace(log_src, kept)
+                    log_keep.append(str(kept))
+            except OSError:
+                pass
         shutil.rmtree(work, ignore_errors=True)
         if child_status:
             print(json.dumps(child_status, indent=2))
             return 0 if child_status.get("ok") else 1
         print(json.dumps({"ok": False, "state": "terminal", "terminal": True,
                            "status": "launcher-exited-without-result",
-                           "runId": run_id, "stdoutPath": str(stdout_path),
-                           "stderrPath": str(stderr_path)}, indent=2))
+                           "runId": run_id,
+                           "stdoutPath": log_keep[0] if len(log_keep) > 0 else str(stdout_path),
+                           "stderrPath": log_keep[1] if len(log_keep) > 1 else str(stderr_path)},
+                          indent=2))
         return 1
     payload = status_payload(cwd, run_id, args.follow_up)
     payload.update(started=payload.get("state") == "running", launcherPath=str(launcher_path),
