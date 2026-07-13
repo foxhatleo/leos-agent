@@ -33,6 +33,30 @@ import sys
 HOME = os.path.realpath(os.path.expanduser("~"))
 
 
+def _fs_case_insensitive(path):
+    """True if `path` lives on a case-insensitive filesystem (default macOS APFS/HFS+).
+
+    os.path.realpath does NOT canonicalize case, so is_critical would compare `/users` against
+    `/Users` and miss it — a one-character case change bypassing the guard on the platform it
+    primarily runs on. When True, is_critical casefolds its comparisons. Fails safe to False
+    (exact matching) if the probe can't run."""
+    try:
+        base = os.path.realpath(path)
+        flipped = base.upper() if base != base.upper() else base.lower()
+        return flipped != base and os.path.exists(flipped) and os.path.samefile(base, flipped)
+    except OSError:
+        return False
+
+
+CASE_INSENSITIVE = _fs_case_insensitive(HOME)
+_RE_CASE_FLAG = re.IGNORECASE if CASE_INSENSITIVE else 0
+
+
+def _norm_case(text):
+    """Casefold for comparison only on a case-insensitive FS (identity on POSIX/case-sensitive)."""
+    return text.casefold() if CASE_INSENSITIVE else text
+
+
 def _repo_local(name):
     """Path to <repo>/local/<name>, located relative to this script even when it is
     invoked through a symlink from a tool home. core/hooks/bash-guard.py -> repo root."""
@@ -80,6 +104,14 @@ UNKNOWN_PATH = "<unexpanded-shell-path>"
 PREFIX_CRITICAL = ("/bin", "/boot", "/etc", "/lib", "/lib64", "/sbin", "/usr",
                    "/System", "/Library", "/Applications", "/dev", "/root", "/private")
 PREFIX_EXEMPT = ("/var/folders", "/var/tmp", "/private/var/folders", "/private/tmp")
+
+# Case-normalized once (identity on a case-sensitive FS, casefolded on macOS) so is_critical never
+# re-casefolds the constant sets per call and Linux keeps exact matching.
+_CRITICAL_DIRS_CI = {_norm_case(d) for d in CRITICAL_DIRS}
+_HOME_TOPLEVEL_CI = {_norm_case(d) for d in HOME_TOPLEVEL}
+_HOME_CI = _norm_case(HOME)
+_PREFIX_CRITICAL_CI = tuple(_norm_case(p) for p in PREFIX_CRITICAL)
+_PREFIX_EXEMPT_CI = tuple(_norm_case(p) for p in PREFIX_EXEMPT)
 
 
 def tokenize(segment):
@@ -197,25 +229,36 @@ def is_critical(path):
     if not path:
         return False
     starred = path.endswith(("/*", "/.*")) or path in ("/*", "*")
-    norm = os.path.normpath(re.sub(r"/\.?\*$", "", path)) if starred else os.path.normpath(path)
-    if norm in CRITICAL_DIRS or norm in HOME_TOPLEVEL:
+    if starred:
+        # A rooted content-glob strips to empty: `/*` and `/.*` mean "everything under root", so
+        # they ARE root-scale. normpath("") is "." (harmless-looking cwd) — map the emptied rooted
+        # glob back to "/" instead, or `rm -rf /*` (which --preserve-root does NOT stop) slips past.
+        stripped = re.sub(r"/\.?\*$", "", path)
+        norm = os.path.normpath(stripped) if stripped else "/"
+        if norm == "." and path.startswith("/"):
+            norm = "/"
+    else:
+        norm = os.path.normpath(path)
+    cnorm = _norm_case(norm)
+    if cnorm in _CRITICAL_DIRS_CI or cnorm in _HOME_TOPLEVEL_CI:
         return True
     # The caller's OWN home subtree is exempt (routine project deletes are allowed).
-    if norm.startswith(HOME + "/"):
+    if cnorm.startswith(_HOME_CI + "/"):
         return False
     if norm.startswith("/") and not any(
-            norm == e or norm.startswith(e + "/") for e in PREFIX_EXEMPT):
-        for p in PREFIX_CRITICAL:
-            if norm == p or norm.startswith(p + "/"):
+            cnorm == e or cnorm.startswith(e + "/") for e in _PREFIX_EXEMPT_CI):
+        for p in _PREFIX_CRITICAL_CI:
+            if cnorm == p or cnorm.startswith(p + "/"):
                 return True
         # /var and its macOS alias /private/var (temp dirs exempted above)
-        if norm == "/var" or norm.startswith("/var/") \
-                or norm == "/private/var" or norm.startswith("/private/var/"):
+        if cnorm == "/var" or cnorm.startswith("/var/") \
+                or cnorm == "/private/var" or cnorm.startswith("/private/var/"):
             return True
         # ANY OTHER user's home tree (root or any depth) under /Users or /home.
         # The caller's own home was already exempted above, so this only fires for
-        # other users' homes — critical on shared boxes, at any depth.
-        if re.match(r"^/(Users|home)/[^/]+(/.*)?$", norm):
+        # other users' homes — critical on shared boxes, at any depth. IGNORECASE only on a
+        # case-insensitive FS, so `/users/other` is caught on macOS without over-blocking Linux.
+        if re.match(r"^/(Users|home)/[^/]+(/.*)?$", norm, _RE_CASE_FLAG):
             return True
     return False
 
@@ -410,7 +453,21 @@ def check_statement(statement, cwd, cd_context):
     return None, cd_context
 
 
+_IFS_RE = re.compile(r"\$\{IFS(?:[:#%/^,][^}]*)?\}|\$IFS(?![A-Za-z0-9_])")
+
+
+def _normalize_ifs(command):
+    """Model shell IFS word-splitting so a flag-glued target can't hide from the tokenizer.
+
+    `$IFS` / `${IFS}` / `${IFS:-...}` expand to whitespace at runtime, so `rm -rf${IFS}/` actually
+    executes as `rm -rf /`. shlex.split does not expand them, leaving `-rf${IFS}/` a single token
+    with no target operand — a bypass. Substitute those forms with a space BEFORE tokenizing.
+    (Other obfuscation — eval/base64/hex — stays out of scope per the module docstring.)"""
+    return _IFS_RE.sub(" ", command)
+
+
 def check(command, cwd):
+    command = _normalize_ifs(command)
     cd_context = None
     for statement in split_statements(command):
         reason, cd_context = check_statement(statement, cwd, cd_context)

@@ -82,6 +82,15 @@ BLOCK = [
     "echo /etc/passwd | xargs rm",
     # --- chmod --recursive long form (RECURSIVE_SHORT only matched short -r/-R) ---
     "chmod --recursive 777 /",
+    # --- root-level glob: strips to empty; `/*` survives coreutils --preserve-root (unlike `/`) ---
+    "rm -rf /*",
+    "rm -rf /.*",
+    "rm -fr /*",
+    "chmod -R 777 /*",
+    # --- IFS / metacharacter word-split evasion: glued to the flag, hides the target from shlex ---
+    "rm -rf${IFS}/",
+    "rm${IFS}-rf${IFS}/",
+    "rm -rf${IFS}~",
     # --- backslash-newline line continuation (bash joins; guard must not split) ---
     "rm -rf \\\n/",                    # noqa: E501  — `rm -rf \\\n/` is one statement in bash
 ]
@@ -142,6 +151,26 @@ def main():
         else:
             failed += 1
             print(f"FAIL [expected ALLOW] exit={ec}: {cmd!r}")
+    # Case-variant of a critical container. On a case-insensitive FS (default macOS) `/users`
+    # resolves to `/Users` and MUST block; on a case-sensitive FS (Linux CI) it is a genuinely
+    # distinct non-critical path and stays allowed. Assert whichever the running FS dictates, so
+    # the guard's probe and the test agree on the same machine.
+    def _fs_ci(p):
+        try:
+            base = os.path.realpath(p)
+            flipped = base.upper() if base != base.upper() else base.lower()
+            return flipped != base and os.path.exists(flipped) and os.path.samefile(base, flipped)
+        except OSError:
+            return False
+    expected = 43 if _fs_ci(HOME) else 0
+    label = "BLOCK" if expected == 43 else "ALLOW (case-sensitive FS)"
+    for cmd in ("rm -rf /users", "rm -rf /USERS", "rm -rf /users/someoneelse/stuff"):
+        ec = run(cmd, cwd)
+        if ec == expected:
+            passed += 1
+        else:
+            failed += 1
+            print(f"FAIL [expected {label}] exit={ec}: {cmd!r}")
     total = passed + failed
     print(f"guard-tests: {passed}/{total} PASS" + (" — ALL PASS" if not failed else f" ({failed} FAIL)"))
     return 1 if failed else 0
