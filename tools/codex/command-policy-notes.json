@@ -19,9 +19,6 @@
     "npm": []
   },
   "secretReadGuidance": [
-    "**/.env",
-    "**/.env.*",
-    "**/.envrc",
     "**/.netrc",
     "~/.ssh/**",
     "~/.aws/**",

@@ -29,8 +29,11 @@ council or record a logged override — don't finish silently.
 
 Project controls: a repository-root `.council-off` disables council for that project; do not
 convene one or record an override. A canonical project path in the machine-local
-`local/council/config.json` `disabledProjects` list does the same without a repository file. A
-repository-root `.council.json` can tune `riskGlobs`, `defaultBranch`, and the `smallLines`,
+`local/council/config.json` `disabledProjects` list does the same without a repository file. That
+same machine-local config takes `requireSignoffAtCritical: false` to drop the critical tier's one
+hard gate (it still convenes every seat and produces the digest — it just no longer blocks on a
+manual `--signoff` ack). A repository-root `.council.json` can tune `riskGlobs`, `defaultBranch`,
+and the `smallLines`,
 `smallFiles`, `largeLines`, and `largeFiles` thresholds. Thresholds are a self-service operator
 knob: widening a band CAN lower a diff's computed tier (there is no clamp). That is intentional —
 the council is a soft nudge, not a hard gate, on a single-operator tool — but the AI author edits

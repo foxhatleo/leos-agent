@@ -168,6 +168,31 @@ def main():
     check("computed critical floor cannot bypass signoff by omitting/lowering tier",
           risk(repo, env)["tier"] == "critical" and ec == 1 and "signoff" in err)
 
+    # requireSignoffAtCritical:false drops the critical hard gate on BOTH surfaces (mark + nudge)
+    # while default/other values keep it. Only literal JSON false disables it. Each sub-case uses a
+    # fresh repo so a recorded mark never suppresses the nudge under test.
+    repo, env = make_repo()
+    with open(env["LEOS_COUNCIL_CONFIG"], "w") as f:
+        f.write('{"requireSignoffAtCritical": false}')
+    write_code(repo, "auth.py", 500)
+    ec, _, _ = council(repo, env, "mark", "--checkpoint", "impl", "--tier", "critical")
+    check("opt-out: critical mark succeeds without signoff", ec == 0)
+
+    repo, env = make_repo()
+    with open(env["LEOS_COUNCIL_CONFIG"], "w") as f:
+        f.write('{"requireSignoffAtCritical": false}')
+    write_code(repo, "auth.py", 500)
+    ec, err = hook(repo, env)
+    check("opt-out: critical nudge omits --signoff", ec == 42 and "--signoff" not in err)
+
+    repo, env = make_repo()
+    with open(env["LEOS_COUNCIL_CONFIG"], "w") as f:
+        f.write('{"requireSignoffAtCritical": "false"}')  # non-boolean keeps the safe default
+    write_code(repo, "auth.py", 500)
+    ec, _, err = council(repo, env, "mark", "--checkpoint", "impl", "--tier", "critical")
+    check("opt-out honors only literal false (string 'false' keeps the gate)",
+          ec == 1 and "signoff" in err)
+
     # 7. DELTA-AWARENESS (headline): after a review, a tiny follow-up does NOT re-trigger,
     #    but a substantial incremental change DOES.
     repo, env = make_repo()

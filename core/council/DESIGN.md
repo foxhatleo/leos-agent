@@ -128,8 +128,9 @@ setup warns of reduced diversity.
 | **high** (3) | 3 | + grok | high/xhigh · max | risk globs or large blast radius or semantic risk |
 | **critical** (4) | 4 | all configured seats **+ human sign-off** | max per seat | auth/migrations/payments/public-API + high blast radius, or data-loss |
 
-Critical requires human sign-off: the orchestrator synthesizes the reviews into **one deduped
-digest** and asks the developer to ack before considering the change done.
+Critical requires human sign-off **by default**: the orchestrator synthesizes the reviews into
+**one deduped digest** and asks the developer to ack before considering the change done. This is
+the one hard gate; `requireSignoffAtCritical: false` in the machine-local config (§7) turns it off.
 
 ---
 
@@ -205,9 +206,12 @@ back to a single strong reviewer and record `fallback-fired`.
 ## 7. Scope & configuration
 
 Global but risk-gated (dormant on trivial work). Per-project off-switch: `.council-off`. Machine
-config: `local/council/config.json` (`disabledProjects`). Valid per-project `.council.json` fields
-are `riskGlobs`, `defaultBranch`, and the four documented `thresholds`. Deterministic checks are
-orchestrator-owned prompt inputs; the engine never executes repository commands from config.
+config: `local/council/config.json` (`disabledProjects`; plus `requireSignoffAtCritical`, default
+`true` — set `false` to drop the one hard gate so critical still convenes every seat and produces
+the digest but no longer blocks on a manual `--signoff` ack, keeping the council a soft nudge at
+every tier). Valid per-project `.council.json` fields are `riskGlobs`, `defaultBranch`, and the
+four documented `thresholds`. Deterministic checks are orchestrator-owned prompt inputs; the engine
+never executes repository commands from config.
 
 ---
 

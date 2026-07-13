@@ -61,6 +61,27 @@ _SELF = os.path.realpath(__file__)
 
 TIERS = ["skip", "low", "elevated", "high", "critical"]
 
+
+def _global_config():
+    """Machine-local council config (gitignored, at CONFIG_PATH). Returns {} on any error so a
+    missing/corrupt file falls back to built-in defaults rather than crashing the hook."""
+    try:
+        if os.path.exists(CONFIG_PATH):
+            with open(CONFIG_PATH) as f:
+                raw = json.load(f)
+            if isinstance(raw, dict):
+                return raw
+    except Exception:
+        pass
+    return {}
+
+
+def _signoff_required():
+    """Whether the critical tier hard-requires a human --signoff. Default true; a machine-local
+    "requireSignoffAtCritical": false opts out. Only literal JSON false disables it, so a missing
+    or malformed value keeps the safe default."""
+    return _global_config().get("requireSignoffAtCritical", True) is not False
+
 MAX_PARSE_BYTES = 5 * 1024 * 1024   # cap diff parsing work
 MAX_UNTRACKED_READ = 512 * 1024     # per-file content cap for hashing/scanning
 MAX_UNTRACKED_FILES = 200
@@ -912,7 +933,11 @@ def cmd_mark(args):
     if args.override and not args.reason:
         print("--override requires --reason", file=sys.stderr)
         return 1
-    if effective_tier == "critical" and not args.signoff.strip():
+    # The critical tier hard-requires a human --signoff by default. A machine-local opt-out
+    # ("requireSignoffAtCritical": false in CONFIG_PATH) drops that one hard gate so the council
+    # stays a soft nudge at every tier: critical still convenes all seats and produces the digest,
+    # it just no longer blocks on a manual ack. Default true preserves behavior for other installs.
+    if effective_tier == "critical" and _signoff_required() and not args.signoff.strip():
         print("critical tier requires explicit human --signoff", file=sys.stderr)
         return 1
     data = write_marker(cwd, h, {  # legacy hash marker (cross-tool / back-compat)
@@ -996,11 +1021,8 @@ def cmd_hook(_args):
         root = project_root(cwd)
         if os.path.exists(os.path.join(root, ".council-off")):
             return 0
-        if os.path.exists(CONFIG_PATH):
-            with open(CONFIG_PATH) as f:
-                gcfg = json.load(f)
-            if root in gcfg.get("disabledProjects", []):
-                return 0
+        if root in _global_config().get("disabledProjects", []):
+            return 0
 
         code, _, _ = _git(["rev-parse", "--git-dir"], cwd)
         if code != 0:
@@ -1068,8 +1090,12 @@ def cmd_hook(_args):
         scope = ("the incremental change since your last council review" if incremental
                  else "this diff")
         # mark hard-requires --signoff whenever the EFFECTIVE tier is critical (overrides
-        # included); a nudge that omits it would print a command that cannot succeed.
-        signoff = ' --signoff "<developer ack>"' if risk["tier"] == "critical" else ""
+        # included) AND the machine hasn't opted out via requireSignoffAtCritical:false; a nudge
+        # that omits a required --signoff would print a command that cannot succeed, and one that
+        # appends an unneeded --signoff would contradict the opt-out. Track both surfaces off the
+        # same _signoff_required() helper so they never drift.
+        signoff = ' --signoff "<developer ack>"' \
+            if (risk["tier"] == "critical" and _signoff_required()) else ""
         sys.stderr.write(
             f"[council] {scope} scores '{risk['tier']}' risk ({reasons}) and has no fresh council "
             f"review marker. Before finishing: EITHER run the council implementation checkpoint "
@@ -1122,7 +1148,9 @@ def main():
     p.add_argument("--tier", default="")
     p.add_argument("--override", action="store_true")
     p.add_argument("--reason", default="")
-    p.add_argument("--signoff", default="", help="required human acknowledgement for critical tier")
+    p.add_argument("--signoff", default="",
+                   help="human acknowledgement required at the critical tier "
+                        "(unless requireSignoffAtCritical:false in the machine-local config)")
     p.add_argument("--run-id", default="",
                    help="opt-in ownership check: refuse to close another run's fresh marker")
     p.set_defaults(fn=cmd_mark)

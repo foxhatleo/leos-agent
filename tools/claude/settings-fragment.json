@@ -2,9 +2,6 @@
   "$doc": "RENDERED from core/policy/policy-data.json into Claude Code's vocabulary + hook registration. Merged into ~/.claude/settings.json by bin/leos-merge.py (never symlinked). permissions.deny is the enforced secret-read guard; permissions.allow contains read-only fixed git/gh commands only. Package scripts and mutating Git commands require normal host approval. Guard wrappers fail closed when the script/runtime is missing.",
   "permissions": {
     "deny": [
-      "Read(**/.env)",
-      "Read(**/.env.*)",
-      "Read(**/.envrc)",
       "Read(**/.netrc)",
       "Read(~/.ssh/**)",
       "Read(~/.aws/**)",

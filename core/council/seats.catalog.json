@@ -17,7 +17,7 @@
       "low": ["gpt"],
       "elevated": ["gpt", "opus"],
       "high": ["gpt", "opus", "grok"],
-      "critical": "all installed seats + developer sign-off"
+      "critical": "all installed seats + developer sign-off (unless requireSignoffAtCritical:false)"
     },
     "transportPreference": {
       "$doc": "Per-role ordered list of transports, best first — this ordering is the RULE, not a suggestion: native (claude/codex) first, then cursor, then opencode (the universal catch-all that can carry every role via OpenRouter). The installer picks the first transport whose CLI is present AND whose driver smoke passes. An ABSENT CLI is skipped to the next transport (best-effort). A PRESENT CLI whose smoke FAILS (e.g. unauthenticated) HALTS setup — probable misconfiguration — it is NOT silently skipped. 'subagent' (opus on a Claude Code host only) is an in-process host subagent, not a CLI. 'claude'/'codex'/'cursor'/'opencode' are exec subprocesses via that CLI.",

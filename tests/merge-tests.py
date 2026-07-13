@@ -177,7 +177,7 @@ def main():
     check("OpenCode merge writes additive instructions", opencode_merge.returncode == 0 and
           os.path.join(ROOT, "global", "AGENTS.md") in ocfg.get("instructions", []))
     check("Cursor merge writes its native permission schema", cursor_merge.returncode == 0 and
-          "Read(**/.env)" in cursor_cfg.get("permissions", {}).get("deny", []))
+          "Read(**/.netrc)" in cursor_cfg.get("permissions", {}).get("deny", []))
     codex_cfg_path = os.path.join(codex_home, "config.toml")
     hooks_path = os.path.join(codex_home, "hooks.json")
     hooks = json.load(open(hooks_path)); hooks["userOwned"] = True; json.dump(hooks, open(hooks_path, "w"))
@@ -281,7 +281,7 @@ def main():
     check("tool remove succeeds with user keys inside Leo dicts", rm.returncode == 0)
     check("user permission key survives tool remove", settings.get("permissions", {}).get("ask") == ["Bash(custom:*)"])
     check("user deny element survives tool remove", "Read(user-secret)" in settings.get("permissions", {}).get("deny", []))
-    check("Leo deny elements are retired", "Read(**/.env)" not in settings.get("permissions", {}).get("deny", []))
+    check("Leo deny elements are retired", "Read(**/.netrc)" not in settings.get("permissions", {}).get("deny", []))
     check("untouched Leo hooks dict is pruned whole", "hooks" not in settings)
 
     # Foreign symlink swapped in AFTER a merge is refused on remove.

@@ -5,9 +5,6 @@
   ],
   "permission": {
     "read": {
-      "**/.env": "deny",
-      "**/.env.*": "deny",
-      "**/.envrc": "deny",
       "**/.netrc": "deny",
       "~/.ssh/**": "deny",
       "~/.aws/**": "deny",

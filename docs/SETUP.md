@@ -83,7 +83,9 @@ For EACH chosen host `<H>`, read `tools/<H>/SETUP-DELTA.md` and do:
    `~/.config/opencode/AGENTS.md` clone-symlink, remove it (safe — it's a symlink; `leos-doctor`
    flags it).
 4. **Machine-local config** in `local/` (gitignored): `guard-config.json` (optional
-   `{"homeToplevel":[...]}`), `council/config.json` (`{"disabledProjects":[]}`), and the seats file
+   `{"homeToplevel":[...]}`), `council/config.json` (`{"disabledProjects":[]}`; the optional
+   `requireSignoffAtCritical` key defaults to `true` — set it to `false` only when the operator
+   wants to drop the critical-tier hard sign-off gate), and the seats file
    from Step 5.
 5. **Verify** per the host's SETUP-DELTA (guard blocks `rm -rf ~`; `council.py root` prints the
    clone; the skill is discoverable; global instructions load without clobbering the user's own).

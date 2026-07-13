@@ -2,9 +2,6 @@
   "$doc": "RENDERED from core/policy/policy-data.json into Cursor CLI's cli-config.json vocabulary. Merged into ~/.cursor/cli-config.json by bin/leos-merge.py (NOT symlinked \u2014 Cursor CLI itself writes allowlist entries into this file). The static deny list covers secret reads only. Catastrophic-shell protection is provided by beforeShellExecution when the installed Cursor build fires that hook; setup must smoke-test it and report the limitation when headless hooks are unavailable.",
   "permissions": {
     "deny": [
-      "Read(**/.env)",
-      "Read(**/.env.*)",
-      "Read(**/.envrc)",
       "Read(**/.netrc)",
       "Read(~/.ssh/**)",
       "Read(~/.aws/**)",

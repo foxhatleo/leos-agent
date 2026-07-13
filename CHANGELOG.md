@@ -29,8 +29,17 @@ regeneration, as documented in `docs/ARCHITECTURE.md`.
   (Codex-on-Codex, Cursor-on-Cursor, OpenCode-on-OpenCode).
 - `[all]` **Per-seat `minTier` replaces the positional native+external ladder.** Default install
   presets (catalog `presets.minTier`): opus=1, gpt=2, grok=3, glm/gemini/mimo/deepseek=4. So
-  low=opus, elevated=opus+gpt, high=opus+gpt+grok, critical=all+signoff. The engine reads `minTier`
-  ONLY from the installed seats file — never assumes the presets.
+  low=opus, elevated=opus+gpt, high=opus+gpt+grok, critical=all+signoff (unless the sign-off gate is
+  opted out; see below). The engine reads `minTier` ONLY from the installed seats file — never
+  assumes the presets.
+- `[all]` **Critical sign-off gate is now opt-out.** `requireSignoffAtCritical` in the machine-local
+  `local/council/config.json` defaults to `true` (unchanged behavior); set it to `false` to drop the
+  critical tier's one hard gate — critical still convenes every seat and produces the digest, it just
+  no longer blocks `mark`/the Stop-hook nudge on a manual `--signoff` ack.
+- `[all]` **Secret-read policy no longer denies `.env`/`.env.*`/`.envrc`.** These left
+  `core/policy/policy-data.json` `secretReadPatterns` (`.netrc`, ssh/aws/gnupg keys, `*.pem`,
+  `*.key`, credentials, etc. retained). The behavioral "never read/print secret contents" guidance
+  in `global/AGENTS.md` remains the guard for env files.
 - `[all]` **Reduced-diversity fallback replaces native-only fallback.** If no seat's `minTier`
   qualifies at the tier, the runner runs the single lowest-`minTier` configured seat once, emits
   `fallback-fired`, and the report states reduced diversity (distinct-provider count < 2). Zero

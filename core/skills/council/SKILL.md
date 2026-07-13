@@ -65,7 +65,7 @@ reads only the seats file, never the presets) yield:
 | low | every seat with minTier ≤ 1 (opus) |
 | elevated | + every seat with minTier ≤ 2 (gpt) |
 | high | + every seat with minTier ≤ 3 (grok) |
-| critical | all installed seats + developer sign-off |
+| critical | all installed seats + developer sign-off (unless `requireSignoffAtCritical: false`) |
 
 A hand-edited seats file may set any `minTier` per seat; selection is always `minTier <= T`, for
 **both** the plan and impl checkpoints (plan no longer has a separate external-first rule).
@@ -223,12 +223,15 @@ Finally close the active marker and write the reviewed baseline, passing the run
 ```
 "$RUNTIME" "$ENGINE" mark --checkpoint impl --tier <tier> --run-id <runId>
 # critical tier additionally requires: --signoff "<developer acknowledgement>"
+#   (unless the machine-local config sets "requireSignoffAtCritical": false)
 ```
 
 For an intentional skip on elevated+ work, record the explicit override instead. Critical work
-requires a deduplicated digest and explicit developer acknowledgment **recorded via `--signoff`**
-before completion — `mark` exits 1 without it (the effective tier is the max of the computed risk
-and the requested tier, so a critical-scoring diff cannot bypass it by requesting a lower tier).
+requires a deduplicated digest and, **unless the machine-local config sets
+`requireSignoffAtCritical: false`**, explicit developer acknowledgment **recorded via `--signoff`**
+before completion — with the gate on, `mark` exits 1 without it (the effective tier is the max of
+the computed risk and the requested tier, so a critical-scoring diff cannot bypass it by requesting
+a lower tier). With the opt-out set, `mark` accepts a critical review with no `--signoff`.
 
 ## Never
 

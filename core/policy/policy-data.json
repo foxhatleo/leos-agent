@@ -1,10 +1,8 @@
 {
   "$doc": "SINGLE SOURCE for the permission surface across all hosts. This file holds DATA only. Each host's adapter (tools/<host>/) renders it into that host's own vocabulary at setup — one data set, N labeled renderers. Never hand-edit a rendered fragment; edit here and re-render. The `renderers` block records, per host, WHETHER each surface is actually ENFORCED so the enforced-vs-advisory boundary is explicit and can never be silently crossed.",
 
+  "$secretReadPatterns_doc": "INTENTIONAL: **/.env, **/.env.* and **/.envrc are deliberately NOT in this list. They were removed on purpose — the enforced Read-deny was collateral-blocking legitimate worktree-bootstrap ops (symlinking an env file, grep-ing for a var NAME, existence checks) because hosts treat the whole Bash call as a file read. Env files are instead covered by the behavioral 'never read/print secret contents' rule in global/AGENTS.md. DO NOT re-add .env patterns here without checking with Leo first.",
   "secretReadPatterns": [
-    "**/.env",
-    "**/.env.*",
-    "**/.envrc",
     "**/.netrc",
     "~/.ssh/**",
     "~/.aws/**",
