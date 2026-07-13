@@ -63,28 +63,54 @@ gains and the guardrails:
   its `leos-link --force` only after approval, reapply merges, run doctor, and remove the old
   worktree only after live host checks pass. Never move a host-facing worktree while tests run.
 
-## Council: host = native, roster minus host = external
+## Council: unified `seats[]`, seven flagship roles
 
-The five flagship roles are fixed; the exact model slug is resolved at setup and never committed
-(provider versions change). OpenAI resolves to the most capable flavor of the newest GPT
-generation — GPT-5.6 ships Sol > Terre > Luna, so 5.6 → Sol, superseded automatically by the next
-GPT generation (Leo's standing rule). The host's provider supplies the native reviewer; the other
-four flagships (minus the host's provider) are external. The Anthropic seat is always the
-**Opus line** — never Fable or Mythos.
+Seven flagship roles are fixed (opus, gpt, glm, gemini, grok, mimo, deepseek); the exact model
+slug is resolved at setup and never committed (provider versions change). OpenAI resolves to the
+most capable flavor of the newest GPT generation — GPT-5.6 ships Sol > Terre > Luna, so 5.6 → Sol,
+superseded automatically by the next GPT generation (Leo's standing rule). The Anthropic seat is
+always the **Opus line** — never Fable or Mythos.
+
+The host's own-provider seat is **no longer first-class** (there is no top-level `native` object):
+it is one element of the unified `seats[]` array in `local/seats.<host>.json`, with `mode` in
+{`subagent`, `exec`}. On a Claude Code host the own-provider (Opus) seat is `mode: subagent` — an
+in-process read-only Agent subagent pinned to `model: opus` (the only harness with a true subagent
+primitive + `--safe-mode`); the runner reports it as `orchestrator-subagent-required` and the
+orchestrator dispatches it and folds it back via `runner.py collect-subagent` (`collect-native` is
+kept as a legacy alias). On every other host the own-provider seat is `mode: exec` — a runner
+subprocess reusing the host's login (Codex-on-Codex, Cursor-on-Cursor, OpenCode-on-OpenCode);
+doctor reports `kind: "exec"` (was `"external"`).
+
+**Per-seat `minTier`** (integer 1..4, default 4) replaces the old positional native+external
+ladder: a seat runs at council tier T iff `seat.minTier <= T`, for BOTH plan and impl checkpoints.
+The engine reads `minTier` ONLY from the installed seats file — never assumes defaults. The
+catalog's `presets.minTier` block (opus=1, gpt=2, grok=3, glm/gemini/mimo/deepseek=4) is a
+setup-time default the installer stamps; a hand-edited seats file may override it. If no seat
+qualifies at the tier, the runner runs the single lowest-`minTier` configured seat once, emits
+`fallback-fired`, and the report states reduced diversity (distinct-provider count < 2); zero seats
+configured → council skipped (`skip`).
+
+**Per-seat env file** is the secret channel: `local/council/env/<seat>.env` (gitignored, mode 0600),
+loaded by the runner at dispatch, contents never entering prompts/logs/`result.json`. The inline
+`env` dict on a seat is non-secret only (secret-named keys TOKEN/SECRET/PASSWORD/API_KEY refused at
+install); secret-named keys ARE allowed in the envFile. Enforcing hosts deny the LLM reading
+`**/council/env/**` via policy.
 
 ### Anti-recursion (a seat never convenes its own council)
 
 Deterministic first, tool-agnostic:
 
-1. The explicit runner sets `LEOS_COUNCIL_SEAT=1` on every external-seat launch (inherited by child hooks).
+1. The explicit runner sets `LEOS_COUNCIL_SEAT=1` on every `mode: exec` seat launch (inherited by child hooks).
 2. The Stop hook returns 0 immediately when the sentinel is set.
 3. The skill, runner, and prompts refuse a nested Leo's Agents council. Seats may still use ordinary
    host subagents; this is a recursion boundary, not a ban on delegation.
 4. One shared clone-local `STATE_ROOT` under `local/council/state` + an owned in-review marker
    cover env-stripping CLIs and cross-tool visibility without using `/tmp` or `~/.local/state`.
 5. Per-seat controls: Claude uses `--safe-mode --no-session-persistence`; Codex uses `--ephemeral`
-   and read-only sandbox while retaining normal authentication; other transports use documented
-   plan/read-only modes and disclose when session persistence cannot be disabled.
+   and read-only sandbox while retaining normal `CODEX_HOME` authentication (**never** override
+   `CODEX_HOME` on a codex seat — isolation is `--ephemeral` + scratch cwd + the sentinel); other
+   transports use documented plan/read-only modes and disclose when session persistence cannot be
+   disabled.
 
 The runner creates its owned marker before dispatch. Its vendor-neutral detached
 `start`/`status`/`stop` lifecycle survives host tool-call deadlines while retaining explicit
@@ -92,7 +118,7 @@ cancellation; synchronous `run` remains for compatibility. It records bounded st
 code, elapsed time, and a typed terminal state. A blank/invalid/nonzero/timed-out CLI call is never
 treated as a successful review.
 
-Only the `Stop` event is registered (never `SubagentStop`), so native subagents are never
+Only the `Stop` event is registered (never `SubagentStop`), so subagent seats are never
 hook-nudged. Backstops retained: 2-nudge loop guard, read-only seats, per-seat timeouts, 2-pass cap.
 
 ## Honest boundaries (do not paper over)
@@ -112,3 +138,9 @@ hook-nudged. Backstops retained: 2-nudge loop guard, read-only seats, per-seat t
 
 A `VERSION` file as a migration trigger, `MIGRATE.md`, `RECONCILE`-as-reinstall, ownership-sha
 hashing, a copy-based installer, and per-tool prose forks. `CHANGELOG.md` is human history only.
+The seats-schema redesign (unified `seats[]`, no top-level `native`, per-seat `minTier`) is a
+breaking change detected by `leos-doctor.py` on old-shape `seats.<host>.json` (top-level `native`,
+missing `mode`/`minTier`); doctor prints "regenerate via SETUP step 5 + `leos-seats.py write`" and
+refuses. This is the documented precedent for a schema change — a doctor-detected regeneration
+requirement, not a version-gated migration system. `setup --refresh` is a no-op for the redesign
+(no new deps).

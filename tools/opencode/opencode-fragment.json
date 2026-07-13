@@ -20,7 +20,8 @@
       "**/id_ecdsa*": "deny",
       "**/credentials.json": "deny",
       "**/*.pem": "deny",
-      "**/*.key": "deny"
+      "**/*.key": "deny",
+      "**/council/env/**": "deny"
     },
     "bash": {
       "git status *": "allow",

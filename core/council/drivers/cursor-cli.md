@@ -1,11 +1,13 @@
 # Driver: Cursor CLI (`cursor-agent`) — any seat Cursor routes (Grok / Opus / GPT / GLM / Gemini)
 
-`cursor-agent --model <slug>` is model-agnostic: it carries any provider Cursor exposes. So beyond
-the **Grok** external seat, it is the **universal fallback transport** for the Opus / GPT / GLM /
-Gemini seats whenever their preferred CLI (`claude` / `codex` / `opencode`) isn't installed — a
-Cursor-only machine can host the whole council through this one CLI. Also the NATIVE seat when the
-host IS Cursor. **Not installed by default** — the setup interview only offers this transport if
-`cursor-agent` is on PATH.
+`cursor-agent --model <slug>` is model-agnostic: it carries any provider Cursor exposes. It is the
+**preferred** transport for **Grok**, **GLM**, and **Gemini**, and the **fallback** transport for
+**Opus** (after the `claude` CLI) and **GPT** (after `codex`) — so a Cursor-only machine can host
+most of the council through this one CLI. It does **not** serve **MiMo** (no verified Cursor slug)
+or **DeepSeek** (known `reasoning_content` replay bug that breaks long tool chains, plus a 200K
+context cap vs OpenCode's full 1M — see `deepseek.md`). It is also the host's own-provider seat
+(`mode: exec`) when the host IS Cursor. **Not installed by default** — the setup interview only
+offers this transport if `cursor-agent` is on PATH.
 
 **Model:** the flagship slug for whichever provider this seat carries. **Always confirm the exact
 slug with `cursor-agent --list-models`** — Cursor's slugs differ from OpenRouter's; an Opus seat
@@ -41,8 +43,8 @@ otherwise the runner refuses to dispatch the seat rather than classifying prose 
 as an observable review result. If it hangs or edits, use the OpenCode + OpenRouter route for Grok
 instead (the current Grok OpenRouter slug resolved at setup).
 
-**Native use (host IS Cursor):** `cursor-agent -p --mode plan {PROMPT_TEXT}` with no `--model`
-(host's own model).
+**Own-provider use (host IS Cursor):** `cursor-agent -p --mode plan {PROMPT_TEXT}` with no
+`--model` (host's own model) — a `mode: exec` seat in `seats[]`.
 
 **Session privacy:** no non-persistence flag is assumed without an installed-version contract test.
 External dispatch requires explicit project-send approval; setup discloses possible session retention.

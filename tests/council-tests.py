@@ -382,21 +382,21 @@ def main():
     import importlib.util
     spec = importlib.util.spec_from_file_location("leos_doctor", os.path.join(ROOT, "bin", "leos-doctor.py"))
     doc = importlib.util.module_from_spec(spec); spec.loader.exec_module(doc)
-    bad = doc.check_seat_flags("claude", {"host": "claude", "native": {"mode": "subagent", "model": "opus"}, "seats": [
-        {"name": "opus", "provider": "anthropic", "transport": "stdin",
+    bad = doc.check_seat_flags("claude", {"host": "claude", "seats": [
+        {"name": "opus", "provider": "anthropic", "mode": "exec", "transport": "stdin",
          "argv": ["claude", "--print", "--model", "opus", "--permission-mode", "plan"]}]})
     check("doctor flags claude seat missing --safe-mode", any("safe-mode" in p for p in bad))
-    good = doc.check_seat_flags("claude", {"host": "claude", "native": {"mode": "subagent", "model": "opus"}, "seats": [
-        {"name": "opus", "provider": "anthropic", "transport": "stdin",
+    good = doc.check_seat_flags("claude", {"host": "claude", "seats": [
+        {"name": "opus", "provider": "anthropic", "mode": "exec", "transport": "stdin",
          "argv": ["claude", "--safe-mode", "--print", "--no-session-persistence",
                   "--model", "opus", "--permission-mode", "plan"]}]})
     check("doctor passes schema-valid claude seat", not good)
-    unresolved = doc.check_seat_flags("codex", {"host": "codex",
-        "native": {"mode": "exec", "transport": "stdin",
-                   "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "-"]},
-        "seats": [{"name": "opus", "provider": "anthropic", "transport": "stdin",
-                   "argv": ["claude", "--safe-mode", "--print", "--no-session-persistence",
-                            "--permission-mode", "plan", "--model", "{MODEL}"]}]})
+    unresolved = doc.check_seat_flags("codex", {"host": "codex", "seats": [
+        {"name": "gpt", "provider": "openai", "mode": "exec", "transport": "stdin",
+         "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "-"]},
+        {"name": "opus", "provider": "anthropic", "mode": "exec", "transport": "stdin",
+         "argv": ["claude", "--safe-mode", "--print", "--no-session-persistence",
+                  "--permission-mode", "plan", "--model", "{MODEL}"]}]})
     check("doctor rejects unresolved model placeholders", any("unresolved" in p for p in unresolved))
     check("doctor detects owned destination drift",
           doc._owned_mismatches({"features": {"hooks": False}}, {"features": {"hooks": True}})
@@ -445,47 +445,50 @@ def main():
             os.environ.pop("HOME", None)
 
     # 19. Resolved seat files go through the private atomic writer; placeholders and missing
-    # driver-smoke confirmations are refused.
+    # driver-smoke confirmations are refused. Every mode:exec seat (including the host's own-
+    # provider seat) is smoke-gated; mode:subagent seats are not.
     seat_local = tempfile.mkdtemp(prefix="seatlocal.")
     _cleanup.append(seat_local)
     candidate = os.path.join(seat_local, "candidate.json")
     with open(candidate, "w") as f:
-        json.dump({"host": "codex", "native": {"mode": "exec", "transport": "stdin",
-                   "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "-"]},
-                   "seats": []}, f)
+        json.dump({"host": "codex", "seats": [
+            {"name": "gpt", "provider": "openai", "mode": "exec", "transport": "stdin",
+             "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "-"]}]}, f)
     seat_writer = os.path.join(ROOT, "bin", "leos-seats.py")
     seat_env = dict(os.environ, LEOS_LOCAL=seat_local)
-    wr = subprocess.run([sys.executable, seat_writer, "write", "--host", "codex", "--input", candidate],
-                        capture_output=True, text=True, env=seat_env)
+    wr = subprocess.run([sys.executable, seat_writer, "write", "--host", "codex", "--input", candidate,
+                         "--confirm-smoke", "gpt"], capture_output=True, text=True, env=seat_env)
     installed_seats = os.path.join(seat_local, "seats.codex.json")
     check("seat writer installs validated private config", wr.returncode == 0 and
           os.path.isfile(installed_seats) and os.stat(installed_seats).st_mode & 0o777 == 0o600)
     with open(candidate, "w") as f:
-        json.dump({"host": "codex", "native": {"mode": "exec", "transport": "stdin",
-                   "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "-"]},
-                   "seats": [{"name": "opus", "transport": "stdin",
-                              "argv": ["claude", "--safe-mode", "--print", "--no-session-persistence",
-                                       "--permission-mode", "plan", "--model", "{MODEL}"]}]}, f)
+        json.dump({"host": "codex", "seats": [
+            {"name": "gpt", "provider": "openai", "mode": "exec", "transport": "stdin",
+             "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "-"]},
+            {"name": "opus", "provider": "anthropic", "mode": "exec", "transport": "stdin",
+             "argv": ["claude", "--safe-mode", "--print", "--no-session-persistence",
+                      "--permission-mode", "plan", "--model", "{MODEL}"]}]}, f)
     vr = subprocess.run([sys.executable, seat_writer, "validate", "--host", "codex", "--input", candidate],
                         capture_output=True, text=True, env=seat_env)
     check("seat writer refuses unresolved model slug", vr.returncode == 1 and "unresolved" in vr.stdout)
     with open(candidate, "w") as f:
-        json.dump({"host": "codex", "native": {"mode": "exec", "transport": "stdin",
-                   "argv": ["some-unknown-cli", "review", "-"]}, "seats": []}, f)
+        json.dump({"host": "codex", "seats": [
+            {"name": "gpt", "provider": "openai", "mode": "exec", "transport": "stdin",
+             "argv": ["some-unknown-cli", "review", "-"]}]}, f)
     vr = subprocess.run([sys.executable, seat_writer, "validate", "--host", "codex", "--input", candidate],
                         capture_output=True, text=True, env=seat_env)
     check("seat writer refuses an unknown adapter/binary", vr.returncode == 1 and "adapter" in vr.stdout)
     with open(candidate, "w") as f:
-        json.dump({"host": "codex", "native": {"mode": "exec", "transport": "stdin", "cwd": "repo",
-                   "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "-"]},
-                   "seats": []}, f)
+        json.dump({"host": "codex", "seats": [
+            {"name": "gpt", "provider": "openai", "mode": "exec", "transport": "stdin", "cwd": "repo",
+             "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "-"]}]}, f)
     vr = subprocess.run([sys.executable, seat_writer, "validate", "--host", "codex", "--input", candidate],
                         capture_output=True, text=True, env=seat_env)
     check("seat writer accepts the documented cwd values", vr.returncode == 0)
     with open(candidate, "w") as f:
-        json.dump({"host": "codex", "native": {"mode": "exec", "transport": "stdin", "cwd": "elsewhere",
-                   "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "-"]},
-                   "seats": []}, f)
+        json.dump({"host": "codex", "seats": [
+            {"name": "gpt", "provider": "openai", "mode": "exec", "transport": "stdin", "cwd": "elsewhere",
+             "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "-"]}]}, f)
     vr = subprocess.run([sys.executable, seat_writer, "validate", "--host", "codex", "--input", candidate],
                         capture_output=True, text=True, env=seat_env)
     check("seat writer refuses an unknown cwd mode", vr.returncode == 1 and "cwd" in vr.stdout)

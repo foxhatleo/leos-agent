@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Deterministic external-seat runner for Leo's Agents councils.
+"""Deterministic seat runner for Leo's Agents councils.
 
 This is deliberately an adapter, not an autonomous council trigger.  An orchestrator calls
 ``runner.py run`` only after it has decided to review and prepared a prompt.  The runner then
-selects the configured CLI seats, marks the review active before dispatch, invokes direct argv
-arrays (never a shell), and writes private structured results under ``local/council/work``.
+selects the configured seats whose ``minTier`` is at or below the council tier, marks the review
+active before dispatch, invokes direct argv arrays (never a shell), and writes private structured
+results under ``local/council/work``.
 
-Native host subagents remain orchestrator-owned: a Claude-native ``mode: subagent`` is reported as
-``orchestrator-native-subagent-required`` with the private prompt path.  It is not approximated by
-secretly launching another council or by granting the runner host-agent authority.
+A ``mode: subagent`` seat (an in-process host subagent — Claude Code only) is orchestrator-owned:
+the runner reports it as ``orchestrator-subagent-required`` with the private prompt path and the
+orchestrator dispatches it.  It is not approximated by secretly launching another council or by
+granting the runner host-agent authority.  A ``mode: exec`` seat is a runner subprocess via argv
+(every other harness, including an own-provider seat on Codex/Cursor/OpenCode).
 """
 
 import argparse
@@ -41,6 +44,16 @@ MAX_ARG_PROMPT_BYTES = 128 * 1024
 MAX_OUTPUT_BYTES = 2 * 1024 * 1024
 HOSTS = ("claude", "codex", "opencode", "cursor")
 TIERS = ("low", "elevated", "high", "critical")
+TIER_INDEX = {"low": 1, "elevated": 2, "high": 3, "critical": 4}
+# A mode:subagent seat is handed to the orchestrator for in-process dispatch; the runner does not
+# launch it. LEGACY is a one-release read alias so an in-flight run emitted before the rename can
+# still be collected; new runs emit only SUBAGENT_REQUIRED.
+SUBAGENT_REQUIRED = "orchestrator-subagent-required"
+LEGACY_SUBAGENT_REQUIRED = "orchestrator-native-subagent-required"
+_SUBAGENT_STATUSES = (SUBAGENT_REQUIRED, LEGACY_SUBAGENT_REQUIRED)
+# Hosts that can dispatch an in-process subagent pinned to a model. Only Claude Code has a true
+# subagent primitive today; the allow-list makes this mechanical and extensible.
+SUBAGENT_HOSTS = ("claude",)
 RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 ACTIVE_PROCESSES = set()
 ACTIVE_LOCK = threading.Lock()
@@ -254,14 +267,12 @@ def validate_timeout_fields(config):
     seats = config.get("seats", [])
     if not isinstance(seats, list):
         raise ValueError("seats must be an array")
-    native = config.get("native")
-    candidates = list(seats) + ([native] if isinstance(native, dict) else [])
-    for index, seat in enumerate(candidates):
+    for index, seat in enumerate(seats):
         if not isinstance(seat, dict):
             raise ValueError(f"invalid seat at index {index}")
         timeout = seat.get("timeoutSeconds", 300)
         plan_timeout = seat.get("planTimeoutSeconds")
-        label = seat.get("name") or ("native" if seat is native else str(index))
+        label = seat.get("name") or str(index)
         if not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= 900:
             raise ValueError(f"seat {label} timeoutSeconds must be an integer in 1..900")
         if plan_timeout is not None and (not isinstance(plan_timeout, int) or
@@ -299,8 +310,66 @@ class EventLog:
                 pass
 
 
-def tier_external_count(tier, available):
-    return {"low": 0, "elevated": 1, "high": 2, "critical": available}[tier]
+def tier_index(tier):
+    return TIER_INDEX[tier]
+
+
+def seat_min_tier(seat):
+    """A seat runs at council tier T iff its minTier <= T. Absent minTier => 4 (critical-only)."""
+    value = seat.get("minTier", 4)
+    if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 4:
+        raise ValueError(f"seat {seat.get('name', '<unnamed>')} minTier must be an integer in 1..4")
+    return value
+
+
+def env_file_path(seat):
+    """Resolve a seat's env-file path under LEOS_LOCAL (never load it here — contents are secret).
+
+    Explicit ``envFile`` (relative to LEOS_LOCAL) wins; otherwise the conventional
+    ``local/council/env/<name>.env`` is used. Returns a resolved Path that may or may not exist;
+    always under LEOS_LOCAL. Raises ValueError on a path that escapes LEOS_LOCAL.
+    """
+    name = seat.get("name")
+    explicit = seat.get("envFile")
+    if explicit is not None:
+        if not isinstance(explicit, str) or not explicit:
+            raise ValueError(f"seat {name or '<unnamed>'} envFile must be a nonempty string")
+        candidate = Path(explicit)
+        candidate = candidate if candidate.is_absolute() else (LOCAL / explicit)
+    else:
+        if not isinstance(name, str) or not name:
+            return None  # conventional path needs a name; nothing to resolve
+        candidate = LOCAL / "council" / "env" / f"{name}.env"
+    resolved = candidate.resolve()
+    try:
+        resolved.relative_to(LOCAL.resolve())
+    except ValueError:
+        raise ValueError(f"seat {name or '<unnamed>'} envFile must resolve under LEOS_LOCAL")
+    return resolved
+
+
+def parse_env_file(path):
+    """Hand-rolled .env parser: KEY=VALUE lines, '#' comments, optional surrounding quotes.
+
+    No variable expansion (deterministic, no shell). Secret-named keys ARE allowed here — this is
+    the secret channel; the inline ``env`` dict is the non-secret channel (SECRET_KEY_RE in
+    leos-seats.py). Contents never leave this function except into the seat subprocess env.
+    """
+    env = {}
+    if not path or not path.is_file():
+        return env
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        if key:
+            env[key] = value
+    return env
 
 
 def substitute(value, substitutions):
@@ -388,6 +457,9 @@ def prepare_command(seat, tier, prompt):
 
     env = seat.get("env") if isinstance(seat.get("env"), dict) else {}
     env = {str(k): substitute(str(v), substitutions) for k, v in env.items()}
+    # Validate the env-file path (defence in depth; doctor checks at install). Do NOT load it
+    # here — contents are secret and must stay out of any returned/logged tuple.
+    env_file_path(seat)
     timeout = seat.get("timeoutSeconds", 300)
     plan_timeout = seat.get("planTimeoutSeconds")
     if not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= 900:
@@ -395,7 +467,7 @@ def prepare_command(seat, tier, prompt):
     if plan_timeout is not None and (not isinstance(plan_timeout, int) or isinstance(plan_timeout, bool)
                                      or not 1 <= plan_timeout <= 900):
         raise ValueError("planTimeoutSeconds must be an integer in 1..900")
-    if seat.get("kind") == "external" and seat.get("checkpoint") == "plan" \
+    if seat.get("kind") == "exec" and seat.get("checkpoint") == "plan" \
             and plan_timeout is not None:
         timeout = plan_timeout
     return argv, env, timeout, adapter, transport
@@ -555,6 +627,15 @@ def run_one(work, cwd, seat, events):
     stderr_path = work / f"out-{name}.stderr.txt"
     env = dict(os.environ)
     env.update(extra_env)
+    # The env file is the per-seat secret channel: secret-named keys are allowed in it (unlike the
+    # inline env dict). It is loaded here — never in prepare_command's return — so its values do
+    # not flow through any logged tuple. File values override inherited/inline for the same key.
+    try:
+        env.update(parse_env_file(env_file_path(seat)))
+    except ValueError as exc:
+        base.update(status="invalid-seat-config", reason=str(exc))
+        events.emit("seat-finished", seat=name, status=base["status"])
+        return base
     env["LEOS_COUNCIL_SEAT"] = "1"
     # Default isolation: a private per-seat scratch cwd with its own synthetic Git root, so
     # repo-local agent config (.cursor/rules, AGENTS.md, OpenCode project config) never gains
@@ -655,58 +736,68 @@ def run_one(work, cwd, seat, events):
     return base
 
 
-def select_seats(config, checkpoint, tier, include_native):
-    external = config.get("seats", [])
-    if not isinstance(external, list):
+def select_seats(config, checkpoint, tier, include_subagents):
+    """Select configured seats whose minTier is at or below the council tier.
+
+    A seat runs at tier T iff ``seat.minTier <= T`` (absent => 4). This replaces the old
+    positional native/external ladder and is used for BOTH checkpoints (plan no longer has a
+    separate external-first rule). ``include_subagents=False`` (the ``--external-only`` flag)
+    skips ``mode: subagent`` seats so the orchestrator can dispatch them separately. The
+    reduced-diversity fallback (no seat qualifies) is handled by the caller via fallback_seats().
+    """
+    seats = config.get("seats", [])
+    if not isinstance(seats, list):
         raise ValueError("seats must be an array")
+    ceiling = tier_index(tier)
     chosen = []
-    # A plan checkpoint is deliberately external-first: one strong independent reviewer normally,
-    # two on high-stakes plans. The native fallback is used only when no external transport exists.
-    plan_external = 0
-    if checkpoint == "plan" and external:
-        plan_external = 2 if tier in ("high", "critical") else 1
-    native_passes = 1 if checkpoint == "plan" else (
-        {"low": 1, "elevated": 2, "high": 3, "critical": 3}[tier] if not external else 1)
-    if include_native and not plan_external:
-        native = config.get("native")
-        if not isinstance(native, dict):
-            raise ValueError("native seat missing")
-        if native.get("mode") == "subagent":
-            for index in range(native_passes):
-                chosen.append({"name": "native" if index == 0 else f"native-{index + 1}", "kind": "native",
-                               "mode": "subagent", "model": native.get("model", ""),
-                               "status": "orchestrator-native-subagent-required"})
-        elif native.get("mode") == "exec":
-            for index in range(native_passes):
-                chosen.append(dict(native, name="native" if index == 0 else f"native-{index + 1}",
-                                   kind="native", mode="exec"))
-        else:
-            raise ValueError("native mode must be subagent or exec")
-    wanted = plan_external or tier_external_count(tier, len(external))
-    for i, item in enumerate(external[:wanted]):
+    for i, item in enumerate(seats):
         if not isinstance(item, dict) or not isinstance(item.get("name"), str):
-            raise ValueError(f"invalid external seat at index {i}")
+            raise ValueError(f"invalid seat at index {i}")
+        name = item["name"]
         # Seat names feed work-dir file and scratch-cwd names — keep them path-safe.
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", item["name"]):
-            raise ValueError(f"invalid external seat name {item['name']!r}")
-        chosen.append(dict(item, kind="external", mode="exec"))
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", name):
+            raise ValueError(f"invalid seat name {name!r}")
+        if seat_min_tier(item) > ceiling:
+            continue
+        mode = item.get("mode")
+        if mode == "subagent":
+            if include_subagents:
+                chosen.append(dict(item, kind="subagent", mode="subagent",
+                                   status=SUBAGENT_REQUIRED))
+        elif mode == "exec":
+            chosen.append(dict(item, kind="exec", mode="exec"))
+        else:
+            raise ValueError(f"seat {name} mode must be subagent or exec")
     return chosen
 
 
-def native_seats(config, count=1):
-    native = config.get("native")
-    if not isinstance(native, dict):
-        raise ValueError("native seat missing")
-    if native.get("mode") not in ("subagent", "exec"):
-        raise ValueError("native mode must be subagent or exec")
-    seats = []
+def fallback_seats(config, count=1):
+    """The reduced-diversity fallback: the single lowest-minTier installed seat, repeated.
+
+    Used when select_seats() returns empty (no seat qualifies at the tier) — run the strongest
+    available seat once rather than skip the review, and report reduced diversity. Raises
+    ValueError if no seat is configured at all (the caller then skips with a ledger note).
+    """
+    seats = config.get("seats", [])
+    if not isinstance(seats, list) or not seats:
+        raise ValueError("no seats configured for reduced-diversity fallback")
+    ordered = sorted(
+        (s for s in seats if isinstance(s, dict) and isinstance(s.get("name"), str)),
+        key=lambda s: (seat_min_tier(s), s.get("name", "")))
+    if not ordered:
+        raise ValueError("no valid seat configured for reduced-diversity fallback")
+    base = ordered[0]
+    mode = base.get("mode")
+    if mode not in ("subagent", "exec"):
+        raise ValueError(f"fallback seat {base.get('name')} mode must be subagent or exec")
+    out = []
     for index in range(count):
-        seat = dict(native, name="native" if index == 0 else f"native-{index + 1}", kind="native")
-        if native.get("mode") == "subagent":
-            # Only a subagent seat is orchestrator-owned; an exec seat is dispatched normally.
-            seat["status"] = "orchestrator-native-subagent-required"
-        seats.append(seat)
-    return seats
+        seat = dict(base, name=base["name"] if index == 0 else f"{base['name']}-{index + 1}",
+                    kind="subagent" if mode == "subagent" else "exec", fallback=True)
+        if mode == "subagent":
+            seat["status"] = SUBAGENT_REQUIRED
+        out.append(seat)
+    return out
 
 
 def cmd_run(args):
@@ -768,7 +859,7 @@ def cmd_run(args):
         if not selected:
             print(json.dumps({"ok": False, "status": "seat-not-configured", "seat": args.seat}, indent=2))
             return 2
-    if any(seat.get("kind") == "external" for seat in selected) and not args.approve_external:
+    if any(seat.get("kind") == "exec" for seat in selected) and not args.approve_external:
         print(json.dumps({"ok": False, "status": "external-send-approval-required",
                           "reason": "confirm this project's prompt may be sent to configured external providers"}, indent=2))
         return 2
@@ -831,12 +922,22 @@ def cmd_run(args):
         return 2
     events.emit("runner-started", runId=run_id, host=args.host, checkpoint=args.checkpoint, tier=args.tier)
 
-    planned, manual_native = [], []
+    # Reduced-diversity fallback: the minTier filter selected no seat, but seats are configured.
+    # Run the single lowest-minTier seat once and record reduced diversity rather than skip.
+    if not selected:
+        try:
+            selected = fallback_seats(config)
+            events.emit("fallback-fired", reason="no-seat-qualifies-at-tier")
+        except ValueError as exc:
+            events.emit("fallback-unavailable", reason=str(exc))
+
+    planned, manual_subagent = [], []
     for seat in selected:
         if seat.get("mode") == "subagent":
-            manual_native.append({"seat": seat["name"], "status": "orchestrator-native-subagent-required",
-                                  "model": seat.get("model", ""), "promptPath": str(prompt_path),
-                                  "instruction": "Dispatch one native review subagent; do not ask it to convene Leo's Agents council."})
+            manual_subagent.append({"seat": seat["name"], "status": SUBAGENT_REQUIRED,
+                                    "model": seat.get("model", ""), "promptPath": str(prompt_path),
+                                    "fallback": bool(seat.get("fallback")),
+                                    "instruction": "Dispatch one read-only review subagent pinned to the seat model; do not ask it to convene Leo's Agents council."})
             continue
         planned.append(dict(seat, tier=args.tier, checkpoint=args.checkpoint,
                             prompt=prompt, promptPath=str(prompt_path)))
@@ -844,51 +945,24 @@ def cmd_run(args):
            "tier": args.tier, "cwd": cwd, "promptPath": str(prompt_path), "promptRedacted": prompt_redacted,
            "pass": 2 if args.follow_up else 1,
            "externalSendApproved": bool(args.approve_external), "startedAt": int(time.time()),
-           "seats": [{"name": s["name"], "kind": s["kind"]} for s in planned], "manualNative": manual_native}
+           "seats": [{"name": s["name"], "kind": s["kind"]} for s in planned], "manualSubagent": manual_subagent}
     write_json(work / "job.json", job)
-    results = list(manual_native)
+    results = list(manual_subagent)
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(planned))) as pool:
         futures = [pool.submit(run_one, work, cwd, seat, events) for seat in planned]
         for future in futures:
             results.append(future.result())
-    if args.checkpoint == "plan" and not args.external_only and planned \
-            and all(seat.get("kind") == "external" for seat in planned) \
-            and not any(result["status"] == "completed" for result in results):
-        events.emit("fallback-fired", reason="all-plan-external-seats-failed")
-        try:
-            fallback_seats = native_seats(config)
-        except ValueError as e:
-            # The plan+external selection path never validated the native block; a broken one
-            # must yield a typed result (dispatchOk false -> the end path below releases the
-            # marker) instead of an uncaught crash that leaks the marker for its full TTL.
-            events.emit("fallback-unavailable", reason=str(e))
-            fallback_seats = []
-            results.append({"seat": "native", "kind": "native", "status": "invalid-seat-config",
-                            "reason": f"plan fallback unavailable: {e}", "fallback": True,
-                            "elapsedSeconds": 0.0})
-        for seat in fallback_seats:
-            if seat.get("mode") == "subagent":
-                manual = {"seat": seat["name"], "status": "orchestrator-native-subagent-required",
-                          "model": seat.get("model", ""), "promptPath": str(prompt_path),
-                          "fallback": True,
-                          "instruction": "Dispatch one native review subagent; do not ask it to convene Leo's Agents council."}
-                manual_native.append(manual)
-                results.append(manual)
-            else:
-                fallback = dict(seat, tier=args.tier, checkpoint=args.checkpoint,
-                                prompt=prompt, promptPath=str(prompt_path), fallback=True)
-                results.append(run_one(work, cwd, fallback, events))
     summary = dict(job, finishedAt=int(time.time()), results=results)
     summary["dispatchOk"] = bool(results) and all(
-        r["status"] in ("completed", "orchestrator-native-subagent-required") for r in results)
+        r["status"] == "completed" or r["status"] in _SUBAGENT_STATUSES for r in results)
     summary["reviewComplete"] = bool(results) and all(r["status"] == "completed" for r in results)
-    summary["requiresOrchestratorNative"] = bool(manual_native)
+    summary["requiresOrchestratorSubagent"] = bool(manual_subagent)
     # Exit 0 means every executable CLI dispatch succeeded.  It does *not* mean the review is
-    # complete when a host-native subagent still needs the orchestrator to run it.
+    # complete when a subagent seat still needs the orchestrator to run it.
     summary["ok"] = summary["dispatchOk"]
     summary["resultPath"] = str(work / "result.json")
     write_json(work / "result.json", summary)
-    if not summary["dispatchOk"] and not summary["requiresOrchestratorNative"]:
+    if not summary["dispatchOk"] and not summary["requiresOrchestratorSubagent"]:
         subprocess.run([str(PYTHON), str(COUNCIL), "end", "--run-id", run_id,
                         "--status", "dispatch-failed"], cwd=cwd, text=True, capture_output=True)
     events.emit("runner-finished", runId=run_id, dispatchOk=summary["dispatchOk"],
@@ -1111,7 +1185,7 @@ def cmd_stop(args):
     return 0
 
 
-def cmd_collect_native(args):
+def cmd_collect_subagent(args):
     result_path = Path(args.result).expanduser().resolve()
     work_root = WORK_ROOT.resolve()
     if result_path.parent == work_root or work_root not in result_path.parents:
@@ -1135,18 +1209,18 @@ def cmd_collect_native(args):
         return 2
     matches = [item for item in summary.get("results", [])
                if item.get("seat") == args.seat
-               and item.get("status") == "orchestrator-native-subagent-required"]
+               and item.get("status") in _SUBAGENT_STATUSES]
     if len(matches) != 1:
-        print(json.dumps({"ok": False, "status": "native-seat-not-pending", "seat": args.seat}, indent=2))
+        print(json.dumps({"ok": False, "status": "subagent-seat-not-pending", "seat": args.seat}, indent=2))
         return 2
-    matches[0].update(status="completed", transportResult={"format": "collected-native",
+    matches[0].update(status="completed", transportResult={"format": "collected-subagent",
                       "reviewText": review_text, "findings": findings})
     summary["reviewComplete"] = bool(summary["results"]) and all(
         item.get("status") == "completed" for item in summary["results"])
-    summary["requiresOrchestratorNative"] = any(
-        item.get("status") == "orchestrator-native-subagent-required" for item in summary["results"])
+    summary["requiresOrchestratorSubagent"] = any(
+        item.get("status") in _SUBAGENT_STATUSES for item in summary["results"])
     summary["dispatchOk"] = all(item.get("status") == "completed" or
-                                item.get("status") == "orchestrator-native-subagent-required"
+                                item.get("status") in _SUBAGENT_STATUSES
                                 for item in summary["results"])
     summary["ok"] = summary["dispatchOk"]
     write_json(result_path, summary)
@@ -1160,7 +1234,7 @@ def add_dispatch_arguments(parser):
     parser.add_argument("--tier", required=True, choices=TIERS)
     parser.add_argument("--prompt", required=True, help="orchestrator-created review prompt file")
     parser.add_argument("--cwd", help="repository being reviewed (default: current directory)")
-    parser.add_argument("--external-only", action="store_true", help="do not run/report the native seat")
+    parser.add_argument("--external-only", action="store_true", help="do not run/report mode:subagent seats")
     parser.add_argument("--run-id", help="path-safe id for this runner job")
     parser.add_argument("--follow-up", action="store_true",
                         help="dispatch the single re-review pass under the active run's marker (writes <run>/pass-2/)")
@@ -1195,11 +1269,18 @@ def main():
     p = sub.add_parser("stop", help="cancel a detached council job and its seat process groups")
     add_run_reference_arguments(p)
     p.set_defaults(fn=cmd_stop)
-    p = sub.add_parser("collect-native", help="collect one orchestrator-run native subagent result")
+    p = sub.add_parser("collect-subagent", help="collect one orchestrator-run subagent seat result")
     p.add_argument("--result", required=True, help="runner result.json path")
-    p.add_argument("--seat", required=True, help="pending native seat name")
-    p.add_argument("--review-file", required=True, help="native subagent findings JSON/fenced JSON")
-    p.set_defaults(fn=cmd_collect_native)
+    p.add_argument("--seat", required=True, help="pending subagent seat name")
+    p.add_argument("--review-file", required=True, help="subagent findings JSON/fenced JSON")
+    p.set_defaults(fn=cmd_collect_subagent)
+    # Legacy alias so an in-flight run or stale skill invocation from before the rename still
+    # resolves; routes to the same handler.
+    p = sub.add_parser("collect-native", help="legacy alias for collect-subagent")
+    p.add_argument("--result", required=True, help="runner result.json path")
+    p.add_argument("--seat", required=True, help="pending subagent seat name")
+    p.add_argument("--review-file", required=True, help="subagent findings JSON/fenced JSON")
+    p.set_defaults(fn=cmd_collect_subagent)
     args = ap.parse_args()
     return args.fn(args)
 

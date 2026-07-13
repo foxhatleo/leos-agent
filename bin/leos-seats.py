@@ -3,7 +3,9 @@
 
 Model discovery and paid driver smoke tests remain explicit setup interview steps. This command
 turns their resolved output into a schema-checked, private file; it never guesses model slugs or
-stores credentials.
+stores credentials. The schema is a unified `seats` array: every reviewer (including the host's
+own-provider seat) is one element with `mode` in {subagent, exec}, a `minTier` (1..4), and an
+optional `envFile` (the per-seat secret channel). There is no top-level `native` object.
 """
 
 import argparse
@@ -46,19 +48,31 @@ def validate(config, host):
     problems.extend(doctor.check_seat_flags(host, config))
     runner = load_module("leos_runner_seats", ROOT / "core" / "council" / "bin" / "runner.py")
     seats = list(config.get("seats", []))
-    native = config.get("native", {})
-    if isinstance(native, dict) and native.get("mode") == "exec":
-        seats.append(dict(native, name="native"))
     for seat in seats:
         if not isinstance(seat, dict):
             continue
+        name = seat.get("name", "<unnamed>")
+        mode = seat.get("mode")
+        # The inline `env` dict is the NON-SECRET channel — secret-named keys are refused here.
+        # Secrets go in the per-seat envFile (secret-named keys allowed there, not here).
         env = seat.get("env", {})
         if isinstance(env, dict) and any(SECRET_KEY_RE.search(str(key)) for key in env):
-            problems.append(f"seat {seat.get('name', '<unnamed>')} env contains a secret-like key")
+            problems.append(f"seat {name} env contains a secret-like key")
+        if mode == "subagent":
+            # subagent seats are orchestrator-owned; no CLI smoke, no argv resolution. Validate
+            # minTier bounds (runner.seat_min_tier raises on bad values) and the model/Opus-line
+            # rule (doctor already checked); nothing to prepare_command.
+            try:
+                runner.seat_min_tier(seat)
+            except ValueError as exc:
+                problems.append(f"seat {name}: {exc}")
+            continue
+        if mode != "exec":
+            continue  # doctor already flagged an invalid mode
         try:
             runner.prepare_command(seat, "critical", 'review {"schema": true}')
         except ValueError as exc:
-            problems.append(f"seat {seat.get('name', '<unnamed>')}: {exc}")
+            problems.append(f"seat {name}: {exc}")
     return list(dict.fromkeys(problems))
 
 
@@ -88,7 +102,7 @@ def main():
     ap.add_argument("--host", required=True, choices=HOSTS)
     ap.add_argument("--input", required=True, help="resolved candidate JSON outside tracked files")
     ap.add_argument("--confirm-smoke", action="append", default=[], metavar="SEAT",
-                    help="external seat whose documented driver smoke test passed (repeat per seat)")
+                    help="exec seat whose documented driver smoke test passed (repeat per seat)")
     args = ap.parse_args()
     try:
         config = read_config(args.input)
@@ -96,10 +110,14 @@ def main():
         print(json.dumps({"ok": False, "problems": [str(exc)]}, indent=2))
         return 1
     problems = validate(config, args.host)
-    external_names = {seat.get("name") for seat in config.get("seats", []) if isinstance(seat, dict)}
+    # Only mode:exec seats invoke an external CLI and require a confirmed driver smoke. A
+    # mode:subagent seat is orchestrator-owned (in-process host subagent) and is not smoke-gated.
+    exec_names = {seat.get("name") for seat in config.get("seats", [])
+                  if isinstance(seat, dict) and seat.get("mode") == "exec"}
+    all_names = {seat.get("name") for seat in config.get("seats", []) if isinstance(seat, dict)}
     if args.command == "write":
-        missing_smokes = external_names - set(args.confirm_smoke)
-        unknown_smokes = set(args.confirm_smoke) - external_names
+        missing_smokes = exec_names - set(args.confirm_smoke)
+        unknown_smokes = set(args.confirm_smoke) - all_names
         if missing_smokes:
             problems.append("missing passed driver smoke confirmation for: " + ", ".join(sorted(missing_smokes)))
         if unknown_smokes:
@@ -109,12 +127,12 @@ def main():
         return 1
     if args.command == "write":
         config["smokeTests"] = {name: {"passed": True, "confirmedAt": int(time.time())}
-                                for name in sorted(external_names)}
+                                for name in sorted(exec_names)}
         destination = LOCAL / f"seats.{args.host}.json"
         atomic_write(destination, config)
-        print(json.dumps({"ok": True, "path": str(destination), "seats": sorted(external_names)}, indent=2))
+        print(json.dumps({"ok": True, "path": str(destination), "seats": sorted(all_names)}, indent=2))
     else:
-        print(json.dumps({"ok": True, "host": args.host, "seats": sorted(external_names)}, indent=2))
+        print(json.dumps({"ok": True, "host": args.host, "seats": sorted(all_names)}, indent=2))
     return 0
 
 

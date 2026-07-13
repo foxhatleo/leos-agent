@@ -252,7 +252,11 @@ def _argv_of(seat):
     return [str(x) for x in seat.get("argv", [])]
 
 
-EXTERNAL_PROVIDERS = {"anthropic", "openai", "zhipu", "google", "xai", "custom"}
+EXTERNAL_PROVIDERS = {"anthropic", "openai", "zhipu", "google", "xai", "xiaomi", "deepseek", "custom"}
+
+# Hosts that can dispatch an in-process subagent pinned to a model (mode: subagent). Only Claude
+# Code has a true subagent primitive today; the allow-list makes this mechanical and extensible.
+SUBAGENT_HOSTS = {"claude"}
 
 
 def _is_opus_line(model):
@@ -263,63 +267,91 @@ def _is_opus_line(model):
     return m == "opus" or bool(concrete and "fable" not in m and "mythos" not in m)
 
 
+def _validate_env_file_path(label, seat, problems):
+    """An optional envFile (the per-seat secret channel) must resolve under LEOS_LOCAL."""
+    explicit = seat.get("envFile")
+    if explicit is None:
+        return
+    if not isinstance(explicit, str) or not explicit:
+        problems.append(f"seat {label} envFile must be a nonempty string")
+        return
+    candidate = explicit if os.path.isabs(explicit) else os.path.join(LOCAL, explicit)
+    resolved = os.path.realpath(candidate)
+    local_root = os.path.realpath(LOCAL)
+    if not (resolved == local_root or resolved.startswith(local_root + os.sep)):
+        problems.append(f"seat {label} envFile must resolve under LEOS_LOCAL (got {explicit!r})")
+
+
 def check_seat_flags(tool, seats):
     problems = []
     if not isinstance(seats, dict):
         return ["seats file must be a JSON object"]
     if seats.get("host") not in (None, tool):
         problems.append(f"seats file host is {seats.get('host')!r}, expected {tool!r}")
-    external = seats.get("seats", [])
-    if not isinstance(external, list):
+    if "native" in seats:
+        # The top-level `native` object was removed in the unified-seats schema. An old-shape file
+        # must be regenerated through SETUP step 5 rather than silently reinterpreted.
+        problems.append("seats file has a top-level `native` object — the schema is now a unified "
+                         "`seats` array; regenerate via SETUP step 5 and `leos-seats.py write`")
+    seat_list = seats.get("seats", [])
+    if not isinstance(seat_list, list):
         return problems + ["seats must be an array"]
-    native = seats.get("native")
-    if not isinstance(native, dict) or native.get("mode") not in ("subagent", "exec"):
-        return problems + ["native seat must be an object with mode subagent or exec"]
-    if native["mode"] == "subagent" and not isinstance(native.get("model"), str):
-        problems.append("native subagent seat requires a model")
-    elif native["mode"] == "subagent":
-        model = native["model"]
-        unresolved = sorted(set(re.findall(r"\{[A-Z][A-Z0-9_]*\}", model)))
-        if unresolved:
-            problems.append(f"native subagent model has unresolved placeholders {unresolved}: {model!r}")
-        elif tool == "claude" and not _is_opus_line(model):
-            problems.append(
-                f"claude native subagent must be the Opus line (never Fable/Mythos), got {model!r}")
-    if native["mode"] == "exec" and not _argv_of(native):
-        problems.append("native exec seat requires argv")
     seen = set()
-    all_seats = []
-    for seat in external:
+    for seat in seat_list:
         if not isinstance(seat, dict):
-            problems.append("external seat must be an object")
+            problems.append("seat must be an object")
             continue
         name = seat.get("name")
         if not isinstance(name, str) or not name:
-            problems.append("external seat missing name")
+            problems.append("seat missing name")
         elif name in seen:
-            problems.append(f"duplicate external seat name: {name}")
+            problems.append(f"duplicate seat name: {name}")
         else:
             seen.add(name)
-        provider = seat.get("provider")
-        if provider not in EXTERNAL_PROVIDERS:
-            problems.append(
-                f"external seat {name or '<unnamed>'} provider must be one of "
-                + ", ".join(sorted(EXTERNAL_PROVIDERS)))
-        if name == "opus" and provider != "anthropic":
-            problems.append("external opus role must declare provider 'anthropic'")
-        if not _argv_of(seat):
-            problems.append(f"external seat {name or '<unnamed>'} requires argv")
-        if seat.get("transport") not in ("stdin", "arg"):
-            problems.append(f"external seat {name or '<unnamed>'} transport must be stdin or arg")
-        env = seat.get("env", {})
-        if not isinstance(env, dict) or any(not isinstance(k, str) or not isinstance(v, str)
-                                            for k, v in env.items()):
-            problems.append(f"external seat {name or '<unnamed>'} env must be string:string")
-        all_seats.append(seat)
-    if isinstance(native, dict):
-        all_seats = all_seats + [native]
-    for seat in all_seats:
-        label = seat.get("name") or ("native" if seat is native else "<unnamed>")
+        label = name or "<unnamed>"
+        mode = seat.get("mode")
+        if mode not in ("subagent", "exec"):
+            problems.append(f"seat {label} mode must be subagent or exec")
+            continue
+        if mode == "subagent":
+            if tool not in SUBAGENT_HOSTS:
+                problems.append(f"seat {label} mode subagent is only supported on hosts with an "
+                                f"in-process subagent primitive (got host {tool!r})")
+            if not isinstance(seat.get("model"), str) or not seat.get("model"):
+                problems.append(f"seat {label} subagent mode requires a model")
+            else:
+                model = seat["model"]
+                unresolved = sorted(set(re.findall(r"\{[A-Z][A-Z0-9_]*\}", model)))
+                if unresolved:
+                    problems.append(f"seat {label} subagent model has unresolved placeholders {unresolved}: {model!r}")
+                elif tool == "claude" and not _is_opus_line(model):
+                    problems.append(f"seat {label} claude subagent must be the Opus line (never Fable/Mythos), got {model!r}")
+            _validate_env_file_path(label, seat, problems)
+        else:  # exec
+            provider = seat.get("provider")
+            if provider not in EXTERNAL_PROVIDERS:
+                problems.append(f"seat {label} provider must be one of " + ", ".join(sorted(EXTERNAL_PROVIDERS)))
+            if name == "opus" and provider != "anthropic":
+                problems.append("seat opus role must declare provider 'anthropic'")
+            if not _argv_of(seat):
+                problems.append(f"seat {label} requires argv")
+            if seat.get("transport") not in ("stdin", "arg"):
+                problems.append(f"seat {label} transport must be stdin or arg")
+            env = seat.get("env", {})
+            if not isinstance(env, dict) or any(not isinstance(k, str) or not isinstance(v, str)
+                                                for k, v in env.items()):
+                problems.append(f"seat {label} env must be string:string")
+            _validate_env_file_path(label, seat, problems)
+    for seat in seat_list:
+        if not isinstance(seat, dict):
+            continue
+        label = seat.get("name") or "<unnamed>"
+        if seat.get("mode") != "exec":
+            # subagent seats carry no argv/timeout/flags — only model + minTier + envFile (checked above).
+            min_tier = seat.get("minTier", 4)
+            if not isinstance(min_tier, int) or isinstance(min_tier, bool) or not 1 <= min_tier <= 4:
+                problems.append(f"seat {label} minTier must be an integer in 1..4")
+            continue
         timeout = seat.get("timeoutSeconds", 300)
         if not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= 900:
             problems.append(f"seat {label} timeoutSeconds must be 1..900")
@@ -327,6 +359,9 @@ def check_seat_flags(tool, seats):
         if plan_timeout is not None and (not isinstance(plan_timeout, int) or
                                          isinstance(plan_timeout, bool) or not 1 <= plan_timeout <= 900):
             problems.append(f"seat {label} planTimeoutSeconds must be 1..900")
+        min_tier = seat.get("minTier", 4)
+        if not isinstance(min_tier, int) or isinstance(min_tier, bool) or not 1 <= min_tier <= 4:
+            problems.append(f"seat {label} minTier must be an integer in 1..4")
         argv = _argv_of(seat)
         if not argv:
             continue

@@ -34,6 +34,7 @@
     "**/id_ecdsa*",
     "**/credentials.json",
     "**/*.pem",
-    "**/*.key"
+    "**/*.key",
+    "**/council/env/**"
   ]
 }

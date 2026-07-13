@@ -1,12 +1,41 @@
 {
-  "$doc": "COMMITTED reference roster for the review council. It is NOT the runtime config: at setup, the installer resolves each provider role to its CURRENT flagship model slug and the transport chosen for this machine, then writes local/seats.<host>.json (gitignored). Model slugs are NEVER committed here — recipes use the {MODEL} placeholder so this file never goes stale. {EFFORT} = efforts.default below the critical tier, efforts.max at critical. {PROMPT_TEXT} = the review prompt content (arg transport); stdin transport omits it and pipes the prompt file.",
+  "$doc": "COMMITTED reference roster for the review council. It is NOT the runtime config: at setup, the installer reads the `presets` block and each role's `modelGuidance`/`transportPreference`, resolves each provider role to its CURRENT flagship model slug and the best available transport for THIS machine, then writes local/seats.<host>.json (gitignored). Model slugs are NEVER committed here — recipes use the {MODEL} placeholder so this file never goes stale. {EFFORT} = efforts.default below the critical tier, efforts.max at critical. {PROMPT_TEXT} = the review prompt content (arg transport); stdin transport omits it and pipes the prompt file. The engine (runner/doctor) reads minTier ONLY from the installed seats file; it never assumes the presets below — they are setup-time defaults.",
+
+  "presets": {
+    "$doc": "Setup-time defaults only. At setup the installer stamps each installed seat's `minTier` from here and writes the transportPreference order into the per-host candidate. No runtime code or instruction assumes these values; a hand-edited seats file may override them freely. A seat runs at council tier T iff seat.minTier <= T (absent minTier => 4 = critical-only).",
+    "minTier": {
+      "opus": 1,
+      "gpt": 2,
+      "grok": 3,
+      "glm": 4,
+      "gemini": 4,
+      "mimo": 4,
+      "deepseek": 4
+    },
+    "tierComposition": {
+      "low": ["opus"],
+      "elevated": ["opus", "gpt"],
+      "high": ["opus", "gpt", "grok"],
+      "critical": "all installed seats + developer sign-off"
+    },
+    "transportPreference": {
+      "$doc": "Per-role ordered list of transports, best first. The installer picks the first one whose CLI is installed AND whose driver smoke passes; the rest are dropped (best-effort). 'subagent' (opus on a Claude Code host only) is an in-process host subagent, not a CLI. 'claude'/'codex'/'cursor'/'opencode' are exec subprocesses via that CLI.",
+      "opus": ["subagent", "claude", "cursor", "opencode"],
+      "gpt": ["codex", "cursor", "opencode"],
+      "grok": ["cursor", "opencode"],
+      "glm": ["cursor", "opencode"],
+      "gemini": ["cursor", "opencode"],
+      "mimo": ["opencode"],
+      "deepseek": ["opencode"]
+    }
+  },
 
   "roster": [
     {
       "role": "opus", "provider": "anthropic",
-      "modelGuidance": "The Anthropic OPUS line specifically. Use the `opus` alias (tracks the latest Opus) or a concrete claude-opus-* id. NEVER Fable or Mythos (the Claude-5 / Mythos-class line) — setup must confirm the resolved slug is an Opus id.",
-      "recursionDisable": "--safe-mode (mechanically disables CLAUDE.md, skills, plugins, hooks, MCP)",
-      "asNative": { "mode": "subagent", "model": "{MODEL}" },
+      "modelGuidance": "The Anthropic OPUS line specifically. Current target: opus-4.8 (the `opus` alias, which tracks the latest Opus, or a concrete claude-opus-* id such as claude-opus-4-8). NEVER Fable or Mythos (the Claude-5 / Mythos-class line) — setup must confirm the resolved slug is an Opus id.",
+      "recursionDisable": "--safe-mode (mechanically disables CLAUDE.md, skills, plugins, hooks, MCP) for the claude CLI / subagent; cursor --mode plan and opencode --agent plan are weaker read-only fallbacks in the runner-provided scratch cwd with a synthetic Git root.",
+      "asSubagent": { "mode": "subagent", "model": "{MODEL}", "efforts": { "default": "high", "max": "xhigh" } },
       "asExternal": {
         "provider": "anthropic",
         "transport": "stdin",
@@ -20,18 +49,26 @@
         "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
         "efforts": { "default": "high", "max": "xhigh" },
         "planTimeoutSeconds": 600,
-        "note": "Opus-line model via Cursor when the claude CLI is absent (confirm the Cursor slug is an Opus id with `cursor-agent --list-models`). Isolation = read-only `--mode plan` in the runner-provided scratch cwd with a synthetic Git root — weaker than native `--safe-mode`; acceptable fallback."
+        "note": "Opus-line model via Cursor when the claude CLI is absent (confirm the Cursor slug is an Opus id with `cursor-agent --list-models`). Isolation = read-only `--mode plan` in the runner-provided scratch cwd with a synthetic Git root — weaker than `--safe-mode`; acceptable fallback."
+      },
+      "asExternalOpencode": {
+        "provider": "anthropic",
+        "transport": "arg",
+        "argv": ["opencode", "run", "--agent", "plan", "-m", "openrouter/{MODEL}", "--variant", "{EFFORT}", "{PROMPT_TEXT}"],
+        "efforts": { "default": "high", "max": "max" },
+        "planTimeoutSeconds": 600,
+        "note": "Opus-line model via OpenCode+OpenRouter when neither the claude CLI nor cursor-agent is available. {MODEL} is the OpenRouter anthropic slug (an Opus id); confirm the Opus-line rule still holds."
       }
     },
     {
       "role": "gpt", "provider": "openai",
-      "modelGuidance": "Leo's standing rule: the most capable flavor of the newest GPT generation. GPT-5.6 ships three capability flavors — Sol > Terre > Luna (new names in 5.6, not lineages) — so 5.6 resolves to Sol, never Terre or Luna; a newer GPT generation supersedes 5.6 automatically and its most capable flavor is selected. Resolve the exact transport-specific slug at setup and never commit it.",
-      "recursionDisable": "LEOS_COUNCIL_SEAT sentinel + --ephemeral + --sandbox read-only; normal CODEX_HOME is retained for authentication",
+      "modelGuidance": "Leo's standing rule: the most capable flavor of the newest GPT generation. Current target: gpt-5.6-sol. GPT-5.6 ships three capability flavors — Sol > Terre > Luna (new names in 5.6, not lineages) — so 5.6 resolves to Sol, never Terre or Luna; a newer GPT generation supersedes 5.6 automatically and its most capable flavor is selected. Resolve the exact transport-specific slug at setup and never commit it.",
+      "recursionDisable": "LEOS_COUNCIL_SEAT sentinel + --ephemeral + --sandbox read-only; normal CODEX_HOME is RETAINED for authentication (never override CODEX_HOME on a codex seat — it throws away host auth).",
       "asNative": {
         "mode": "exec", "transport": "stdin",
         "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort={EFFORT}", "-m", "{MODEL}", "-"],
         "efforts": { "default": "high", "max": "xhigh" },
-        "note": "native Codex pass pins the setup-resolved OpenAI model per the flavor rule in modelGuidance (5.6 → Sol)"
+        "note": "the host's own-provider GPT seat on a Codex host: a runner subprocess reusing the host's codex login (same CODEX_HOME, no separate key). Pins the setup-resolved OpenAI model per the flavor rule (5.6 → Sol)."
       },
       "asExternal": {
         "provider": "openai",
@@ -48,52 +85,20 @@
         "efforts": { "default": "high", "max": "xhigh" },
         "planTimeoutSeconds": 600,
         "note": "GPT/OpenAI model via Cursor when the codex CLI is absent: resolve per the flavor rule in modelGuidance (5.6 → Sol), then confirm the exact Cursor slug with `cursor-agent --list-models`. Isolation = read-only `--mode plan` in the runner-provided scratch cwd with a synthetic Git root instead of an isolated CODEX_HOME."
-      }
-    },
-    {
-      "role": "glm", "provider": "zhipu",
-      "modelGuidance": "Latest GLM via OpenRouter for the opencode transport, or the Cursor GLM slug (confirm with `cursor-agent --list-models`) for the cursor transport. Resolve at setup; never commit it.",
-      "recursionDisable": "opencode --agent plan (read-only); or cursor-agent --mode plan (read-only). Both launch in the runner-provided scratch cwd with a synthetic Git root, so repo-local agent config never loads, including during self-review. Neither loads CLAUDE.md-style council mandates.",
-      "asExternal": {
-        "provider": "zhipu",
+      },
+      "asExternalOpencode": {
+        "provider": "openai",
         "transport": "arg",
         "argv": ["opencode", "run", "--agent", "plan", "-m", "openrouter/{MODEL}", "--variant", "{EFFORT}", "{PROMPT_TEXT}"],
         "efforts": { "default": "high", "max": "max" },
-        "planTimeoutSeconds": 600
-      },
-      "asExternalCursor": {
-        "provider": "zhipu",
-        "transport": "arg",
-        "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
-        "efforts": { "default": "high", "max": "xhigh" },
         "planTimeoutSeconds": 600,
-        "note": "GLM via Cursor when opencode is absent — only if `cursor-agent --list-models` lists a GLM slug; {MODEL} is the Cursor slug, not the OpenRouter one."
-      }
-    },
-    {
-      "role": "gemini", "provider": "google",
-      "modelGuidance": "Latest Gemini flagship via OpenRouter, or the Cursor Gemini slug (confirm with `cursor-agent --list-models`) for the cursor transport. Native Gemini-CLI plan mode is experimental, so OpenCode+OpenRouter (or Cursor) is the firm route. Resolve at setup; never commit it.",
-      "recursionDisable": "opencode --agent plan (read-only); or cursor-agent --mode plan (read-only) — both in the runner-provided scratch cwd with a synthetic Git root",
-      "asExternal": {
-        "provider": "google",
-        "transport": "arg",
-        "argv": ["opencode", "run", "--agent", "plan", "-m", "openrouter/{MODEL}", "--variant", "{EFFORT}", "{PROMPT_TEXT}"],
-        "efforts": { "default": "xhigh", "max": "max" },
-        "planTimeoutSeconds": 600
-      },
-      "asExternalCursor": {
-        "provider": "google",
-        "transport": "arg",
-        "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
-        "efforts": { "default": "high", "max": "xhigh" },
-        "planTimeoutSeconds": 600,
-        "note": "Gemini via Cursor when opencode is absent — only if `cursor-agent --list-models` lists a Gemini slug; {MODEL} is the Cursor slug, not the OpenRouter one."
+        "note": "GPT via OpenCode+OpenRouter when neither codex nor cursor-agent is available. {MODEL} is the OpenRouter openai slug; resolve per the flavor rule."
       }
     },
     {
       "role": "grok", "provider": "xai",
-      "modelGuidance": "Latest Grok flagship in Cursor or via OpenRouter. For cursor-agent, confirm the exact slug with `cursor-agent --list-models`. Resolve at setup; never commit it.",
-      "recursionDisable": "cursor-agent --mode plan (read-only) in the runner-provided scratch cwd with a synthetic Git root; or opencode --agent plan via OpenRouter",
+      "modelGuidance": "Latest Grok flagship. Current target: grok-4.5. For cursor-agent, confirm the exact slug with `cursor-agent --list-models`; for opencode use the OpenRouter xai slug. Resolve at setup; never commit it.",
+      "recursionDisable": "cursor-agent --mode plan (read-only) or opencode --agent plan (read-only) — both in the runner-provided scratch cwd with a synthetic Git root, so repo-local agent config never loads, including during self-review.",
       "asExternalCursor": {
         "provider": "xai",
         "transport": "arg",
@@ -108,34 +113,99 @@
         "efforts": { "default": "high", "max": "max" },
         "planTimeoutSeconds": 600
       }
+    },
+    {
+      "role": "glm", "provider": "zhipu",
+      "modelGuidance": "Latest GLM flagship. Current target: glm-5.2. Via Cursor (confirm the Cursor GLM slug with `cursor-agent --list-models`) or OpenRouter for the opencode transport. Resolve at setup; never commit it.",
+      "recursionDisable": "cursor-agent --mode plan (read-only) or opencode --agent plan (read-only) — both in the runner-provided scratch cwd with a synthetic Git root.",
+      "asExternalCursor": {
+        "provider": "zhipu",
+        "transport": "arg",
+        "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
+        "efforts": { "default": "high", "max": "xhigh" },
+        "planTimeoutSeconds": 600,
+        "note": "GLM via Cursor (preferred when available) — only if `cursor-agent --list-models` lists a GLM slug; {MODEL} is the Cursor slug, not the OpenRouter one."
+      },
+      "asExternalOpencode": {
+        "provider": "zhipu",
+        "transport": "arg",
+        "argv": ["opencode", "run", "--agent", "plan", "-m", "openrouter/{MODEL}", "--variant", "{EFFORT}", "{PROMPT_TEXT}"],
+        "efforts": { "default": "high", "max": "max" },
+        "planTimeoutSeconds": 600,
+        "note": "GLM via OpenCode+OpenRouter when cursor-agent is absent. {MODEL} is the OpenRouter zhipu slug."
+      }
+    },
+    {
+      "role": "gemini", "provider": "google",
+      "modelGuidance": "Latest Gemini flagship. Current target: gemini-3.1-pro. Via Cursor (confirm the Cursor Gemini slug with `cursor-agent --list-models`) or OpenRouter for the opencode transport. Native Gemini-CLI plan mode is experimental, so Cursor or OpenCode+OpenRouter is the firm route. Resolve at setup; never commit it.",
+      "recursionDisable": "cursor-agent --mode plan (read-only) or opencode --agent plan (read-only) — both in the runner-provided scratch cwd with a synthetic Git root",
+      "asExternalCursor": {
+        "provider": "google",
+        "transport": "arg",
+        "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
+        "efforts": { "default": "high", "max": "xhigh" },
+        "planTimeoutSeconds": 600,
+        "note": "Gemini via Cursor (preferred when available) — only if `cursor-agent --list-models` lists a Gemini slug; {MODEL} is the Cursor slug, not the OpenRouter one."
+      },
+      "asExternalOpencode": {
+        "provider": "google",
+        "transport": "arg",
+        "argv": ["opencode", "run", "--agent", "plan", "-m", "openrouter/{MODEL}", "--variant", "{EFFORT}", "{PROMPT_TEXT}"],
+        "efforts": { "default": "xhigh", "max": "max" },
+        "planTimeoutSeconds": 600,
+        "note": "Gemini via OpenCode+OpenRouter when cursor-agent is absent. {MODEL} is the OpenRouter google slug."
+      }
+    },
+    {
+      "role": "mimo", "provider": "xiaomi",
+      "modelGuidance": "Xiaomi MiMo flagship. Current target: mimo-v2.5-pro. OpenCode+OpenRouter ONLY — cursor-agent has no verified MiMo slug. The OpenRouter slug is xiaomi/mimo-v2.5-pro. Resolve at setup; never commit it.",
+      "recursionDisable": "opencode --agent plan (read-only) in the runner-provided scratch cwd with a synthetic Git root. Neither loads CLAUDE.md-style council mandates.",
+      "asExternalOpencode": {
+        "provider": "xiaomi",
+        "transport": "arg",
+        "argv": ["opencode", "run", "--agent", "plan", "-m", "openrouter/{MODEL}", "--variant", "{EFFORT}", "{PROMPT_TEXT}"],
+        "efforts": { "default": "xhigh", "max": "max" },
+        "planTimeoutSeconds": 600,
+        "note": "MiMo via OpenCode+OpenRouter only. {MODEL} is the OpenRouter xiaomi slug (mimo-v2.5-pro). Dropped entirely if opencode is not installed or its smoke fails."
+      }
+    },
+    {
+      "role": "deepseek", "provider": "deepseek",
+      "modelGuidance": "DeepSeek flagship. Current target: deepseek-v4-pro. OpenCode+OpenRouter ONLY — cursor-agent has a known deepseek-v4-pro incompatibility (reasoning_content replay breaks long tool chains; 200K context cap) while opencode passes the full 1M. The OpenRouter slug is deepseek/deepseek-v4-pro. Resolve at setup; never commit it.",
+      "recursionDisable": "opencode --agent plan (read-only) in the runner-provided scratch cwd with a synthetic Git root. Neither loads CLAUDE.md-style council mandates.",
+      "asExternalOpencode": {
+        "provider": "deepseek",
+        "transport": "arg",
+        "argv": ["opencode", "run", "--agent", "plan", "-m", "openrouter/{MODEL}", "--variant", "{EFFORT}", "{PROMPT_TEXT}"],
+        "efforts": { "default": "xhigh", "max": "max" },
+        "planTimeoutSeconds": 600,
+        "note": "DeepSeek via OpenCode+OpenRouter only (cursor is excluded due to its reasoning_content bug). {MODEL} is the OpenRouter deepseek slug (deepseek-v4-pro). Dropped entirely if opencode is not installed or its smoke fails."
+      }
     }
   ],
 
   "$runtimeSchema": {
-    "$doc": "Shape of the machine-local local/seats.<host>.json the installer writes and the council skill reads. `native` describes how THIS host runs its native read-only review pass (its own provider's pinned reviewer: Opus on Claude, the OpenAI flavor rule on Codex, the host's own model on OpenCode/Cursor); `seats` are the EXTERNAL seats = roster minus this host's own provider, strongest-first, with {MODEL} already resolved to a concrete slug.",
+    "$doc": "Shape of the machine-local local/seats.<host>.json the installer writes and the council skill/runner reads. There is NO top-level `native` object: every reviewer — including the host's own-provider seat — is one element of `seats[]`. A seat with mode `subagent` is an in-process host subagent (Claude Code only) dispatched by the orchestrator; a seat with mode `exec` is a runner subprocess via argv (every other harness, including an own-provider seat on Codex/Cursor/OpenCode). `seats` is ordered strongest-first; `minTier` (1..4, default 4) is the minimum council tier at which a seat runs — a seat runs at tier T iff minTier <= T. A config with zero seats is valid (council skips with a reduced-diversity note).",
     "host": "claude | codex | opencode | cursor",
-    "provider": "required on every external seat: anthropic | openai | zhipu | google | xai | custom; copied from the catalog roster identity, not inferred from the display name",
-    "adapter": "optional seat adapter, allow-listed: claude | codex | opencode | cursor-json | raw (raw is explicit-only — an unknown binary without an adapter is an invalid seat); cursor requires cursor-json after an output-contract smoke test",
-    "responsePath": "cursor-json external seat only: dotted JSON string field containing reviewer text",
-    "timeoutSeconds": "optional per-seat implementation/native wall-clock limit in seconds, integer 1..900 (default 300)",
-    "planTimeoutSeconds": "optional external-plan-only wall-clock limit in seconds, integer 1..900; catalog flagship transports use 600; ignored for implementation and native fallback after unconditional validation",
-    "cwd": "optional per-seat working-directory mode: \"scratch\" (default — the runner creates a private dir with its own synthetic Git root under local/council/work/<run>/ and removes it after the seat, so parent-repo config like .cursor/rules or AGENTS.md never loads into a reviewer even during self-review; the reviewed repo's absolute path is injected as a prompt header) | \"repo\" (run inside the reviewed repo — opt-out for transports that cannot read outside their workspace; re-opens repo-local instruction injection)",
-    "native": {
-      "mode": "subagent | exec",
-      "model": "(subagent only) resolved model, e.g. opus",
-      "transport": "(exec only) stdin | arg",
-      "argv": "(exec only) resolved command array",
-      "efforts": { "default": "high", "max": "xhigh" }
-    },
     "seats": [
       {
-        "name": "gpt", "provider": "openai", "transport": "stdin",
-        "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort={EFFORT}", "-m", "{MODEL}", "-"],
+        "name": "path-safe unique seat id, e.g. opus | gpt | glm | gemini | grok | mimo | deepseek",
+        "provider": "anthropic | openai | zhipu | google | xai | xiaomi | deepseek | custom; copied from the catalog roster identity, not inferred from the display name",
+        "mode": "subagent | exec",
+        "minTier": "optional integer 1..4 (default 4 = critical-only); a seat runs at council tier T iff minTier <= T",
+        "model": "(subagent only) resolved model, e.g. opus or claude-opus-4-8",
+        "transport": "(exec only) stdin | arg",
+        "argv": "(exec only) resolved command array, {MODEL} already resolved; {EFFORT} and {PROMPT_TEXT} remain as runtime placeholders",
+        "adapter": "optional exec-seat adapter, allow-listed: claude | codex | opencode | cursor-json | raw (raw is explicit-only — an unknown binary without an adapter is an invalid seat); cursor requires cursor-json after an output-contract smoke test",
+        "responsePath": "cursor-json exec seat only: dotted JSON string field containing reviewer text",
         "efforts": { "default": "high", "max": "xhigh" },
-        "adapter": "codex",
-        "timeoutSeconds": 300,
-        "planTimeoutSeconds": 600
+        "timeoutSeconds": "optional per-seat wall-clock limit in seconds, integer 1..900 (default 300)",
+        "planTimeoutSeconds": "optional exec-seat plan-checkpoint wall-clock limit in seconds, integer 1..900; catalog flagship transports use 600; ignored for implementation seats and the reduced-diversity fallback after unconditional validation",
+        "cwd": "optional per-seat working-directory mode: \"scratch\" (default — the runner creates a private dir with its own synthetic Git root under local/council/work/<run>/ and removes it after the seat, so parent-repo config like .cursor/rules or AGENTS.md never loads into a reviewer even during self-review; the reviewed repo's absolute path is injected as a prompt header) | \"repo\" (run inside the reviewed repo — opt-out for transports that cannot read outside their workspace; re-opens repo-local instruction injection)",
+        "env": "optional inline string:string env overlaid on the inherited process env; NON-SECRET only — secret-named keys (TOKEN/SECRET/PASSWORD/API_KEY/PRIVATE_KEY) are refused at install. For secrets, use envFile.",
+        "envFile": "optional path to a .env file relative to LEOS_LOCAL (e.g. council/env/gpt.env), gitignored and mode 0600; secret-named keys ARE allowed in it. The runner loads and merges it into the seat subprocess env at dispatch; its contents never appear in prompts, logs, or result.json. If omitted, the runner still looks for local/council/env/<name>.env conventionally."
       }
-    ]
+    ],
+    "smokeTests": "{name: {passed: bool, confirmedAt: int}} stamped by leos-seats.py write for every mode:exec seat whose driver smoke was confirmed"
   }
 }

@@ -4,6 +4,61 @@ Human-readable history. **Not** a migration trigger — upgrades are `git pull` 
 (there is no version/migration system; see `docs/ARCHITECTURE.md`). Entries are tagged by which
 host(s) they affect: `[all]`, `[claude]`, `[codex]`, `[opencode]`, `[cursor]`.
 
+## Unreleased — council seats redesign (breaking seats-schema change)
+
+The council seat system is redesigned around a unified `seats[]` array. This is a **breaking**
+machine-local schema change; `leos-doctor.py` fails on old-shape `seats.<host>.json` after
+`git pull` and prints "regenerate via SETUP step 5 + `leos-seats.py write`". `setup --refresh` is a
+no-op (no new runtime deps for the redesign). Not a migration trigger — doctor-detected
+regeneration, as documented in `docs/ARCHITECTURE.md`.
+
+### Changed
+- `[all]` **Unified `seats[]` schema (no top-level `native`).** `local/seats.<host>.json` is now a
+  single `seats[]` array; every reviewer — including the host's own-provider seat — is one element
+  with `mode` in {`subagent`, `exec`} (the old `mode: native` is gone), an integer `minTier`
+  (1..4, default 4; a seat runs at council tier T iff `seat.minTier <= T`, for BOTH plan and impl
+  checkpoints — plan no longer has a separate external-first rule), an optional inline `env`
+  (non-secret only), and an optional `envFile` (the per-seat secret channel). Doctor reports
+  `kind: "exec"` (was `"external"`).
+- `[all]` **Two dispatch modes only.** `mode: subagent` = an in-process host subagent, Claude Code
+  ONLY (the one harness with a true subagent primitive + `--safe-mode`); requires a `model` field;
+  the runner reports it as `orchestrator-subagent-required` (was
+  `orchestrator-native-subagent-required`) and the orchestrator folds it back via
+  `runner.py collect-subagent` (`collect-native` kept as a legacy alias). `mode: exec` = a runner
+  subprocess via argv — covers foreign-provider seats AND own-provider seats on non-Claude hosts
+  (Codex-on-Codex, Cursor-on-Cursor, OpenCode-on-OpenCode).
+- `[all]` **Per-seat `minTier` replaces the positional native+external ladder.** Default install
+  presets (catalog `presets.minTier`): opus=1, gpt=2, grok=3, glm/gemini/mimo/deepseek=4. So
+  low=opus, elevated=opus+gpt, high=opus+gpt+grok, critical=all+signoff. The engine reads `minTier`
+  ONLY from the installed seats file — never assumes the presets.
+- `[all]` **Reduced-diversity fallback replaces native-only fallback.** If no seat's `minTier`
+  qualifies at the tier, the runner runs the single lowest-`minTier` configured seat once, emits
+  `fallback-fired`, and the report states reduced diversity (distinct-provider count < 2). Zero
+  seats configured → council skipped (`skip`).
+- `[all]` **Roster expanded 5 → 7.** Added `mimo` (provider `xiaomi`, OpenCode-only via OpenRouter
+  `xiaomi/mimo-v2.5-pro`) and `deepseek` (provider `deepseek`, OpenCode-only via OpenRouter
+  `deepseek/deepseek-v4-pro`; cursor excluded — known `reasoning_content` replay bug + 200K cap vs
+  opencode's full 1M).
+- `[all]` **Per-role transport preferences** (best→fallback) are now data in the catalog
+  `presets.transportPreference`: opus = subagent (Claude only) → claude → cursor → opencode;
+  gpt = codex → cursor → opencode; grok/glm/gemini = cursor → opencode; mimo/deepseek = opencode
+  only. "Best installation effort": attempt all 7; install a seat only if its best available
+  transport is installed AND its driver smoke passes; silently drop the rest.
+- `[all]` **Per-seat env file** (`local/council/env/<seat>.env`, gitignored, mode 0600): secret-
+  named keys (TOKEN/KEY/SECRET/PASSWORD) ARE allowed here, unlike the inline `env` dict (refused
+  via `SECRET_KEY_RE`). Added to `core/policy/policy-data.json` `secretReadPatterns` as
+  `**/council/env/**` so enforcing hosts deny the LLM reading it. Runner loads it at dispatch;
+  contents never enter prompts/logs/`result.json`. Hand-rolled `.env` parser (no python-dotenv dep).
+- `[all]` **Codex `CODEX_HOME` fix preserved.** NEVER override `CODEX_HOME` on a codex seat (the
+  old catalog did this for isolation and threw away host auth). Isolation now comes from
+  `--ephemeral` + scratch cwd + `LEOS_COUNCIL_SEAT` sentinel. Doctor rejects `env.CODEX_HOME` on
+  codex seats. This sweep also retires any lingering isolated-`CODEX_HOME` `seats.codex.json`.
+
+### Migration
+- `[all]` After `git pull`, `leos-doctor.py` fails on old-shape `seats.<host>.json` (top-level
+  `native`, missing `mode`/`minTier`). Regenerate via SETUP step 5 + `leos-seats.py write` (resolves
+  the 7 role slugs + smokes each `mode: exec` seat). `setup --refresh` is a no-op.
+
 ## Unreleased — initial build
 
 Merges Leo's previously separate `leos-claude` + `leos-codex` config repos into one, and adds

@@ -53,27 +53,37 @@ Kill switches: stop if the target repository root has `.council-off`, or its pat
 ```
 
 That risk is the floor. You may escalate one tier with a concrete ledger entry; never lower it.
-`skip` means no council. The tier mapping is:
+`skip` means no council. Each configured seat in `local/seats.<host>.json` carries a `minTier`
+(integer 1-4); a seat runs at council tier T iff `seat.minTier <= T` (absent `minTier` ⇒ 4 =
+critical-only). The tier name → index map is: `low`=1, `elevated`=2, `high`=3, `critical`=4.
 
-| Tier | Seats |
+The **default install presets** (written into the seats file at setup from the catalog; the engine
+reads only the seats file, never the presets) yield:
+
+| Tier | Seats that run (default install) |
 |---|---|
-| low | native |
-| elevated | native + first configured external |
-| high | native + first two configured externals |
-| critical | native + all configured externals + developer sign-off |
+| low | every seat with minTier ≤ 1 (opus) |
+| elevated | + every seat with minTier ≤ 2 (gpt) |
+| high | + every seat with minTier ≤ 3 (grok) |
+| critical | all installed seats + developer sign-off |
 
-Missing/invalid seats config means **native-only**, and the report must say diversity was reduced.
-`local/seats.<host>.json` contains resolved model slugs and argv arrays; never commit it or copy its
-values into tracked files.
+A hand-edited seats file may set any `minTier` per seat; selection is always `minTier <= T`, for
+**both** the plan and impl checkpoints (plan no longer has a separate external-first rule).
 
-In native-only fallback, retain independent-review depth: low runs one native pass; elevated runs
-two; high and critical run three. A native `mode: subagent` yields one
-`orchestrator-native-subagent-required` record for each pass; do not collapse them into one review.
+`local/seats.<host>.json` is the unified `seats` array: every reviewer — including the host's
+own-provider seat — is one element with `mode` in {`subagent`, `exec`}, a `minTier`, an optional
+inline `env` (non-secret), and an optional `envFile` (the per-seat secret channel). There is no
+top-level `native` object. Never commit it or copy its values into tracked files.
 
-Plan checkpoints use a different, external-first selection: normal (`low`/`elevated`) plans use
-the first configured external seat; high-stakes (`high`/`critical`) plans use the first two. The
-native seat is used only when no external seat is configured, and then only once. This preserves an
-independent planning review without turning plan review into an implementation panel.
+**Reduced-diversity fallback:** if no seat's `minTier` qualifies at the tier (e.g. tier 1 but the
+only installed seats are minTier-4), the runner runs the single lowest-`minTier` configured seat
+once, emits a `fallback-fired` event, and you MUST report that diversity was reduced. If no seat is
+configured at all, the council is skipped (`skip`) with a ledger note. Diversity is the count of
+distinct `provider` values among the selected seats; fewer than two distinct providers is
+reduced-diversity and must be stated in the report.
+
+A `mode: subagent` seat (an in-process host subagent — Claude Code only) yields one
+`orchestrator-subagent-required` record per pass; do not collapse multiple passes into one review.
 
 ## Prepare context and deterministic checks
 
@@ -140,21 +150,24 @@ explicitly approved sending this prompt to the named providers; omit it and the 
 external dispatch. The command is explicit orchestrator action, not an autonomous trigger. Its result file is
 under `$ROOT/local/council/work/.../result.json`.
 
-- An `exec` native seat is run by the runner. External seats may define `planTimeoutSeconds` for
-  plan review; it does not affect implementation seats or native plan fallback.
-- A native `mode: subagent` result is `orchestrator-native-subagent-required`; dispatch exactly one
-  native read-only subagent with the returned private `promptPath`. Tell it not to convene Leo's
-  Agents council. It may otherwise use ordinary allowed tools/subagents. Save its mandatory
-  findings JSON privately and run `runner.py collect-native --result <result.json> --seat <name>
-  --review-file <file>` for each pending native pass. Until collection, the runner reports
-  `dispatchOk: true` but `reviewComplete: false`; never present it as complete.
+- A `mode: exec` seat is run by the runner as a subprocess. Exec seats may define
+  `planTimeoutSeconds` for plan review; it does not affect implementation seats or the
+  reduced-diversity fallback.
+- A `mode: subagent` seat (in-process host subagent, Claude Code only) yields a result with status
+  `orchestrator-subagent-required`; dispatch exactly one read-only subagent pinned to the seat's
+  `model` with the returned private `promptPath`. Tell it not to convene Leo's Agents council. It
+  may otherwise use ordinary allowed tools/subagents. Save its mandatory findings JSON privately and
+  run `runner.py collect-subagent --result <result.json> --seat <name> --review-file <file>` for each
+  pending subagent pass. (`collect-native` is kept as a legacy alias.) Until collection, the runner
+  reports `dispatchOk: true` but `reviewComplete: false`; never present it as complete.
 - `completed` is the only successful CLI response. `empty-output`, `missing-review-content`,
   `invalid-structured-output`, `invalid-review-findings`, `unsupported-adapter`, `nonzero-exit`,
   `timed-out`, `cancelled`, `signal-exit`, `invalid-seat-config`, `isolation-error`, `unavailable`,
   and `execution-error` are distinct failures. Report each one; never infer a successful review
   from a blank terminal or a transport bookkeeping event with no reviewer message.
-- If all external seats fail, continue native-only and append a `fallback-fired` ledger entry. Do
-  not state that the council passed.
+- If every dispatched seat fails, or no seat qualifies at the tier, the runner fires a
+  reduced-diversity fallback (the single lowest-`minTier` configured seat) and emits
+  `fallback-fired`. State reduced diversity in the report; do not claim the council passed.
 
 An active marker owned by another run, or `LEOS_COUNCIL_SEAT=1`, makes the runner refuse with
 `nested-leos-council-refused`. This is intentional recursion prevention, not a retry signal.

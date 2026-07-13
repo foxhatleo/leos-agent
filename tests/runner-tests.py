@@ -67,14 +67,17 @@ def fresh():
 
 
 def write_seats(local, native_argv, external_argv=None, native_extra=None, external_extra=None):
+    """Unified schema: the host's own-provider seat (named 'native') is one seats[] entry with
+    mode: exec + minTier 1, so it is selected at every tier (preserving the old impl behavior)."""
     seats = {
         "host": "codex",
-        "native": dict({"mode": "exec", "transport": "stdin", "argv": native_argv,
-                        "efforts": {"default": "high", "max": "xhigh"}}, **(native_extra or {})),
-        "seats": [],
+        "seats": [dict({"name": "native", "provider": "openai", "mode": "exec", "transport": "stdin",
+                        "argv": native_argv, "minTier": 1,
+                        "efforts": {"default": "high", "max": "xhigh"}}, **(native_extra or {}))],
     }
     if external_argv:
-        seats["seats"].append(dict({"name": "opus", "transport": "stdin", "argv": external_argv,
+        seats["seats"].append(dict({"name": "opus", "provider": "anthropic", "mode": "exec",
+                                    "transport": "stdin", "argv": external_argv, "minTier": 1,
                                     "efforts": {"default": "high", "max": "xhigh"},
                                     "timeoutSeconds": 10}, **(external_extra or {})))
     with open(os.path.join(local, "seats.codex.json"), "w") as f:
@@ -83,18 +86,21 @@ def write_seats(local, native_argv, external_argv=None, native_extra=None, exter
 
 def write_subagent_native(local):
     with open(os.path.join(local, "seats.codex.json"), "w") as f:
-        json.dump({"host": "codex", "native": {"mode": "subagent", "model": "opus"}, "seats": []}, f)
+        json.dump({"host": "codex", "seats": [
+            {"name": "native", "provider": "anthropic", "mode": "subagent",
+             "model": "opus", "minTier": 1}]}, f)
 
 
 def write_opencode_external(local, native_argv, opencode_argv):
     with open(os.path.join(local, "seats.codex.json"), "w") as f:
         json.dump({
             "host": "codex",
-            "native": {"mode": "exec", "transport": "stdin", "argv": native_argv,
-                       "efforts": {"default": "high", "max": "xhigh"}},
-            "seats": [{"name": "glm", "transport": "arg",
-                       "argv": opencode_argv + ["{PROMPT_TEXT}"],
-                       "efforts": {"default": "high", "max": "max"}, "timeoutSeconds": 10}],
+            "seats": [
+                {"name": "native", "provider": "openai", "mode": "exec", "transport": "stdin",
+                 "argv": native_argv, "minTier": 1, "efforts": {"default": "high", "max": "xhigh"}},
+                {"name": "glm", "provider": "zhipu", "mode": "exec", "transport": "arg",
+                 "argv": opencode_argv + ["{PROMPT_TEXT}"], "minTier": 1,
+                 "efforts": {"default": "high", "max": "max"}, "timeoutSeconds": 10}],
         }, f)
 
 
@@ -102,12 +108,13 @@ def write_cursor_external(local, native_argv, cursor_argv, response_path="result
     with open(os.path.join(local, "seats.codex.json"), "w") as f:
         json.dump({
             "host": "codex",
-            "native": {"mode": "exec", "transport": "stdin", "argv": native_argv,
-                       "efforts": {"default": "high", "max": "xhigh"}},
-            "seats": [{"name": "grok", "transport": "arg",
-                       "argv": cursor_argv + ["{PROMPT_TEXT}"], "adapter": "cursor-json",
-                       "responsePath": response_path,
-                       "efforts": {"default": "high", "max": "xhigh"}, "timeoutSeconds": 10}],
+            "seats": [
+                {"name": "native", "provider": "openai", "mode": "exec", "transport": "stdin",
+                 "argv": native_argv, "minTier": 1, "efforts": {"default": "high", "max": "xhigh"}},
+                {"name": "grok", "provider": "xai", "mode": "exec", "transport": "arg",
+                 "argv": cursor_argv + ["{PROMPT_TEXT}"], "adapter": "cursor-json",
+                 "responsePath": response_path, "minTier": 1,
+                 "efforts": {"default": "high", "max": "xhigh"}, "timeoutSeconds": 10}],
         }, f)
 
 
@@ -530,7 +537,7 @@ def main():
     data = json.loads(result.stdout)
     check("native subagent remains orchestrator-owned", result.returncode == 0 and
           data.get("dispatchOk") is True and data.get("reviewComplete") is False and
-          data.get("requiresOrchestratorNative") is True)
+          data.get("requiresOrchestratorSubagent") is True)
     native_review = os.path.join(os.path.dirname(data["resultPath"]), "native-review.json")
     with open(native_review, "w") as f:
         f.write("[]\n")
@@ -542,38 +549,40 @@ def main():
           collected_data["reviewComplete"] is True and
           collected_data["results"][0]["transportResult"]["findings"] == [])
 
-    # Native-only fallback preserves independent-pass depth at higher tiers.
+    # A configured seat is selected once at every tier its minTier permits (minTier 1 => all
+    # tiers). The old multi-pass native-only fallback is gone — one seat runs one pass.
     _, repo, local, bindir, prompt, env = fresh()
     executable(os.path.join(bindir, "codex"), "cat >/dev/null\nprintf '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"[]\"}}\\n'")
     write_seats(local, [os.path.join(bindir, "codex"), "exec", "-"])
     result = run(repo, prompt, env, tier="high")
     data = json.loads(result.stdout)
-    check("native-only high tier runs three independent passes", result.returncode == 0 and
-          [item["seat"] for item in data["results"]] == ["native", "native-2", "native-3"])
+    check("single configured seat runs one pass at high tier", result.returncode == 0 and
+          [item["seat"] for item in data["results"]] == ["native"])
 
-    # Planning is external-first: it should not waste a native pass when an independent CLI seat
-    # is configured, and normal plans use just the first strong external reviewer.
+    # Planning uses the same minTier filter as impl (no separate external-first rule): every
+    # seat whose minTier <= the tier runs. The opus seat (seats[1]) carries a planTimeoutSeconds
+    # that applies at the plan checkpoint.
     _, repo, local, bindir, prompt, env = fresh()
     executable(os.path.join(bindir, "codex"), "cat >/dev/null\nprintf '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"[]\"}}\\n'")
     executable(os.path.join(bindir, "claude"), "cat >/dev/null\nprintf '{\"result\":\"[]\"}\\n'")
     write_seats(local, [os.path.join(bindir, "codex"), "exec", "-"], [os.path.join(bindir, "claude"), "--print"])
-    # Plan-specific deadlines are explicit and affect external plan seats only. There is no
-    # hidden vendor-wide cap; implementation seats retain timeoutSeconds.
     config_path = os.path.join(local, "seats.codex.json")
     config = json.load(open(config_path))
-    config["seats"][0]["planTimeoutSeconds"] = 7
+    config["seats"][1]["planTimeoutSeconds"] = 7  # the opus exec seat
     with open(config_path, "w") as f:
         json.dump(config, f)
     result = run(repo, prompt, env, tier="low", checkpoint="plan")
     data = json.loads(result.stdout)
-    check("plan checkpoint uses configured external before native", result.returncode == 0 and
-          [item["seat"] for item in data["results"]] == ["opus"] and
-          data["results"][0].get("timeoutSeconds") == 7)
+    seatnames = [item["seat"] for item in data["results"]]
+    opus = next(item for item in data["results"] if item["seat"] == "opus")
+    check("plan checkpoint selects every minTier-qualifying seat", result.returncode == 0 and
+          set(seatnames) == {"native", "opus"} and opus.get("timeoutSeconds") == 7)
     result = run(repo, prompt, env, tier="low", checkpoint="plan", approve_external=False)
     check("external dispatch requires explicit project approval", result.returncode == 2 and
           "external-send-approval-required" in result.stdout)
 
-    # A failed plan external triggers a native fallback, but the failed council remains incomplete.
+    # A failed exec seat alongside a completing seat leaves the council incomplete (no silent
+    # retry — the old all-fail native fallback is gone in the unified model).
     _, repo, local, bindir, prompt, env = fresh()
     native = os.path.join(bindir, "codex")
     external = os.path.join(bindir, "claude")
@@ -582,10 +591,11 @@ def main():
     write_seats(local, [native, "exec", "-"], [external, "--print"])
     result = run(repo, prompt, env, tier="low", checkpoint="plan")
     data = json.loads(result.stdout)
-    check("failed plan external triggers native fallback", result.returncode == 1 and
-          [item["seat"] for item in data["results"]] == ["opus", "native"] and
-          data["results"][1]["status"] == "completed" and
-          data["results"][1].get("timeoutSeconds") == 300 and data["reviewComplete"] is False)
+    by_seat = {item["seat"]: item for item in data["results"]}
+    check("failed exec seat beside a completing seat stays incomplete", result.returncode == 1 and
+          by_seat["native"]["status"] == "completed" and
+          by_seat["opus"]["status"] in ("nonzero-exit", "invalid-structured-output") and
+          data["reviewComplete"] is False)
 
     # planTimeoutSeconds is validated even when the current dispatch is not an external plan,
     # preventing dormant invalid configuration from reaching a later plan run.
@@ -601,12 +611,14 @@ def main():
     check("invalid dormant plan timeout is rejected", result.returncode == 2 and
           data.get("status") == "invalid-seats" and "planTimeoutSeconds" in data.get("reason", ""))
 
-    # Vacuous selection is never a successful review.
+    # Vacuous selection is never a successful review. With zero seats configured the
+    # reduced-diversity fallback cannot fire (nothing to fall back to) — the run stays incomplete.
     _, repo, local, _, prompt, env = fresh()
-    write_subagent_native(local)
-    result = run(repo, prompt, env, tier="low", external_only=True)
+    with open(os.path.join(local, "seats.codex.json"), "w") as f:
+        json.dump({"host": "codex", "seats": []}, f)
+    result = run(repo, prompt, env, tier="low")
     data = json.loads(result.stdout)
-    check("zero selected seats is incomplete", result.returncode == 1 and
+    check("zero configured seats is incomplete", result.returncode == 1 and
           data["dispatchOk"] is False and data["reviewComplete"] is False)
 
     # An unknown binary without an explicit adapter is an invalid seat, never inferred raw.
@@ -645,20 +657,22 @@ def main():
     check("explicit raw adapter still enforces the findings contract", result.returncode == 1 and
           data["results"][0]["status"] == "invalid-review-findings")
 
-    # A plan review whose externals all fail and whose native block is missing yields a typed
-    # fallback error and releases the marker — never an uncaught crash + leaked marker.
+    # A plan review whose only configured seat fails yields a typed result and releases the
+    # marker — never an uncaught crash + leaked marker. (The seat has minTier 1 so it IS selected;
+    # it simply fails, and the council stays incomplete.)
     _, repo, local, bindir, prompt, env = fresh()
     failing = os.path.join(bindir, "claude")
     executable(failing, "cat >/dev/null\nexit 7")
     with open(os.path.join(local, "seats.codex.json"), "w") as f:
-        json.dump({"host": "codex", "seats": [{"name": "opus", "transport": "stdin",
+        json.dump({"host": "codex", "seats": [{"name": "opus", "provider": "anthropic",
+                   "mode": "exec", "transport": "stdin", "minTier": 1,
                    "argv": [failing, "--print"], "efforts": {"default": "high", "max": "xhigh"},
                    "timeoutSeconds": 10}]}, f)
     result = run(repo, prompt, env, tier="low", checkpoint="plan")
     data = json.loads(result.stdout)
-    fallback_rows = [r for r in data.get("results", []) if r.get("fallback")]
-    check("plan fallback without native is typed", result.returncode == 1 and
-          fallback_rows and fallback_rows[0]["status"] == "invalid-seat-config" and
+    check("failing-only plan seat is typed, not a crash", result.returncode == 1 and
+          data["results"] and data["results"][0]["seat"] == "opus" and
+          data["results"][0]["status"] in ("nonzero-exit", "invalid-structured-output") and
           os.path.isfile(data.get("resultPath", "")))
     retry = run(repo, prompt, env, tier="low", checkpoint="plan")
     check("typed fallback failure releases the marker",

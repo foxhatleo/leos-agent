@@ -17,7 +17,8 @@
       "Read(**/id_ecdsa*)",
       "Read(**/credentials.json)",
       "Read(**/*.pem)",
-      "Read(**/*.key)"
+      "Read(**/*.key)",
+      "Read(**/council/env/**)"
     ],
     "allow": [
       "Bash(git status:*)",

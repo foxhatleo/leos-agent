@@ -2,17 +2,18 @@
 
 A multi-model, multi-lineage adversarial review harness that works across agentic hosts (Claude
 Code, Codex, OpenCode, Cursor). The **host session's own model is the AUTHOR**, and the **host's
-provider supplies the native reviewer** (on Claude Code that seat is pinned to the Opus line, on
-Codex to the OpenAI flavor rule in §2 — so the native reviewer may differ from the session's
-model); a council of **other-lineage flagships** checks the work at two checkpoints — after
-**planning** and after **implementation**. The orchestrator reads their findings, adjudicates
-mechanically, fixes, and re-reviews once. Goal: catch training-lineage-correlated blind spots the
+own-provider seat** is one element of the unified `seats[]` array (on Claude Code that seat is
+`mode: subagent` pinned to the Opus line; on other hosts it's a `mode: exec` subprocess reusing the
+host's login, pinned per the OpenAI flavor rule in §2 — so the own-provider reviewer may differ
+from the session's model); a council of **other-lineage flagships** checks the work at two
+checkpoints — after **planning** and after **implementation**. The orchestrator reads their
+findings, adjudicates mechanically, fixes, and re-reviews once. Goal: catch training-lineage-correlated blind spots the
 author shares with itself.
 
 The engine (`bin/council.py`) is **host-agnostic** — it scores the diff and manages
 markers/ledger/Stop-hook. The explicit adapter runner (`bin/runner.py`) selects configured CLI
 seats, owns process lifecycle/output collection, and writes typed results. The orchestrator still
-chooses when to call it and owns native host-subagent dispatch. Both are data-driven from
+chooses when to call it and owns `mode: subagent` dispatch. Both are data-driven from
 machine-local `local/seats.<host>.json`.
 
 ---
@@ -21,9 +22,9 @@ machine-local `local/seats.<host>.json`.
 
 1. **The author must not decide how hard it gets checked.** The gate is the diff-derived risk
    floor. Reviewer confidence is finding metadata, not an author control that rewrites the tier.
-2. **Capability first on the common path; diversity where stakes are high.** The strong native
-   model is the everyday baseline; foreign lineages are added as stakes rise, where their different
-   failure distributions earn their cost.
+2. **Capability first on the common path; diversity where stakes are high.** The strong
+   own-provider model is the everyday baseline; foreign lineages are added as stakes rise, where
+   their different failure distributions earn their cost.
 3. **Cost tracks risk.** Most changes get one reviewer; the full panel is rare.
 4. **Never auto-trigger.** The council runs only when the orchestrator invokes the skill/runner;
    a Stop hook is a soft reminder inside the finish-the-task flow and surfaces findings
@@ -39,25 +40,35 @@ machine-local `local/seats.<host>.json`.
 
 ---
 
-## 2. The roster (host = native; the other four flagships = external)
+## 2. The roster (seven flagship roles, unified `seats[]`)
 
-A fixed roster of five flagship **roles** — the exact model slug is resolved at **setup**, never
-committed (recipes carry a `{MODEL}` placeholder; see `seats.catalog.json`):
+A fixed roster of seven flagship **roles** — the exact model slug is resolved at **setup**, never
+committed (recipes carry a `{MODEL}` placeholder; see `seats.catalog.json`). Every reviewer —
+including the host's own-provider seat — is one element of a single `seats[]` array in
+`local/seats.<host>.json`. There is **no top-level `native` object**: dispatch is per-seat `mode`
+in {`subagent`, `exec`} (the old `mode: native` is gone).
 
-| Role | Provider | Transport (default) | Read-only | Recursion isolation |
+| Role | Provider | Transports (best → fallback) | Read-only | Recursion isolation |
 |---|---|---|---|---|
-| **Opus** | Anthropic | `claude --safe-mode --no-session-persistence --print` | plan mode | `--safe-mode` (real) |
-| **GPT** | OpenAI | `codex exec --ephemeral --sandbox read-only -m {MODEL}` | sandbox read-only | sentinel + ephemeral session |
-| **GLM** | Zhipu | `opencode run --agent plan -m openrouter/{MODEL}` | plan agent | runner scratch cwd |
-| **Gemini** | Google | `opencode run --agent plan -m openrouter/{MODEL}` | plan agent | runner scratch cwd |
-| **Grok** | xAI | `cursor-agent -p --mode plan` *or* `opencode … openrouter/{MODEL}` | plan mode | runner scratch cwd |
+| **Opus** | Anthropic | subagent (Claude host) → `claude` → `cursor` → `opencode` | plan mode | `--safe-mode` (real, on `claude`/subagent) |
+| **GPT** | OpenAI | `codex` → `cursor` → `opencode` | sandbox read-only | sentinel + ephemeral session |
+| **Grok** | xAI | `cursor` → `opencode` | plan mode | runner scratch cwd |
+| **GLM** | Zhipu | `cursor` → `opencode` | plan mode | runner scratch cwd |
+| **Gemini** | Google | `cursor` → `opencode` | plan mode | runner scratch cwd |
+| **MiMo** | Xiaomi | `opencode` only | plan agent | runner scratch cwd |
+| **DeepSeek** | DeepSeek | `opencode` only | plan agent | runner scratch cwd |
 
-- **The host's provider supplies the native reviewer.** For Claude Code the native seat is a
-  read-only subagent **pinned to Opus** (`model: opus` — the Opus line specifically, never
-  Fable/Mythos). For Codex it is a `codex exec` read-only pass pinned at setup per the OpenAI
-  flavor rule below; for OpenCode/Cursor a `--agent plan` / `--mode plan` self-pass.
-- **External seats = roster minus the host's own provider.** Claude Code host → {GPT, GLM, Gemini,
-  Grok}; Codex host → {Opus, GLM, Gemini, Grok}; etc. So the council is at most native + 4 = 5.
+- **The host's own-provider seat is one element of `seats[]`, not a first-class `native` block.**
+  On a Claude Code host the Opus seat is `mode: subagent` — an in-process read-only Agent subagent
+  **pinned to Opus** (`model: opus` — the Opus line specifically, never Fable/Mythos); the runner
+  reports it as `orchestrator-subagent-required` and the orchestrator dispatches it and folds it
+  back via `runner.py collect-subagent` (the `collect-native` alias is kept for back-compat). On
+  every other host the own-provider seat is `mode: exec` — a runner subprocess reusing the host's
+  login (Codex-on-Codex, Cursor-on-Cursor, OpenCode-on-OpenCode).
+- **`mode: exec` covers foreign-provider seats AND own-provider seats on non-Claude hosts.** Doctor
+  reports `kind: "exec"` for these (was `"external"`).
+- **Best installation effort.** At setup attempt all seven roles; install a seat only if its best
+  available transport is installed AND its driver smoke passes; silently drop the rest.
 - **The Anthropic role is always the Opus line** (alias `opus` tracks the latest Opus) — never the
   Claude-5 / Mythos-class line (Fable, Mythos).
 - **The OpenAI role uses the most capable flavor of the newest GPT generation** (Leo's standing
@@ -95,13 +106,19 @@ a genuinely non-trivial increment re-nudges.
 
 ## 4. The ladder
 
-| Tier | Council (cumulative) | Effort | Fires when |
-|---|---|---|---|
-| **skip** | — | — | docs/comments/formatting/lockfile-only, or no code change |
-| **low** (1) | native | native default/high | small, isolated, no risk signals |
-| **elevated** (2) | native + seats[0] | native high · external default | moderate blast radius / new deps / deletions / feature w/o tests |
-| **high** (3) | native + seats[0] + seats[1] | native high/xhigh · externals max | risk globs or large blast radius or semantic risk |
-| **critical** (4) | native + all externals (≤4) **+ human sign-off** | max per seat | auth/migrations/payments/public-API + high blast radius, or data-loss |
+Selection is per-seat **`minTier`** (integer 1..4, default 4), read by the engine ONLY from the
+installed `local/seats.<host>.json` — never assumed from the catalog. A seat runs at council tier T
+iff `seat.minTier <= T`. The catalog's `presets.minTier` block (opus=1, gpt=2, grok=3,
+glm/gemini/mimo/deepseek=4) is a setup-time default the installer stamps onto each seat; a
+hand-edited seats file may override it freely.
+
+| Tier | Index | Seats that run (default presets) | Effort | Fires when |
+|---|---|---|---|---|
+| **skip** | — | — | — | docs/comments/formatting/lockfile-only, or no code change; also when zero seats are configured |
+| **low** (1) | 1 | opus | default/high | small, isolated, no risk signals |
+| **elevated** (2) | 2 | opus + gpt | high · default | moderate blast radius / new deps / deletions / feature w/o tests |
+| **high** (3) | 3 | opus + gpt + grok | high/xhigh · max | risk globs or large blast radius or semantic risk |
+| **critical** (4) | 4 | all configured seats **+ human sign-off** | max per seat | auth/migrations/payments/public-API + high blast radius, or data-loss |
 
 Critical requires human sign-off: the orchestrator synthesizes the reviews into **one deduped
 digest** and asks the developer to ack before considering the change done.
@@ -125,19 +142,21 @@ making `--follow-up` optional for them. Synchronous
 Cursor is only accepted after setup confirms a usable output contract; otherwise it is unavailable,
 not silently treated as a review.
 
-When there are no external seats at all, native-only fallback preserves independent review depth:
-low = one pass, elevated = two, high/critical = three. This is reduced-diversity fallback, not a
-claim that one self-review substitutes for a panel.
+When no seat's `minTier` qualifies at the tier (or zero seats are configured), **reduced-diversity
+fallback** runs the single lowest-`minTier` configured seat once, emits a `fallback-fired` event,
+and the report must state diversity was reduced. Diversity = count of distinct `provider` values
+among selected seats; fewer than 2 distinct providers is reduced diversity. If zero seats are
+configured, the council is skipped (`skip`). This replaces the former "native-only fallback"; it is
+a reduced-diversity caveat, not a claim that one self-review substitutes for a panel.
 
-Plan checkpoints are external-first: one configured external reviewer on normal plans, two on
-high-stakes plans, falling back to one native pass only when there is no external seat. The runner
-applies that selection separately from the implementation tier ladder.
+Plan checkpoints use the **same `minTier <= T` filter** as impl — plan no longer has a separate
+external-first rule. The runner applies one selection per checkpoint.
 Mechanical adjudication (`accepted`/`fixed`/`rejected`/`deferred`); a `rejected` finding needs
 concrete evidence (command output, cited requirement, or a passing regression test encoding the
 CORRECT behavior); high-severity rejections fail closed. One bounded re-review (2 passes total, no
-debate). Sampled reject-audit by a different seat. Per-seat wall-clock timeouts; external plan
+debate). Sampled reject-audit by a different seat. Per-seat wall-clock timeouts; exec plan
 seats may carry an explicit longer `planTimeoutSeconds`, which never changes implementation or
-native-fallback deadlines. On exceed, fall
+reduced-diversity-fallback deadlines. On exceed, fall
 back to a single strong reviewer and record `fallback-fired`.
 
 ---
@@ -183,7 +202,7 @@ orchestrator-owned prompt inputs; the engine never executes repository commands 
 
 Layered, deterministic-first — tool-agnostic across the available hook/plugin/skill surfaces:
 
-1. **Env sentinel `LEOS_COUNCIL_SEAT=1`** — the runner sets it on every external-seat launch;
+1. **Env sentinel `LEOS_COUNCIL_SEAT=1`** — the runner sets it on every `mode: exec` seat launch;
    child hooks the seat's CLI fires inherit it.
 2. **Hook check** — `council.py hook` returns 0 immediately if `LEOS_COUNCIL_SEAT` is set, so a
    seat is never nudged.
@@ -203,7 +222,7 @@ Layered, deterministic-first — tool-agnostic across the available hook/plugin/
    outside their workspace, with that injection risk documented. Only Claude has a true
    `--safe-mode`; the others rely on read-only + project-root/cwd/env hygiene.
 
-Registration keeps only the `Stop` event (never `SubagentStop`), so native subagents are never
+Registration keeps only the `Stop` event (never `SubagentStop`), so subagent seats are never
 hook-nudged. Bounds retained as backstops: a **persistent loop guard** (`nudge-state.json`, scoped
 per project+checkpoint, so it survives diff-hash churn across edits — capped at `MAX_NUDGES`, cleared
 by a real `mark`, and re-armed at most `MAX_REARMS` times only if genuinely new substantial work
