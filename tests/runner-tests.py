@@ -855,6 +855,25 @@ def main():
     check("subdirectory runner normalizes repository root", first.returncode == 0 and first_data.get("cwd") == repo and
           second.returncode == 3 and "nested-leos-council-refused" in second.stdout)
 
+    # Reduced-diversity is computed over the selected seat set and surfaced in result.json, so a
+    # single-provider "council" is never reported as a full-diversity pass; two distinct providers
+    # clear it. The flag is set at selection time, independent of each seat's outcome.
+    _completed = "cat >/dev/null\nprintf '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"[]\"}}\\n'"
+    _, repo, local, bindir, prompt, env = fresh()
+    executable(os.path.join(bindir, "codex"), _completed)
+    write_seats(local, [os.path.join(bindir, "codex"), "exec", "-"])  # one seat, provider openai
+    solo = json.loads(run(repo, prompt, env, tier="low").stdout)
+    check("single-provider selection is flagged reducedDiversity",
+          solo.get("reducedDiversity") is True and solo.get("diversityProviders") == ["openai"])
+    _, repo, local, bindir, prompt, env = fresh()
+    executable(os.path.join(bindir, "codex"), _completed)
+    write_seats(local, [os.path.join(bindir, "codex"), "exec", "-"],
+                external_argv=[os.path.join(bindir, "codex"), "exec", "-"])  # openai + anthropic
+    diverse = json.loads(run(repo, prompt, env, tier="low").stdout)
+    check("two distinct providers clear reducedDiversity",
+          diverse.get("reducedDiversity") is False and
+          diverse.get("diversityProviders") == ["anthropic", "openai"])
+
     total = passed + failed
     print(f"runner-tests: {passed}/{total} PASS" + (" — ALL PASS" if not failed else f" ({failed} FAIL)"))
     for path in cleanup:

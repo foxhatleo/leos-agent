@@ -115,27 +115,37 @@ TOKEN/SECRET/PASSWORD/API_KEY are refused at install), and an optional `envFile`
 secret channel).
 
 1. **Own-provider seat** = this host's provider, as one element of `seats[]`:
-   - Claude Code → `{"mode":"subagent","model":"opus","minTier":1,"efforts":{"default":"high","max":"xhigh"}}`
-     (Opus line only — confirm the resolved slug is an Opus id, never Fable/Mythos). `mode: subagent`
+   - Claude Code → `{"mode":"subagent","model":"opus","provider":"anthropic","minTier":2,"efforts":{"default":"high","max":"xhigh"}}`
+     (Opus line only — confirm the resolved slug is an Opus id, never Fable/Mythos; `minTier` is 2
+     because the own-provider seat is never the sole tier-1 reviewer — the lead-foreign GPT seat
+     takes minTier 1). `mode: subagent`
      is an in-process host subagent (Claude Code only — the one harness with a true subagent
      primitive + `--safe-mode`); it is not smoke-gated at install.
-   - Codex → `{"mode":"exec","transport":"stdin","minTier":2,"argv":["codex","exec","--ephemeral","--sandbox","read-only","--skip-git-repo-check","-c","model_reasoning_effort={EFFORT}","-m","{MODEL}","-"],"efforts":{...}}`
+   - Codex → `{"mode":"exec","transport":"stdin","provider":"openai","minTier":2,"argv":["codex","exec","--ephemeral","--sandbox","read-only","--skip-git-repo-check","-c","model_reasoning_effort={EFFORT}","-m","{MODEL}","-"],"efforts":{...}}`
      with `{MODEL}` replaced in the machine-local candidate (a runner subprocess reusing the host's
      codex login, same `CODEX_HOME`, no separate key). **NEVER override `CODEX_HOME` on a codex
      seat** — isolation comes from `--ephemeral` + scratch cwd + `LEOS_COUNCIL_SEAT`; doctor rejects
      `env.CODEX_HOME` on codex seats.
-   - OpenCode/Cursor → `mode: exec`, the `--agent plan` / `--mode plan` self-pass with no `-m`
-     (host's own model).
+   - OpenCode/Cursor → `mode: exec`, `minTier: 2` (own-provider), the `--agent plan` / `--mode plan`
+     self-pass with no `-m` (host's own model); the lead-foreign Opus seat takes minTier 1.
 2. **The seven target roles** (opus/gpt/glm/gemini/grok/mimo/deepseek) with per-role transport
    preference (best→fallback) from `core/council/seats.catalog.json` `presets.transportPreference`:
    opus = subagent (Claude only) → `claude` → `cursor` → `opencode`; gpt = `codex` → `cursor` →
    `opencode`; grok = `cursor` → `opencode`; glm = `cursor` → `opencode`; gemini = `cursor` →
    `opencode`; mimo = `opencode` only; deepseek = `opencode` only. Current target slugs:
    opus-4.8 / claude-opus-4-8, gpt-5.6-sol, glm-5.2, gemini-3.1-pro, grok-4.5, mimo-v2.5-pro,
-   deepseek-v4-pro. `minTier` presets: opus=1, gpt=2, grok=3, glm/gemini/mimo/deepseek=4. For each
+   deepseek-v4-pro. **`minTier` (diversity-first):** the own-provider seat is never the sole tier-1
+   reviewer — assign it minTier 2 and give minTier 1 to the strongest *reachable foreign* lineage,
+   so the everyday (tier-1) review is cross-lineage. Per host: Claude → GPT@1, Opus@2; Codex →
+   Opus@1, GPT@2; Cursor/OpenCode → Opus@1, own@2. Remaining foreign seats: grok=3,
+   glm/gemini/mimo/deepseek=4. Foreign-strength order for the tier-1 slot: GPT > Grok > Gemini > GLM
+   > DeepSeek > MiMo (Opus is strongest foreign on non-Claude hosts). If NO foreign seat is
+   reachable at all, give the own-provider seat minTier 1 and warn at the end that diversity is
+   reduced (step 6). For each
    role: pick the first transport whose CLI is installed, resolve the provider's CURRENT flagship
    slug for that transport, substitute it into the argv template, and preserve the recipe's required
-   `provider` identity. The display `name` does not determine provider policy; `leos-seats.py`
+   `provider` identity (required on every seat, subagent included, so the runner's diversity count
+   is reliable). The display `name` does not determine provider policy; `leos-seats.py`
    refuses a missing/unknown provider.
    **OpenAI flavor rule (Leo's standing rule):** use the most capable flavor of the newest GPT
    generation. GPT-5.6 ships three capability flavors — Sol > Terre > Luna (new names in 5.6, not
@@ -143,8 +153,14 @@ secret channel).
    (Terre, Luna); a newer GPT generation supersedes 5.6 automatically and its most capable flavor
    is selected. Resolve the exact slug supported by the chosen transport and confirm it in the
    smoke test.
-   **Best-effort seat dropping:** attempt all seven; install a seat only if its best available
-   transport is installed AND its driver smoke passes; silently drop the rest. A Cursor seat is
+   **Absent vs. broken (important):** attempt all seven. For each role, walk its transport
+   preference (native → cursor → opencode): if a transport's CLI is **absent**, skip to the next
+   transport; if a role has no installed transport at all, drop that role (best-effort). But if a
+   transport's CLI is **present** and its driver smoke **fails** (e.g. unauthenticated, or a dangling
+   CLI symlink that broke on an app update), **STOP setup and surface the exact
+   failure** — a present-but-broken CLI is almost always unintentional misconfiguration, so it must
+   not silently vanish; let the user fix it (re-auth / repoint) or explicitly choose to exclude that
+   role, then continue. A Cursor seat is
    added only after its smoke test proves a JSON output contract; record `"adapter":"cursor-json"`
    and its verified nonempty string `"responsePath"` in that seat.
 3. **Per-seat env (secret channel).** Add only non-secret per-seat environment values to the inline
@@ -159,8 +175,11 @@ secret channel).
    `cursor-cli.md`, `mimo.md`, `deepseek.md`). Require the structured-output form for
    Claude/Codex/OpenCode. `mode: subagent` seats are NOT smoke-gated. Preserve the catalog's
    `timeoutSeconds: 300` implementation allowance and `planTimeoutSeconds: 600` exec-seat plan
-   allowance; the latter never applies to the reduced-diversity fallback. Drop any exec seat whose
-   smoke test fails; note reduced-diversity fallback (`native-only.md`) if none remain. The runner
+   allowance; the latter never applies to the reduced-diversity fallback. A smoke **failure on a
+   present CLI halts setup** (see "Absent vs. broken" above) rather than dropping the seat; a
+   genuinely **absent** CLI is skipped best-effort. If, after resolving all roles, no *foreign*
+   lineage seat is reachable, warn at the end that diversity is reduced and continue
+   (`native-only.md`). The runner
    is invoked only by an orchestrator review decision; it never starts a council by itself. Every
    exec runner dispatch also requires explicit `--approve-external` project-send acknowledgement.
 5. Validate, then atomically write after every exec-seat smoke test passed:
@@ -189,11 +208,13 @@ bin/leos-python tests/guard-tests.py && bin/leos-python tests/fmt-tests.py \
   && bin/leos-python tests/contamination-check.py && bin/leos-python bin/leos-render-policy.py --check
 bin/leos-python bin/leos-doctor.py
 ```
-Then a live check per configured host (guard blocks `rm -rf ~`; a trivial council convenes with the
-own-provider seat + at least one foreign-provider seat and does NOT nest). Run CLI seats through
-`core/council/bin/runner.py`; blank, invalid, timed-out, and nonzero results are failed seats, not
-successful reviews. Report what actually ran — never claim a host is wired if its smoke test didn't
-pass.
+Then a live check per configured host (guard blocks `rm -rf ~`; a trivial tier-1 council convenes
+with the **lead-foreign** seat — a different lineage than the host author — and does NOT nest). Run
+CLI seats through `core/council/bin/runner.py`; blank, invalid, timed-out, and nonzero results are
+failed seats, not successful reviews. Report what actually ran — never claim a host is wired if its
+smoke test didn't pass. **If no foreign-lineage seat was reachable, warn the user explicitly that
+diversity is reduced** — the everyday review falls back to the own-provider (same-lineage) seat, and
+`result.json` will carry `reducedDiversity: true`; setup still completes.
 
 `git pull` never deletes or imports legacy state at `~/.local/state/leos-agent/council/state`; it
 is left untouched. Doctor reports it as migration-available. Only if Leo explicitly asks to retain

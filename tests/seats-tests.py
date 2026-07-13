@@ -176,6 +176,13 @@ def main():
     check("exec seat provider identity is required",
           ec == 1 and any("provider" in p for p in out.get("problems", [])))
 
+    # 5b. A subagent seat's provider identity is also required (the runner's diversity count needs it).
+    cand = claude_candidate()
+    cand["seats"][0].pop("provider")  # the opus subagent
+    ec, out = validate(cand, "claude")
+    check("subagent seat provider identity is required",
+          ec == 1 and any("provider" in p for p in out.get("problems", [])))
+
     # 6. An exec opus seat that never pins --model runs the CLI default — refused.
     cand = codex_candidate()
     argv = cand["seats"][1]["argv"]

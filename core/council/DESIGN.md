@@ -22,9 +22,13 @@ machine-local `local/seats.<host>.json`.
 
 1. **The author must not decide how hard it gets checked.** The gate is the diff-derived risk
    floor. Reviewer confidence is finding metadata, not an author control that rewrites the tier.
-2. **Capability first on the common path; diversity where stakes are high.** The strong
-   own-provider model is the everyday baseline; foreign lineages are added as stakes rise, where
-   their different failure distributions earn their cost.
+2. **Diversity first, even on the common path.** The everyday (tier-1) reviewer is a *foreign*
+   lineage — the own-provider seat is never the sole tier-1 reviewer, so the routine same-lineage
+   self-check the author would otherwise get is replaced by one cross-lineage seat. The own provider
+   and further foreign lineages join as stakes rise. Cost still tracks risk (one reviewer on the
+   common path, the full panel only when it earns its cost), but that one reviewer is a different
+   lineage than the author. If no foreign seat is reachable, tier-1 falls back to the own-provider
+   seat and the run is flagged `reducedDiversity` — never presented as a full-diversity pass.
 3. **Cost tracks risk.** Most changes get one reviewer; the full panel is rare.
 4. **Never auto-trigger.** The council runs only when the orchestrator invokes the skill/runner;
    a Stop hook is a soft reminder inside the finish-the-task flow and surfaces findings
@@ -108,16 +112,20 @@ a genuinely non-trivial increment re-nudges.
 
 Selection is per-seat **`minTier`** (integer 1..4, default 4), read by the engine ONLY from the
 installed `local/seats.<host>.json` — never assumed from the catalog. A seat runs at council tier T
-iff `seat.minTier <= T`. The catalog's `presets.minTier` block (opus=1, gpt=2, grok=3,
-glm/gemini/mimo/deepseek=4) is a setup-time default the installer stamps onto each seat; a
-hand-edited seats file may override it freely.
+iff `seat.minTier <= T`. The catalog's `presets.minTier` block is a setup-time default the installer
+stamps onto each seat (a hand-edited seats file may override it freely), and it is **diversity-first**:
+the own-provider seat is never the sole tier-1 reviewer — it gets minTier 2, and the strongest
+reachable *foreign* lineage gets minTier 1. On a Claude host that means GPT=1, Opus=2, grok=3,
+glm/gemini/mimo/deepseek=4; on another host the own-provider and lead-foreign roles swap (Codex:
+Opus=1, GPT=2). If no foreign seat is reachable, the own-provider seat falls back to minTier 1 and
+setup warns of reduced diversity.
 
-| Tier | Index | Seats that run (default presets) | Effort | Fires when |
+| Tier | Index | Seats that run (Claude-host default) | Effort | Fires when |
 |---|---|---|---|---|
 | **skip** | — | — | — | docs/comments/formatting/lockfile-only, or no code change; also when zero seats are configured |
-| **low** (1) | 1 | opus | default/high | small, isolated, no risk signals |
-| **elevated** (2) | 2 | opus + gpt | high · default | moderate blast radius / new deps / deletions / feature w/o tests |
-| **high** (3) | 3 | opus + gpt + grok | high/xhigh · max | risk globs or large blast radius or semantic risk |
+| **low** (1) | 1 | lead-foreign (GPT on Claude; Opus elsewhere) | default/high | small, isolated, no risk signals |
+| **elevated** (2) | 2 | + own-provider (Opus on Claude) | high · default | moderate blast radius / new deps / deletions / feature w/o tests |
+| **high** (3) | 3 | + grok | high/xhigh · max | risk globs or large blast radius or semantic risk |
 | **critical** (4) | 4 | all configured seats **+ human sign-off** | max per seat | auth/migrations/payments/public-API + high blast radius, or data-loss |
 
 Critical requires human sign-off: the orchestrator synthesizes the reviews into **one deduped
@@ -145,8 +153,12 @@ not silently treated as a review.
 When no seat's `minTier` qualifies at the tier (or zero seats are configured), **reduced-diversity
 fallback** runs the single lowest-`minTier` configured seat once, emits a `fallback-fired` event,
 and the report must state diversity was reduced. Diversity = count of distinct `provider` values
-among selected seats; fewer than 2 distinct providers is reduced diversity. If zero seats are
-configured, the council is skipped (`skip`). This replaces the former "native-only fallback"; it is
+among selected seats; fewer than 2 distinct providers is reduced diversity. **The runner computes
+this over the selected set on every run** (not only the empty-selection fallback) and surfaces
+`reducedDiversity: true` + `diversityProviders` in `result.json` plus a `reduced-diversity` event —
+so a single-provider selection (e.g. tier 1 with only the own-provider seat) can never be reported
+as a full-diversity pass. If zero seats are configured, the council is skipped (`skip`). This
+replaces the former "native-only fallback"; it is
 a reduced-diversity caveat, not a claim that one self-review substitutes for a panel.
 
 Plan checkpoints use the **same `minTier <= T` filter** as impl — plan no longer has a separate

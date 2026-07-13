@@ -2,10 +2,10 @@
   "$doc": "COMMITTED reference roster for the review council. It is NOT the runtime config: at setup, the installer reads the `presets` block and each role's `modelGuidance`/`transportPreference`, resolves each provider role to its CURRENT flagship model slug and the best available transport for THIS machine, then writes local/seats.<host>.json (gitignored). Model slugs are NEVER committed here — recipes use the {MODEL} placeholder so this file never goes stale. {EFFORT} = efforts.default below the critical tier, efforts.max at critical. {PROMPT_TEXT} = the review prompt content (arg transport); stdin transport omits it and pipes the prompt file. The engine (runner/doctor) reads minTier ONLY from the installed seats file; it never assumes the presets below — they are setup-time defaults.",
 
   "presets": {
-    "$doc": "Setup-time defaults only. At setup the installer stamps each installed seat's `minTier` from here and writes the transportPreference order into the per-host candidate. No runtime code or instruction assumes these values; a hand-edited seats file may override them freely. A seat runs at council tier T iff seat.minTier <= T (absent minTier => 4 = critical-only).",
+    "$doc": "Setup-time defaults only. At setup the installer stamps each installed seat's `minTier` from here and writes the transportPreference order into the per-host candidate. DIVERSITY-FIRST rule: the OWN-provider seat is never the sole tier-1 reviewer — it gets minTier 2, and the strongest reachable FOREIGN lineage gets minTier 1, so the everyday (tier-1) review is cross-lineage. The flat map below is the Claude-host default (own=Opus at 2, lead-foreign=GPT at 1); on another host the own-provider and lead-foreign roles swap (Codex: GPT=2, Opus=1; Cursor/OpenCode: own=2, Opus=1). If no foreign seat is reachable at all, the own-provider seat falls back to minTier 1 and setup warns of reduced diversity. Foreign-strength order for the tier-1 slot: GPT > Grok > Gemini > GLM > DeepSeek > MiMo (Opus is strongest foreign on non-Claude hosts). No runtime code or instruction assumes these values; a hand-edited seats file may override them freely. A seat runs at council tier T iff seat.minTier <= T (absent minTier => 4 = critical-only).",
     "minTier": {
-      "opus": 1,
-      "gpt": 2,
+      "gpt": 1,
+      "opus": 2,
       "grok": 3,
       "glm": 4,
       "gemini": 4,
@@ -13,13 +13,14 @@
       "deepseek": 4
     },
     "tierComposition": {
-      "low": ["opus"],
-      "elevated": ["opus", "gpt"],
-      "high": ["opus", "gpt", "grok"],
+      "$doc": "Illustrative, for a Claude host with the default presets (own-provider Opus at minTier 2, lead-foreign GPT at minTier 1). On another host the own-provider and lead-foreign roles swap: the strongest FOREIGN lineage sits at low, the own-provider joins at elevated.",
+      "low": ["gpt"],
+      "elevated": ["gpt", "opus"],
+      "high": ["gpt", "opus", "grok"],
       "critical": "all installed seats + developer sign-off"
     },
     "transportPreference": {
-      "$doc": "Per-role ordered list of transports, best first. The installer picks the first one whose CLI is installed AND whose driver smoke passes; the rest are dropped (best-effort). 'subagent' (opus on a Claude Code host only) is an in-process host subagent, not a CLI. 'claude'/'codex'/'cursor'/'opencode' are exec subprocesses via that CLI.",
+      "$doc": "Per-role ordered list of transports, best first — this ordering is the RULE, not a suggestion: native (claude/codex) first, then cursor, then opencode (the universal catch-all that can carry every role via OpenRouter). The installer picks the first transport whose CLI is present AND whose driver smoke passes. An ABSENT CLI is skipped to the next transport (best-effort). A PRESENT CLI whose smoke FAILS (e.g. unauthenticated) HALTS setup — probable misconfiguration — it is NOT silently skipped. 'subagent' (opus on a Claude Code host only) is an in-process host subagent, not a CLI. 'claude'/'codex'/'cursor'/'opencode' are exec subprocesses via that CLI.",
       "opus": ["subagent", "claude", "cursor", "opencode"],
       "gpt": ["codex", "cursor", "opencode"],
       "grok": ["cursor", "opencode"],

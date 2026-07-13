@@ -615,7 +615,8 @@ def _wait_bounded(proc, timeout):
 def run_one(work, cwd, seat, events):
     name = seat["name"]
     started = time.monotonic()
-    base = {"seat": name, "kind": seat["kind"], "status": "", "elapsedSeconds": 0.0}
+    base = {"seat": name, "kind": seat["kind"], "provider": seat.get("provider", ""),
+            "fallback": bool(seat.get("fallback")), "status": "", "elapsedSeconds": 0.0}
     try:
         argv, extra_env, timeout, adapter, transport = prepare_command(seat, seat["tier"], seat["prompt"])
     except ValueError as e:
@@ -931,10 +932,21 @@ def cmd_run(args):
         except ValueError as exc:
             events.emit("fallback-unavailable", reason=str(exc))
 
+    # Diversity over the SELECTED set (the council's whole point is cross-lineage review). The
+    # design defines reduced diversity as < 2 distinct provider lineages; compute and surface it in
+    # result.json — not just on the empty-selection fallback — so a single-provider "council" (e.g.
+    # tier 1 with only the own-provider seat) is never reported as a full-diversity pass.
+    diversity_providers = sorted({str(s.get("provider")) for s in selected if s.get("provider")})
+    reduced_diversity = len(diversity_providers) < 2
+    if reduced_diversity:
+        events.emit("reduced-diversity", providers=diversity_providers,
+                    reason="fewer than two distinct provider lineages among selected seats")
+
     planned, manual_subagent = [], []
     for seat in selected:
         if seat.get("mode") == "subagent":
             manual_subagent.append({"seat": seat["name"], "status": SUBAGENT_REQUIRED,
+                                    "provider": seat.get("provider", ""),
                                     "model": seat.get("model", ""), "promptPath": str(prompt_path),
                                     "fallback": bool(seat.get("fallback")),
                                     "instruction": "Dispatch one read-only review subagent pinned to the seat model; do not ask it to convene Leo's Agents council."})
@@ -945,7 +957,10 @@ def cmd_run(args):
            "tier": args.tier, "cwd": cwd, "promptPath": str(prompt_path), "promptRedacted": prompt_redacted,
            "pass": 2 if args.follow_up else 1,
            "externalSendApproved": bool(args.approve_external), "startedAt": int(time.time()),
-           "seats": [{"name": s["name"], "kind": s["kind"]} for s in planned], "manualSubagent": manual_subagent}
+           "reducedDiversity": reduced_diversity, "diversityProviders": diversity_providers,
+           "seats": [{"name": s["name"], "kind": s["kind"], "provider": s.get("provider", ""),
+                      "fallback": bool(s.get("fallback"))} for s in planned],
+           "manualSubagent": manual_subagent}
     write_json(work / "job.json", job)
     results = list(manual_subagent)
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(planned))) as pool:

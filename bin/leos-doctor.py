@@ -317,6 +317,11 @@ def check_seat_flags(tool, seats):
             if tool not in SUBAGENT_HOSTS:
                 problems.append(f"seat {label} mode subagent is only supported on hosts with an "
                                 f"in-process subagent primitive (got host {tool!r})")
+            # Provider identity is required on every seat kind (not just exec) so the runner's
+            # distinct-provider diversity count is reliable — a subagent seat with no provider
+            # would silently under-count lineages.
+            if seat.get("provider") not in EXTERNAL_PROVIDERS:
+                problems.append(f"seat {label} provider must be one of " + ", ".join(sorted(EXTERNAL_PROVIDERS)))
             if not isinstance(seat.get("model"), str) or not seat.get("model"):
                 problems.append(f"seat {label} subagent mode requires a model")
             else:
