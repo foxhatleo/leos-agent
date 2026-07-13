@@ -37,6 +37,12 @@ Leo's Agents supports **CPython 3.9+** on current macOS (including Tahoe+) and m
 distributions. The bootstrap interpreter is used only to create the clone-private runtime; no
 system package manager is run and no global packages are installed.
 
+**Preconditions (per platform):** a fresh **macOS** ships no `python3` until Xcode Command Line
+Tools are installed (`xcode-select --install`, or use Homebrew python / an explicit `LEOS_PYTHON`
+path); on **Debian/Ubuntu** the `venv` module ships as a separate package, so `apt install
+python3-venv` if `python3 -m venv` fails. **Native Windows is unsupported** — POSIX shell,
+symlinks, the `pwd` module, and process-group signals are assumed; use **WSL**.
+
 ```
 python3 bin/leos-runtime.py setup
 bin/leos-python -c 'import sys; print(sys.executable)'

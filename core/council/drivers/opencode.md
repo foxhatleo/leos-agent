@@ -16,11 +16,16 @@ experimental.
 
 | Role | OpenRouter slug (current target) |
 |---|---|
-| GLM | `zhipu/{MODEL}` (glm-5.2) |
+| GLM | `z-ai/{MODEL}` (z-ai/glm-5.2) |
 | Gemini | `google/{MODEL}` (gemini-3.1-pro) |
-| Grok | `xai/{MODEL}` (grok-4.5) |
+| Grok | `x-ai/{MODEL}` (x-ai/grok-4.5) |
 | MiMo | `xiaomi/mimo-v2.5-pro` |
 | DeepSeek | `deepseek/deepseek-v4-pro` |
+
+OpenRouter's canonical vendor prefixes are hyphenated: xAI is **`x-ai/`** (not `xai/`) and Zhipu/GLM
+is **`z-ai/`** (not `zhipu/`); `google/`, `openai/`, `anthropic/`, `deepseek/` are as written. **Verify
+each slug on openrouter.ai at setup** — in particular confirm the `xiaomi/` MiMo namespace actually
+exists there (it could not be confirmed) before relying on it; MiMo has no alternate transport.
 
 **Install / auth:** `opencode --version`; set `OPENROUTER_API_KEY` (or configure the provider).
 

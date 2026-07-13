@@ -64,7 +64,7 @@ CANCEL_REQUEST_PATH = None
 # treating ordinary source code that mentions "token" as secret material.
 SENSITIVE_PROMPT_RE = re.compile(
     r"-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----"
-    r"|^\s*(?:[A-Z][A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY)|"
+    r"|^[+-]?\s*(?:[A-Z][A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY)|"
     r"aws_secret_access_key|database_url|redis_url|mongodb_uri|connection_string)\s*[:=]\s*[^\s#]{8,}"
     r"|\bAKIA[0-9A-Z]{16}\b"
     r"|\b(?:ghp_|github_pat_|sk-|xox[baprs]-)[A-Za-z0-9_-]{12,}\b"

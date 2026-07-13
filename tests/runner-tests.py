@@ -513,6 +513,18 @@ def main():
     result = run(repo, prompt, env, tier="low")
     check("sensitive prompt is refused before dispatch", result.returncode == 2 and "sensitive-prompt-refused" in result.stdout)
 
+    # A secret introduced on a diff-ADDED line (leading +) in a non-.env file must also be refused —
+    # the anchored assignment pattern now consumes the +/- diff marker.
+    _, repo, local, bindir, prompt_diff, env = fresh()
+    with open(prompt_diff, "w") as f:
+        f.write("Review this change.\n```diff\ndiff --git a/settings.py b/settings.py\n"
+                "+DB_PASSWORD=supersecret123value\n```\n")
+    executable(os.path.join(bindir, "codex"), "exit 99")
+    write_seats(local, [os.path.join(bindir, "codex"), "exec", "-"])
+    result = run(repo, prompt_diff, env, tier="low")
+    check("secret on a diff-added line is refused before dispatch",
+          result.returncode == 2 and "sensitive-prompt-refused" in result.stdout)
+
     # Sensitive fixtures can proceed only through deterministic redaction; raw material never reaches stdin.
     received = os.path.join(local, "received.txt")
     redactor = os.path.join(bindir, "codex")

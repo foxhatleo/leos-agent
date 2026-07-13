@@ -124,7 +124,16 @@ DATA_LOSS_RE = re.compile(
 )
 
 ASSERTION_RE = re.compile(r"\b(assert\w*|expect|should|toBe|toEqual|toThrow)\b")
-EXPORT_RE = re.compile(r"^\s*export\s+(default\s+)?(async\s+)?(function|const|let|class|interface|type|enum)\b")
+# Public-API surface across languages (JS export was the original; the others make the
+# "exported-api" signal — and its large-diff critical escalation — fire for non-JS repos too).
+EXPORT_RE = re.compile(
+    r"^\s*export\s+(default\s+)?(async\s+)?(function|const|let|class|interface|type|enum)\b"  # JS/TS
+    r"|^func\s+(?:\([^)]*\)\s*)?[A-Z]"                       # Go exported func/method (capitalized)
+    r"|^\s*pub\s+(fn|struct|enum|trait|mod|const|type)\b"    # Rust
+    r"|^\s*(public|protected)\s+\S"                          # Java / C# / Kotlin / Swift
+    r"|^__all__\s*="                                        # Python explicit export list
+    r"|^(?:async\s+)?def\s+[A-Za-z]"                        # Python top-level function (non-underscore)
+    r"|^class\s+[A-Za-z]")                                  # top-level class
 COMMENT_LINE_RE = re.compile(r"^\s*(#|//|/\*|\*|;|--)|^\s*$")
 
 
@@ -522,7 +531,10 @@ def _score(diff_text, name_status, untracked, untracked_contents, undeterminable
     deletion_heavy = removed > 2 * added and removed > 100
     tests_touched = any(TEST_PATH_RE.search(p) for p in code_files)
     is_small = total <= small_lines and nfiles <= small_files
-    is_large = total > large_lines or nfiles > large_files or len(workspaces) > 2 or truncated
+    # Workspace spread only escalates a change that is not already small — otherwise a 30-line edit
+    # touching 3 top-level dirs is forced to "high" purely by directory layout.
+    is_large = total > large_lines or nfiles > large_files or truncated \
+        or (len(workspaces) > 2 and not is_small)
 
     # Tier decision
     tier = 1  # low

@@ -493,6 +493,22 @@ def main():
                         capture_output=True, text=True, env=seat_env)
     check("seat writer refuses an unknown cwd mode", vr.returncode == 1 and "cwd" in vr.stdout)
 
+    # M6: public-API detection is language-agnostic. A large change adding a top-level Python `def`
+    # to a non-risk path reaches the exported-api critical escalation (previously JS-`export`-only).
+    r6, e6 = make_repo()
+    write_code(r6, "service.py", 500)   # write_code emits `def f():` + 500 assignment lines
+    risk6 = risk(r6, e6)
+    check("large non-JS public-API change escalates via exported-api",
+          risk6["tier"] == "critical" and any("exported-api" in str(x) for x in risk6["reasons"]))
+
+    # M7: workspace spread no longer forces a TINY multi-directory change to high.
+    r7, e7 = make_repo()
+    for d in ("api", "cli", "lib"):
+        os.makedirs(os.path.join(r7, d))
+        with open(os.path.join(r7, d, "x.py"), "w") as f:
+            f.write("y = 1\n")
+    check("tiny 3-workspace change is not forced to high", risk(r7, e7)["tier_index"] < 3)
+
     total = passed + failed
     print(f"council-tests: {passed}/{total} PASS" + (" — ALL PASS" if not failed else f" ({failed} FAIL)"))
     for d in _cleanup:

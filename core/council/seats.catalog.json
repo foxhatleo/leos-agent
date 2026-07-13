@@ -98,7 +98,7 @@
     },
     {
       "role": "grok", "provider": "xai",
-      "modelGuidance": "Latest Grok flagship. Current target: grok-4.5. For cursor-agent, confirm the exact slug with `cursor-agent --list-models`; for opencode use the OpenRouter xai slug. Resolve at setup; never commit it.",
+      "modelGuidance": "Latest Grok flagship. Current target: grok-4.5. For cursor-agent, confirm the exact slug with `cursor-agent --list-models`; for opencode use the OpenRouter x-ai slug (hyphenated — `x-ai/grok-4.5`, NOT `xai/`). Resolve at setup; never commit it.",
       "recursionDisable": "cursor-agent --mode plan (read-only) or opencode --agent plan (read-only) — both in the runner-provided scratch cwd with a synthetic Git root, so repo-local agent config never loads, including during self-review.",
       "asExternalCursor": {
         "provider": "xai",
@@ -133,7 +133,7 @@
         "argv": ["opencode", "run", "--agent", "plan", "-m", "openrouter/{MODEL}", "--variant", "{EFFORT}", "{PROMPT_TEXT}"],
         "efforts": { "default": "high", "max": "max" },
         "planTimeoutSeconds": 600,
-        "note": "GLM via OpenCode+OpenRouter when cursor-agent is absent. {MODEL} is the OpenRouter zhipu slug."
+        "note": "GLM via OpenCode+OpenRouter when cursor-agent is absent. {MODEL} is the OpenRouter z-ai slug (hyphenated — `z-ai/glm-5.2`, NOT `zhipu/`)."
       }
     },
     {

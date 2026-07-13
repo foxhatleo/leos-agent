@@ -31,8 +31,11 @@ Project controls: a repository-root `.council-off` disables council for that pro
 convene one or record an override. A canonical project path in the machine-local
 `local/council/config.json` `disabledProjects` list does the same without a repository file. A
 repository-root `.council.json` can tune `riskGlobs`, `defaultBranch`, and the `smallLines`,
-`smallFiles`, `largeLines`, and `largeFiles` thresholds; these settings can raise sensitivity or
-alter blast-radius classification, but never lower the computed risk floor.
+`smallFiles`, `largeLines`, and `largeFiles` thresholds. Thresholds are a self-service operator
+knob: widening a band CAN lower a diff's computed tier (there is no clamp). That is intentional —
+the council is a soft nudge, not a hard gate, on a single-operator tool — but the AI author edits
+repo files, so a committed `.council.json` also lets the author tune its own gate; mind that if you
+ever share the repo.
 
 **Seat exemption (critical):** if the environment variable `LEOS_COUNCIL_SEAT` is set, **you are a
 council seat, not an orchestrator** — do your single read-only review and return only your findings.
