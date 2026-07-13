@@ -517,7 +517,15 @@ def do_merge(dest_key, fragment_path, strategy, force, extra_values=None, extra_
         return {"applied": False, "dest": dest_key,
                 "reason": "foreign destination symlink refused; merge its target only after explicit approval"}
     try:
-        current = load_toml(dest, {}) if strategy == "merge-toml" else load_json(dest, {})
+        if legacy_fragment_link:
+            # The dest is a legacy whole-file symlink to our OWN fragment (the pre-merge delivery
+            # layout), not user content. Reading through it would seed `current` with the fragment's
+            # documentation-only "$"-keys (e.g. "$doc", which Codex refuses to parse) and carry them
+            # into the materialized real file. Treat it as an absent dest so the migration writes
+            # only the stripped, owned fragment keys.
+            current = {}
+        else:
+            current = load_toml(dest, {}) if strategy == "merge-toml" else load_json(dest, {})
     except (OSError, json.JSONDecodeError, ValueError) as e:
         return {"applied": False, "dest": dest_key, "reason": f"cannot parse destination: {e}"}
     # apply_actions mutates `current` in place; keep the pre-merge shape so the ownership
@@ -554,11 +562,15 @@ def do_merge(dest_key, fragment_path, strategy, force, extra_values=None, extra_
             else {"op": "set", "path": c["path"], "value": c["ours"]} for c in conflicts])
     try:
         if strategy == "merge-toml":
-            try:
-                with open(dest, encoding="utf-8") as f:
-                    original_text = f.read()
-            except FileNotFoundError:
+            if legacy_fragment_link:
+                # See above: never seed the round-trip base from the symlinked fragment itself.
                 original_text = ""
+            else:
+                try:
+                    with open(dest, encoding="utf-8") as f:
+                        original_text = f.read()
+                except FileNotFoundError:
+                    original_text = ""
             text = patch_toml_text(original_text, merged, actions)
         else:
             text = json.dumps(merged, indent=2)

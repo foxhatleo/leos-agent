@@ -202,8 +202,14 @@ def main():
     legacy_env = dict(os.environ, HOME=legacy_home, LEOS_LOCAL=legacy_local, CODEX_HOME=legacy_codex)
     legacy_merge = subprocess.run([sys.executable, MERGE, "--tool", "codex"],
                                   capture_output=True, text=True, env=legacy_env)
+    legacy_hooks_path = os.path.join(legacy_codex, "hooks.json")
+    migrated_hooks = json.load(open(legacy_hooks_path)) if os.path.isfile(legacy_hooks_path) else {}
     check("legacy hooks symlink migrates to additive real file", legacy_merge.returncode == 0 and
-          not os.path.islink(os.path.join(legacy_codex, "hooks.json")))
+          not os.path.islink(legacy_hooks_path))
+    # The migration must not carry the fragment's documentation-only "$"-keys ("$doc") into the
+    # materialized file — Codex refuses to parse an unknown top-level field and errors on every run.
+    check("migrated hooks file drops doc-only $-keys but keeps owned content",
+          "$doc" not in migrated_hooks and "hooks" in migrated_hooks)
     shutil.rmtree(legacy_home, ignore_errors=True); shutil.rmtree(legacy_local, ignore_errors=True)
 
     foreign_home = tempfile.mkdtemp(prefix="foreignmerge.")
