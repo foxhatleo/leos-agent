@@ -180,8 +180,9 @@ secret channel).
    `core/council/drivers/` has the exact command — `claude-cli.md`, `codex-cli.md`, `opencode.md`,
    `cursor-cli.md`, `mimo.md`, `deepseek.md`). Require the structured-output form for
    Claude/Codex/OpenCode. `mode: subagent` seats are NOT smoke-gated. Preserve the catalog's
-   `timeoutSeconds: 300` implementation allowance and `planTimeoutSeconds: 600` exec-seat plan
-   allowance; the latter never applies to the reduced-diversity fallback. A smoke **failure on a
+   `timeoutSeconds: 300` base allowance plus the exec-seat per-checkpoint overrides
+   `planTimeoutSeconds: 600` and `implTimeoutSeconds: 600` (impl reviews explore the actual diff
+   and routinely exceed 300s); neither override applies to the reduced-diversity fallback. A smoke **failure on a
    present CLI halts setup** (see "Absent vs. broken" above) rather than dropping the seat; a
    genuinely **absent** CLI is skipped best-effort. If, after resolving all roles, no *foreign*
    lineage seat is reachable, warn at the end that diversity is reduced and continue
@@ -230,3 +231,24 @@ unchanged):
 ```
 bin/leos-python core/council/bin/council.py migrate-legacy-state
 ```
+
+## Troubleshooting — a seat returned no review
+
+When a council reports that a seat "returned nothing," read that seat's `reason` in `result.json`
+(also surfaced by the skill); its full CLI output is at the seat's `stderrPath` / `stdoutPath`. The
+three causes seen in practice:
+
+- **Timed out.** The seat exceeded its wall-clock budget mid-review (impl reviews of large diffs are
+  the usual trigger) and was killed before emitting final findings — so the whole review is lost, and
+  a `claude`-CLI seat loses it entirely because it buffers output until the end. Fix: the catalog now
+  gives exec seats `implTimeoutSeconds: 600` (was a flat 300); if a very large diff still exceeds it,
+  raise that seat's `implTimeoutSeconds`/`timeoutSeconds` (max 900) or review a smaller change.
+- **Not authenticated.** The seat's CLI reported e.g. `Not logged in`. Sign the seat's CLI in
+  (`claude` / `codex` / `opencode` login) and re-run. A CLI that is present but unauthenticated is a
+  misconfiguration to fix, not a seat to drop.
+- **Sandbox/permission denial.** The seat CLI was denied access to its home-dir state or credentials
+  (`~/.codex` read-only database, `~/.local/share/opencode` log, keychain), typically because the
+  council was launched from **inside a sandboxed orchestrator** (e.g. a Codex session running under
+  `workspace-write` seatbelt): child seat processes inherit the sandbox and cannot reach anything
+  outside the workspace. Run the council from an unsandboxed session so seats can reach their own
+  state and auth.

@@ -42,7 +42,8 @@
         "transport": "stdin",
         "argv": ["claude", "--safe-mode", "--print", "--no-session-persistence", "--permission-mode", "plan", "--model", "{MODEL}", "--effort", "{EFFORT}"],
         "efforts": { "default": "high", "max": "xhigh" },
-        "planTimeoutSeconds": 600
+        "planTimeoutSeconds": 600,
+        "implTimeoutSeconds": 600
       },
       "asExternalCursor": {
         "provider": "anthropic",
@@ -50,6 +51,7 @@
         "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
         "efforts": { "default": "high", "max": "xhigh" },
         "planTimeoutSeconds": 600,
+        "implTimeoutSeconds": 600,
         "note": "Opus-line model via Cursor when the claude CLI is absent (confirm the Cursor slug is an Opus id with `cursor-agent --list-models`). Isolation = read-only `--mode plan` in the runner-provided scratch cwd with a synthetic Git root — weaker than `--safe-mode`; acceptable fallback."
       },
       "asExternalOpencode": {
@@ -58,6 +60,7 @@
         "argv": ["opencode", "run", "--agent", "plan", "-m", "openrouter/{MODEL}", "--variant", "{EFFORT}", "{PROMPT_TEXT}"],
         "efforts": { "default": "high", "max": "max" },
         "planTimeoutSeconds": 600,
+        "implTimeoutSeconds": 600,
         "note": "Opus-line model via OpenCode+OpenRouter when neither the claude CLI nor cursor-agent is available. {MODEL} is the OpenRouter anthropic slug (an Opus id); confirm the Opus-line rule still holds."
       }
     },
@@ -77,6 +80,7 @@
         "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort={EFFORT}", "-m", "{MODEL}", "-"],
         "efforts": { "default": "high", "max": "xhigh" },
         "planTimeoutSeconds": 600,
+        "implTimeoutSeconds": 600,
         "note": "On any non-Codex host, resolve per the flavor rule in modelGuidance (5.6 → Sol). Uses the host's normal authentication. --ephemeral prevents session files; the inherited LEOS_COUNCIL_SEAT sentinel mechanically refuses nested Leo councils."
       },
       "asExternalCursor": {
@@ -85,6 +89,7 @@
         "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
         "efforts": { "default": "high", "max": "xhigh" },
         "planTimeoutSeconds": 600,
+        "implTimeoutSeconds": 600,
         "note": "GPT/OpenAI model via Cursor when the codex CLI is absent: resolve per the flavor rule in modelGuidance (5.6 → Sol), then confirm the exact Cursor slug with `cursor-agent --list-models`. Isolation = read-only `--mode plan` in the runner-provided scratch cwd with a synthetic Git root instead of an isolated CODEX_HOME."
       },
       "asExternalOpencode": {
@@ -93,6 +98,7 @@
         "argv": ["opencode", "run", "--agent", "plan", "-m", "openrouter/{MODEL}", "--variant", "{EFFORT}", "{PROMPT_TEXT}"],
         "efforts": { "default": "high", "max": "max" },
         "planTimeoutSeconds": 600,
+        "implTimeoutSeconds": 600,
         "note": "GPT via OpenCode+OpenRouter when neither codex nor cursor-agent is available. {MODEL} is the OpenRouter openai slug; resolve per the flavor rule."
       }
     },
@@ -105,14 +111,16 @@
         "transport": "arg",
         "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
         "efforts": { "default": "high", "max": "xhigh" },
-        "planTimeoutSeconds": 600
+        "planTimeoutSeconds": 600,
+        "implTimeoutSeconds": 600
       },
       "asExternalOpencode": {
         "provider": "xai",
         "transport": "arg",
         "argv": ["opencode", "run", "--agent", "plan", "-m", "openrouter/{MODEL}", "--variant", "{EFFORT}", "{PROMPT_TEXT}"],
         "efforts": { "default": "high", "max": "max" },
-        "planTimeoutSeconds": 600
+        "planTimeoutSeconds": 600,
+        "implTimeoutSeconds": 600
       }
     },
     {
@@ -125,6 +133,7 @@
         "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
         "efforts": { "default": "high", "max": "xhigh" },
         "planTimeoutSeconds": 600,
+        "implTimeoutSeconds": 600,
         "note": "GLM via Cursor (preferred when available) — only if `cursor-agent --list-models` lists a GLM slug; {MODEL} is the Cursor slug, not the OpenRouter one."
       },
       "asExternalOpencode": {
@@ -133,6 +142,7 @@
         "argv": ["opencode", "run", "--agent", "plan", "-m", "openrouter/{MODEL}", "--variant", "{EFFORT}", "{PROMPT_TEXT}"],
         "efforts": { "default": "high", "max": "max" },
         "planTimeoutSeconds": 600,
+        "implTimeoutSeconds": 600,
         "note": "GLM via OpenCode+OpenRouter when cursor-agent is absent. {MODEL} is the OpenRouter z-ai slug (hyphenated — `z-ai/glm-5.2`, NOT `zhipu/`)."
       }
     },
@@ -146,6 +156,7 @@
         "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
         "efforts": { "default": "high", "max": "xhigh" },
         "planTimeoutSeconds": 600,
+        "implTimeoutSeconds": 600,
         "note": "Gemini via Cursor (preferred when available) — only if `cursor-agent --list-models` lists a Gemini slug; {MODEL} is the Cursor slug, not the OpenRouter one."
       },
       "asExternalOpencode": {
@@ -154,6 +165,7 @@
         "argv": ["opencode", "run", "--agent", "plan", "-m", "openrouter/{MODEL}", "--variant", "{EFFORT}", "{PROMPT_TEXT}"],
         "efforts": { "default": "xhigh", "max": "max" },
         "planTimeoutSeconds": 600,
+        "implTimeoutSeconds": 600,
         "note": "Gemini via OpenCode+OpenRouter when cursor-agent is absent. {MODEL} is the OpenRouter google slug."
       }
     },
@@ -167,6 +179,7 @@
         "argv": ["opencode", "run", "--agent", "plan", "-m", "openrouter/{MODEL}", "--variant", "{EFFORT}", "{PROMPT_TEXT}"],
         "efforts": { "default": "xhigh", "max": "max" },
         "planTimeoutSeconds": 600,
+        "implTimeoutSeconds": 600,
         "note": "MiMo via OpenCode+OpenRouter only. {MODEL} is the OpenRouter xiaomi slug (mimo-v2.5-pro). Dropped entirely if opencode is not installed or its smoke fails."
       }
     },
@@ -180,6 +193,7 @@
         "argv": ["opencode", "run", "--agent", "plan", "-m", "openrouter/{MODEL}", "--variant", "{EFFORT}", "{PROMPT_TEXT}"],
         "efforts": { "default": "xhigh", "max": "max" },
         "planTimeoutSeconds": 600,
+        "implTimeoutSeconds": 600,
         "note": "DeepSeek via OpenCode+OpenRouter only (cursor is excluded due to its reasoning_content bug). {MODEL} is the OpenRouter deepseek slug (deepseek-v4-pro). Dropped entirely if opencode is not installed or its smoke fails."
       }
     }
@@ -201,7 +215,8 @@
         "responsePath": "cursor-json exec seat only: dotted JSON string field containing reviewer text",
         "efforts": { "default": "high", "max": "xhigh" },
         "timeoutSeconds": "optional per-seat wall-clock limit in seconds, integer 1..900 (default 300)",
-        "planTimeoutSeconds": "optional exec-seat plan-checkpoint wall-clock limit in seconds, integer 1..900; catalog flagship transports use 600; ignored for implementation seats and the reduced-diversity fallback after unconditional validation",
+        "planTimeoutSeconds": "optional exec-seat plan-checkpoint wall-clock limit in seconds, integer 1..900; catalog flagship transports use 600; applies only at the plan checkpoint and never to the reduced-diversity fallback (validated unconditionally regardless of the current dispatch)",
+        "implTimeoutSeconds": "optional exec-seat impl-checkpoint wall-clock limit in seconds, integer 1..900; catalog flagship transports use 600 because implementation reviews explore the actual diff and routinely exceed the 300s default; applies only at the impl checkpoint and never to the reduced-diversity fallback (validated unconditionally)",
         "cwd": "optional per-seat working-directory mode: \"scratch\" (default — the runner creates a private dir with its own synthetic Git root under local/council/work/<run>/ and removes it after the seat, so parent-repo config like .cursor/rules or AGENTS.md never loads into a reviewer even during self-review; the reviewed repo's absolute path is injected as a prompt header) | \"repo\" (run inside the reviewed repo — opt-out for transports that cannot read outside their workspace; re-opens repo-local instruction injection)",
         "env": "optional inline string:string env overlaid on the inherited process env; NON-SECRET only — secret-named keys (TOKEN/SECRET/PASSWORD/API_KEY/PRIVATE_KEY) are refused at install. For secrets, use envFile.",
         "envFile": "optional path to a .env file relative to LEOS_LOCAL (e.g. council/env/gpt.env), gitignored and mode 0600; secret-named keys ARE allowed in it. The runner loads and merges it into the seat subprocess env at dispatch; its contents never appear in prompts, logs, or result.json. If omitted, the runner still looks for local/council/env/<name>.env conventionally."

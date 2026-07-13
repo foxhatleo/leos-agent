@@ -166,9 +166,10 @@ external-first rule. The runner applies one selection per checkpoint.
 Mechanical adjudication (`accepted`/`fixed`/`rejected`/`deferred`); a `rejected` finding needs
 concrete evidence (command output, cited requirement, or a passing regression test encoding the
 CORRECT behavior); high-severity rejections fail closed. One bounded re-review (2 passes total, no
-debate). Sampled reject-audit by a different seat. Per-seat wall-clock timeouts; exec plan
-seats may carry an explicit longer `planTimeoutSeconds`, which never changes implementation or
-reduced-diversity-fallback deadlines. On exceed, fall
+debate). Sampled reject-audit by a different seat. Per-seat wall-clock timeouts; exec seats may
+carry explicit longer per-checkpoint overrides — `planTimeoutSeconds` and `implTimeoutSeconds`
+(the catalog sets both to 600 because impl reviews explore the actual diff) — neither of which
+changes the reduced-diversity-fallback deadline. On exceed, fall
 back to a single strong reviewer and record `fallback-fired`.
 
 ---

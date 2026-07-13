@@ -623,6 +623,74 @@ def main():
     check("invalid dormant plan timeout is rejected", result.returncode == 2 and
           data.get("status") == "invalid-seats" and "planTimeoutSeconds" in data.get("reason", ""))
 
+    # implTimeoutSeconds mirrors planTimeoutSeconds but at the implementation checkpoint, where
+    # reviews of the actual diff routinely exceed the 300s default. It overrides the base
+    # timeoutSeconds only for impl dispatches. (Separate fresh() per dispatch: a completed run
+    # leaves an active-checkpoint marker, so impl-then-plan on one local trips the mismatch guard.)
+    _, repo, local, bindir, prompt, env = fresh()
+    executable(os.path.join(bindir, "codex"), "cat >/dev/null\nprintf '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"[]\"}}\\n'")
+    executable(os.path.join(bindir, "claude"), "cat >/dev/null\nprintf '{\"result\":\"[]\"}\\n'")
+    write_seats(local, [os.path.join(bindir, "codex"), "exec", "-"], [os.path.join(bindir, "claude"), "--print"],
+                external_extra={"implTimeoutSeconds": 7})
+    result = run(repo, prompt, env, tier="low", checkpoint="impl")
+    data = json.loads(result.stdout)
+    opus = next(item for item in data["results"] if item["seat"] == "opus")
+    check("implTimeoutSeconds overrides the base timeout at the impl checkpoint",
+          result.returncode == 0 and opus.get("timeoutSeconds") == 7)
+    # The same seat at the plan checkpoint keeps the base timeout (impl override does not leak).
+    _, repo, local, bindir, prompt, env = fresh()
+    executable(os.path.join(bindir, "codex"), "cat >/dev/null\nprintf '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"[]\"}}\\n'")
+    executable(os.path.join(bindir, "claude"), "cat >/dev/null\nprintf '{\"result\":\"[]\"}\\n'")
+    write_seats(local, [os.path.join(bindir, "codex"), "exec", "-"], [os.path.join(bindir, "claude"), "--print"],
+                external_extra={"implTimeoutSeconds": 7})
+    result = run(repo, prompt, env, tier="low", checkpoint="plan")
+    data = json.loads(result.stdout)
+    opus = next(item for item in data["results"] if item["seat"] == "opus")
+    check("implTimeoutSeconds does not apply at the plan checkpoint",
+          result.returncode == 0 and opus.get("timeoutSeconds") == 10)
+
+    # implTimeoutSeconds is validated unconditionally too, even on a non-impl dispatch.
+    _, repo, local, bindir, prompt, env = fresh()
+    native = os.path.join(bindir, "codex")
+    external = os.path.join(bindir, "claude")
+    executable(native, "cat >/dev/null\nprintf '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"[]\"}}\\n'")
+    executable(external, "cat >/dev/null\nprintf '{\"result\":\"[]\"}\\n'")
+    write_seats(local, [native, "exec", "-"], [external, "--print"],
+                external_extra={"implTimeoutSeconds": 901})
+    result = run(repo, prompt, env, tier="low", checkpoint="plan")
+    data = json.loads(result.stdout)
+    check("invalid dormant impl timeout is rejected", result.returncode == 2 and
+          data.get("status") == "invalid-seats" and "implTimeoutSeconds" in data.get("reason", ""))
+
+    # A non-completed seat carries a human-readable `reason` classifying WHY it produced no review,
+    # so an orchestrator surfaces an actionable cause instead of a bare "returned nothing".
+    # Auth lapse: emulate the observed claude "Not logged in" JSON error blob + nonzero exit.
+    _, repo, local, bindir, prompt, env = fresh()
+    native = os.path.join(bindir, "codex")
+    external = os.path.join(bindir, "claude")
+    executable(native, "cat >/dev/null\nprintf '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"[]\"}}\\n'")
+    executable(external, "cat >/dev/null\nprintf '{\"is_error\":true,\"result\":\"Not logged in \\xc2\\xb7 Please run /login\"}\\n'\nexit 1")
+    write_seats(local, [native, "exec", "-"], [external, "--print"])
+    result = run(repo, prompt, env, tier="low", checkpoint="impl")
+    data = json.loads(result.stdout)
+    opus = next(item for item in data["results"] if item["seat"] == "opus")
+    check("non-completed seat is classified with an actionable auth reason",
+          opus["status"] != "completed" and "not authenticated" in opus.get("reason", ""))
+
+    # Sandbox/permission denial (e.g. council launched inside a sandboxed orchestrator) classifies
+    # to the run-unsandboxed guidance regardless of which CLI hit it.
+    _, repo, local, bindir, prompt, env = fresh()
+    native = os.path.join(bindir, "codex")
+    external = os.path.join(bindir, "claude")
+    executable(native, "cat >/dev/null\nprintf '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"[]\"}}\\n'")
+    executable(external, "cat >/dev/null\n>&2 printf 'attempt to write a readonly database\\n'\nexit 1")
+    write_seats(local, [native, "exec", "-"], [external, "--print"])
+    result = run(repo, prompt, env, tier="low", checkpoint="impl")
+    data = json.loads(result.stdout)
+    opus = next(item for item in data["results"] if item["seat"] == "opus")
+    check("sandbox/permission denial classifies to unsandboxed guidance",
+          opus["status"] != "completed" and "sandbox" in opus.get("reason", "").lower())
+
     # Vacuous selection is never a successful review. With zero seats configured the
     # reduced-diversity fallback cannot fire (nothing to fall back to) — the run stays incomplete.
     _, repo, local, _, prompt, env = fresh()

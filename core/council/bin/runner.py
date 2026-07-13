@@ -271,13 +271,14 @@ def validate_timeout_fields(config):
         if not isinstance(seat, dict):
             raise ValueError(f"invalid seat at index {index}")
         timeout = seat.get("timeoutSeconds", 300)
-        plan_timeout = seat.get("planTimeoutSeconds")
         label = seat.get("name") or str(index)
         if not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= 900:
             raise ValueError(f"seat {label} timeoutSeconds must be an integer in 1..900")
-        if plan_timeout is not None and (not isinstance(plan_timeout, int) or
-                                         isinstance(plan_timeout, bool) or not 1 <= plan_timeout <= 900):
-            raise ValueError(f"seat {label} planTimeoutSeconds must be an integer in 1..900")
+        for field in ("planTimeoutSeconds", "implTimeoutSeconds"):
+            value = seat.get(field)
+            if value is not None and (not isinstance(value, int) or isinstance(value, bool)
+                                      or not 1 <= value <= 900):
+                raise ValueError(f"seat {label} {field} must be an integer in 1..900")
 
 
 class EventLog:
@@ -462,14 +463,22 @@ def prepare_command(seat, tier, prompt):
     env_file_path(seat)
     timeout = seat.get("timeoutSeconds", 300)
     plan_timeout = seat.get("planTimeoutSeconds")
+    impl_timeout = seat.get("implTimeoutSeconds")
     if not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= 900:
         raise ValueError("timeoutSeconds must be an integer in 1..900")
-    if plan_timeout is not None and (not isinstance(plan_timeout, int) or isinstance(plan_timeout, bool)
-                                     or not 1 <= plan_timeout <= 900):
-        raise ValueError("planTimeoutSeconds must be an integer in 1..900")
-    if seat.get("kind") == "exec" and seat.get("checkpoint") == "plan" \
-            and plan_timeout is not None:
-        timeout = plan_timeout
+    for field, value in (("planTimeoutSeconds", plan_timeout), ("implTimeoutSeconds", impl_timeout)):
+        if value is not None and (not isinstance(value, int) or isinstance(value, bool)
+                                  or not 1 <= value <= 900):
+            raise ValueError(f"{field} must be an integer in 1..900")
+    # Per-checkpoint override: implementation reviews explore the actual diff and routinely need a
+    # longer budget than the 300s default, so a seat may carry implTimeoutSeconds (mirroring the
+    # existing plan override). Neither changes the reduced-diversity fallback deadline.
+    if seat.get("kind") == "exec":
+        checkpoint = seat.get("checkpoint")
+        if checkpoint == "plan" and plan_timeout is not None:
+            timeout = plan_timeout
+        elif checkpoint == "impl" and impl_timeout is not None:
+            timeout = impl_timeout
     return argv, env, timeout, adapter, transport
 
 
@@ -520,6 +529,43 @@ def extract_structured(adapter, raw):
     # Defense in depth: prepare_command's allow-list makes this unreachable, but an unrecognized
     # adapter's output must never classify as a completed review with no findings validation.
     return None, "unsupported-adapter"
+
+
+# A non-completed seat otherwise surfaces to the orchestrator as a bare empty result ("returned
+# nothing"), hiding whether it was a timeout, an auth lapse, or a sandbox denial. These signatures
+# come from the seat CLIs' own error text (persisted in full at stderrPath/stdoutPath). classify
+# returns a fixed, actionable string and never inlines raw CLI output, so nothing sensitive leaks.
+_AUTH_SIGNS = ("not logged in", "please run /login", "not authenticated", "run `claude login`")
+_SANDBOX_SIGNS = ("operation not permitted", "readonly database", "read-only database",
+                  "could not create path aliases", "filesystem.open")
+
+
+def classify_failure(status, stdout_text, stderr_text, timeout):
+    """Human-readable diagnosis for a non-completed seat, or None when nothing is known."""
+    blob = ((stderr_text or "") + "\n" + (stdout_text or "")).lower()
+    if any(sign in blob for sign in _AUTH_SIGNS):
+        return ("seat CLI is not authenticated — sign its CLI in (claude / codex / opencode login) "
+                "and re-run")
+    if any(sign in blob for sign in _SANDBOX_SIGNS):
+        return ("seat CLI was denied filesystem/keychain access — the council was likely launched "
+                "inside a sandboxed orchestrator (e.g. Codex workspace-write); run it from an "
+                "unsandboxed session so seats can reach their home-dir state and credentials")
+    if status == "timed-out":
+        return (f"exceeded the {timeout}s time budget before emitting final findings — raise the "
+                "seat's implTimeoutSeconds/timeoutSeconds or shrink the reviewed diff (note: a "
+                "claude-CLI seat buffers output, so a timeout discards the whole review)")
+    if status == "invalid-review-findings":
+        return ("seat returned a review but not as the required JSON findings array — it likely "
+                "emitted prose/markdown")
+    if status == "empty-output":
+        return "seat exited 0 but wrote no output"
+    if status in ("invalid-structured-output", "missing-review-content"):
+        return "seat output could not be parsed into a review; see stderrPath / stdoutPath"
+    if status == "nonzero-exit":
+        return "seat CLI exited nonzero; see stderrPath for the CLI's error"
+    if status == "signal-exit":
+        return "seat was killed by a signal; see stderrPath"
+    return None
 
 
 def extract_findings(review_text, checkpoint):
@@ -720,6 +766,14 @@ def run_one(work, cwd, seat, events):
             base["status"] = "signal-exit"
         else:
             base["status"] = "nonzero-exit"
+        if base["status"] != "completed" and not base.get("reason"):
+            reason = classify_failure(
+                base["status"],
+                out["data"].decode("utf-8", "replace")[:4000],
+                err["data"].decode("utf-8", "replace")[:4000],
+                timeout)
+            if reason:
+                base["reason"] = reason
     except FileNotFoundError:
         base.update(status="unavailable", reason=f"command not found: {argv[0]}")
     except OSError as e:

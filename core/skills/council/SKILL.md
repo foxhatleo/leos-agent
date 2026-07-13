@@ -151,7 +151,9 @@ external dispatch. The command is explicit orchestrator action, not an autonomou
 under `$ROOT/local/council/work/.../result.json`.
 
 - A `mode: exec` seat is run by the runner as a subprocess. Exec seats may define
-  `planTimeoutSeconds` for plan review; it does not affect implementation seats or the
+  per-checkpoint wall-clock overrides — `planTimeoutSeconds` for plan review and
+  `implTimeoutSeconds` for implementation review (catalog transports use 600 for both, since impl
+  reviews explore the actual diff and routinely exceed the 300s default). Neither affects the
   reduced-diversity fallback.
 - A `mode: subagent` seat (in-process host subagent, Claude Code only) yields a result with status
   `orchestrator-subagent-required`; dispatch exactly one read-only subagent pinned to the seat's
@@ -180,6 +182,13 @@ every finding in a private JSON file, then ledger it without placing reviewer te
 ```
 "$RUNTIME" "$ENGINE" ledger --entry-file "$WORK/dispositions.json"
 ```
+
+A seat whose `status` is not `completed` produced no findings — never count it as a clean pass. Its
+result carries a human-readable `reason` classifying why (e.g. *not authenticated — sign the CLI
+in*, *exceeded the Ns budget — raise implTimeoutSeconds*, *denied filesystem/keychain access — run
+outside a sandboxed orchestrator*). Surface that reason to the developer instead of reporting a bare
+"seat returned nothing", and factor the seat out of the diversity count. Full CLI output is
+persisted at the seat's `stderrPath` / `stdoutPath` for deeper diagnosis.
 
 - `fixed` / `accepted`: cite the patch.
 - `rejected`: require a concrete command result, requirement, or correct regression test.

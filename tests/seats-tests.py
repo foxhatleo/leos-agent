@@ -260,6 +260,13 @@ def main():
     check("out-of-range plan timeout is refused during seat validation",
           ec == 1 and any("planTimeoutSeconds" in p for p in out.get("problems", [])))
 
+    # 15b. Impl-specific timeouts (implTimeoutSeconds) are validated the same way.
+    cand = codex_candidate()
+    cand["seats"][1]["implTimeoutSeconds"] = 901
+    ec, out = validate(cand, "codex")
+    check("out-of-range impl timeout is refused during seat validation",
+          ec == 1 and any("implTimeoutSeconds" in p for p in out.get("problems", [])))
+
     total = passed + failed
     print(f"seats-tests: {passed}/{total} PASS" + (" — ALL PASS" if not failed else f" ({failed} FAIL)"))
     return 1 if failed else 0

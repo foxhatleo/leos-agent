@@ -360,10 +360,11 @@ def check_seat_flags(tool, seats):
         timeout = seat.get("timeoutSeconds", 300)
         if not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= 900:
             problems.append(f"seat {label} timeoutSeconds must be 1..900")
-        plan_timeout = seat.get("planTimeoutSeconds")
-        if plan_timeout is not None and (not isinstance(plan_timeout, int) or
-                                         isinstance(plan_timeout, bool) or not 1 <= plan_timeout <= 900):
-            problems.append(f"seat {label} planTimeoutSeconds must be 1..900")
+        for field in ("planTimeoutSeconds", "implTimeoutSeconds"):
+            value = seat.get(field)
+            if value is not None and (not isinstance(value, int) or
+                                      isinstance(value, bool) or not 1 <= value <= 900):
+                problems.append(f"seat {label} {field} must be 1..900")
         min_tier = seat.get("minTier", 4)
         if not isinstance(min_tier, int) or isinstance(min_tier, bool) or not 1 <= min_tier <= 4:
             problems.append(f"seat {label} minTier must be an integer in 1..4")
