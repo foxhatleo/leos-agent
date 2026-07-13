@@ -134,12 +134,14 @@ def main():
     pmenv = dict(os.environ, HOME=pmhome, LEOS_LOCAL=pmlocal)
     pr = subprocess.run([sys.executable, MERGE, "--tool", "claude", "--package-manager", "pnpm"],
                         capture_output=True, text=True, env=pmenv)
+    settings_load_error = None
     try:
         policy_settings = json.load(open(os.path.join(pmhome, ".claude", "settings.json")))
-    except Exception:
+    except Exception as e:
         policy_settings = {}
+        settings_load_error = str(e)
     check("package-manager merge applies", pr.returncode == 0)
-    check("package-manager scripts are not pre-approved", "Bash(pnpm test:*)" not in
+    check("package-manager scripts are not pre-approved", settings_load_error is None and "Bash(pnpm test:*)" not in
           policy_settings.get("permissions", {}).get("allow", []))
     pmstate = json.load(open(os.path.join(pmlocal, "merge-state.json")))
     check("package-manager policy fingerprint recorded", next(iter(pmstate["merges"].values())).get("packageManager") == "pnpm")

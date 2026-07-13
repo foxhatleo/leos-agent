@@ -60,6 +60,25 @@ BLOCK = [
     "git branch -D main",              # mutating branch forms share the read-only prefix
     "git branch -m old new",
     "sudo git branch --delete topic",
+    # --- macOS /private + /private/etc subtree (symlink-resolved critical paths) ---
+    "rm -rf /private",                 # /private backs /etc /var /tmp on macOS
+    "rm -rf /etc/nginx",               # /etc/* resolves to /private/etc/* (was unprotected)
+    "rm -rf /private/etc/ssh",
+    "chmod -R 755 /private",
+    # --- exec wrapper (was not stripped, unlike sudo/env/command) ---
+    "exec rm -rf /",
+    # --- find -delete / find -exec rm (recursive delete wearing a find hat) ---
+    "find / -exec rm -rf {} +",
+    "find /etc -delete",
+    r"find /etc -exec rm -rf {} \;",
+    "find / -delete",
+    # --- xargs rm without -r (recursion flag is irrelevant for a fed critical path) ---
+    "find /etc | xargs rm",
+    "echo /etc/passwd | xargs rm",
+    # --- chmod --recursive long form (RECURSIVE_SHORT only matched short -r/-R) ---
+    "chmod --recursive 777 /",
+    # --- backslash-newline line continuation (bash joins; guard must not split) ---
+    "rm -rf \\\n/",                    # noqa: E501  — `rm -rf \\\n/` is one statement in bash
 ]
 
 ALLOW = [
@@ -86,6 +105,10 @@ ALLOW = [
     "git diff HEAD~1",
     "git log --oneline -5",
     "git show HEAD",
+    # find -delete / -exec rm in a known project cwd stays allowed (cwd-relative, not home-scale)
+    r'find . -name "*.tmp" -delete',
+    "find . -name node_modules -exec rm -rf {} +",
+    r'find src -name "*.pyc" -exec rm {} +',
 ]
 
 

@@ -86,8 +86,10 @@ Deterministic first, tool-agnostic:
    and read-only sandbox while retaining normal authentication; other transports use documented
    plan/read-only modes and disclose when session persistence cannot be disabled.
 
-The runner creates its owned marker before dispatch and records bounded stdout/stderr, exit code,
-elapsed time, and a typed terminal state. A blank/invalid/nonzero/timed-out CLI call is never
+The runner creates its owned marker before dispatch. Its vendor-neutral detached
+`start`/`status`/`stop` lifecycle survives host tool-call deadlines while retaining explicit
+cancellation; synchronous `run` remains for compatibility. It records bounded stdout/stderr, exit
+code, elapsed time, and a typed terminal state. A blank/invalid/nonzero/timed-out CLI call is never
 treated as a successful review.
 
 Only the `Stop` event is registered (never `SubagentStop`), so native subagents are never

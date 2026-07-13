@@ -293,7 +293,10 @@ def merge_preview(fragment, current, owned_values, retire_missing=True, retire_s
                     lingering = [o for o in own_list if o in cur[k] and o not in v]
                     if all(x in cur[k] for x in v) and not lingering:
                         continue
-                    edited = [o for o in own_list if o not in cur[k] and o not in v]
+                    # Conflict only when the user removed an owned element the fragment STILL wants
+                    # (o not in cur[k] and o in v). An element retired by BOTH sides (not in cur[k]
+                    # and not in v) is an agreed retire — a no-op, not a conflict.
+                    edited = [o for o in own_list if o not in cur[k] and o in v]
                     if edited:
                         conflicts.append({"path": p, "ours": v,
                                           "theirs": "owned element(s) modified/removed by user",

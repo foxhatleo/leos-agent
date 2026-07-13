@@ -114,6 +114,14 @@ Deterministic gates first (fast = prerequisite, slow = reviewer context; gate-ab
 tier; gate-vacuous → treat as fail). Round 1 blind & parallel; each seat tags its own severity.
 The runner uses direct argv execution, private bounded stdout/stderr capture, process-group
 timeouts, and adapter-specific structured-output extraction for `claude`, `codex`, and `opencode`.
+Its vendor-neutral `start`/`status`/`stop` lifecycle is the default orchestration path: a detached
+runner owns a new process session, survives a host tool-call deadline, remains pollable through
+private events/results, and can still be cancelled through a private request followed by typed
+seat-process-group teardown. `start` runs the same follow-up preconditions as `run` (no active run,
+checkpoint mismatch, missing first pass, passes exhausted) so a bad launch is typed and leaves no
+orphan work dir; `status` and `stop` auto-detect a dispatched `pass-2` from its `launcher.json`,
+making `--follow-up` optional for them. Synchronous
+`run` remains a compatibility interface.
 Cursor is only accepted after setup confirms a usable output contract; otherwise it is unavailable,
 not silently treated as a review.
 
@@ -127,7 +135,9 @@ applies that selection separately from the implementation tier ladder.
 Mechanical adjudication (`accepted`/`fixed`/`rejected`/`deferred`); a `rejected` finding needs
 concrete evidence (command output, cited requirement, or a passing regression test encoding the
 CORRECT behavior); high-severity rejections fail closed. One bounded re-review (2 passes total, no
-debate). Sampled reject-audit by a different seat. Per-seat wall-clock timeouts; on exceed, fall
+debate). Sampled reject-audit by a different seat. Per-seat wall-clock timeouts; external plan
+seats may carry an explicit longer `planTimeoutSeconds`, which never changes implementation or
+native-fallback deadlines. On exceed, fall
 back to a single strong reviewer and record `fallback-fired`.
 
 ---
@@ -175,7 +185,7 @@ Layered, deterministic-first — tool-agnostic across the available hook/plugin/
 
 1. **Env sentinel `LEOS_COUNCIL_SEAT=1`** — the runner sets it on every external-seat launch;
    child hooks the seat's CLI fires inherit it.
-2. **Hook check** — `council.py cmd_hook` returns 0 immediately if `LEOS_COUNCIL_SEAT` is set, so a
+2. **Hook check** — `council.py hook` returns 0 immediately if `LEOS_COUNCIL_SEAT` is set, so a
    seat is never nudged.
 3. **Skill/runner self-check** — a seat and the runner both refuse a nested Leo council.
 4. **Shared local state + owned in-review marker** — the runner records a run id before dispatch;

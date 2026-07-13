@@ -32,7 +32,7 @@ OpenCode and Cursor support.
 - `[all]` **Symlink delivery** (`leos-link`) + **fragment merge** (`leos-merge`, ported hardened
   engine with a wider ownership-aware array merge) + **`leos-doctor`** (linkcheck, fragment-drift,
   seat-flag assertions). No ownership-sha, no `MIGRATE`/`RECONCILE`-as-reinstall.
-- `[all]` Nine test batteries (guard, fmt, council, runner, merge, link, block, inject, uninstall).
+- `[all]` Twelve test batteries (guard, fmt, council, runner, gitignore, merge, link, block, inject, uninstall, runtime, seats) plus the contamination boundary check.
 
 ### Changed (setup & council robustness — from second-machine install feedback)
 - `[all]` **Audit remediation.** Fixed arg-transport brace rejection, pushed-feature base collapse,

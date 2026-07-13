@@ -22,6 +22,7 @@ Recursion guard: if $LEOS_COUNCIL_SEAT is set the process is a council seat/suba
 """
 
 import argparse
+import contextlib
 import fnmatch
 import hashlib
 import json
@@ -684,6 +685,37 @@ def _remove_pointer(cwd, name):
         pass
 
 
+@contextlib.contextmanager
+def _in_review_lock(cwd):
+    """Hold in-review.lock (the same lock _acquire_in_review and cmd_end take) so a
+    read-modify-write of in-review.json / nudge-state.json cannot interleave between two
+    concurrent council invocations. Fail-open: if fcntl is unavailable, proceed unlocked."""
+    try:
+        import fcntl
+    except ImportError:
+        fcntl = None
+    lock_path = os.path.join(state_dir(cwd), "in-review.lock")
+    lock = open(lock_path, "a+", encoding="utf-8")
+    try:
+        try:
+            os.chmod(lock_path, 0o600)
+        except OSError:
+            pass
+        if fcntl is not None:
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            except OSError:
+                pass
+        yield
+    finally:
+        if fcntl is not None:
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        lock.close()
+
+
 def _acquire_in_review(cwd, checkpoint, run_id):
     """Serialize active-run ownership so two runners cannot both pass a check-then-write race."""
     import fcntl
@@ -850,13 +882,15 @@ def cmd_mark(args):
     cwd = os.getcwd()
     # Opt-in ownership: an orchestrator that knows its runId (from result.json) must not be able
     # to close ANOTHER run's fresh marker of the same checkpoint. Plain mark keeps the legacy
-    # checkpoint-scoped clearing for manual and Stop-hook override flows.
-    ir = _read_pointer(cwd, "in-review.json") or {}
-    ir_fresh = int(time.time()) - int(ir.get("ts", 0)) < IN_REVIEW_TTL
-    if args.run_id and ir_fresh and ir.get("run_id") and ir.get("run_id") != args.run_id:
-        print(json.dumps({"ok": False, "status": "active-run-not-owned",
-                          "activeRun": ir.get("run_id", "")}, indent=2))
-        return 3
+    # checkpoint-scoped clearing for manual and Stop-hook override flows. The ownership check
+    # races cmd_end/cmd_begin/another cmd_mark without the lock they all share on in-review.lock.
+    with _in_review_lock(cwd):
+        ir = _read_pointer(cwd, "in-review.json") or {}
+        ir_fresh = int(time.time()) - int(ir.get("ts", 0)) < IN_REVIEW_TTL
+        if args.run_id and ir_fresh and ir.get("run_id") and ir.get("run_id") != args.run_id:
+            print(json.dumps({"ok": False, "status": "active-run-not-owned",
+                              "activeRun": ir.get("run_id", "")}, indent=2))
+            return 3
     diff_text, _, untracked, uc, _ = get_diff(cwd)
     h = _hash_all(cwd, diff_text, untracked, uc)
     status = "overridden" if args.override else "reviewed"
@@ -887,9 +921,10 @@ def cmd_mark(args):
     ns = _read_pointer(cwd, "nudge-state.json") or {}
     ns[args.checkpoint] = {"count": 0, "ts": int(time.time())}
     _write_pointer(cwd, "nudge-state.json", ns)
-    ir = _read_pointer(cwd, "in-review.json") or {}
-    if ir.get("checkpoint") == args.checkpoint:
-        _remove_pointer(cwd, "in-review.json")
+    with _in_review_lock(cwd):
+        ir = _read_pointer(cwd, "in-review.json") or {}
+        if ir.get("checkpoint") == args.checkpoint:
+            _remove_pointer(cwd, "in-review.json")
     append_ledger(cwd, {"type": "marker", **data})
     print(f"marked {status}: {h}")
     return 0
@@ -989,25 +1024,28 @@ def cmd_hook(_args):
             # cur is None (snapshot failed) -> fall through on `full` risk, still loop-guarded.
 
         # Persistent loop guard (project+checkpoint scoped): survives diff-hash churn across edits.
-        ns = _read_pointer(cwd, "nudge-state.json") or {}
-        slot = ns.get("impl") or {}
-        count = slot.get("count", 0)
-        anchor = slot.get("anchor_tree")
-        rearms = slot.get("rearms", 0)
-        if count >= MAX_NUDGES:
-            # Re-arm once if there is genuinely NEW substantial work since the guard first tripped.
-            rearmed = False
-            if anchor and rearms < MAX_REARMS:
-                cur2 = snapshot_tree(cwd)
-                if cur2 and cur2 != anchor and cached_risk(cwd, base_tree=anchor)["tier_index"] >= 2:
-                    count, rearms, anchor, rearmed = 0, rearms + 1, None, True
-            if not rearmed:
-                return 0
-        if anchor is None:
-            anchor = snapshot_tree(cwd)
-        ns["impl"] = {"count": count + 1, "ts": int(time.time()), "anchor_tree": anchor,
-                      "rearms": rearms}
-        _write_pointer(cwd, "nudge-state.json", ns)
+        # Hold in-review.lock across the read-increment-write so two concurrent Stop hooks (e.g.
+        # two host sessions) cannot both read the same count and both increment, exceeding MAX_NUDGES.
+        with _in_review_lock(cwd):
+            ns = _read_pointer(cwd, "nudge-state.json") or {}
+            slot = ns.get("impl") or {}
+            count = slot.get("count", 0)
+            anchor = slot.get("anchor_tree")
+            rearms = slot.get("rearms", 0)
+            if count >= MAX_NUDGES:
+                # Re-arm once if there is genuinely NEW substantial work since the guard first tripped.
+                rearmed = False
+                if anchor and rearms < MAX_REARMS:
+                    cur2 = snapshot_tree(cwd)
+                    if cur2 and cur2 != anchor and cached_risk(cwd, base_tree=anchor)["tier_index"] >= 2:
+                        count, rearms, anchor, rearmed = 0, rearms + 1, None, True
+                if not rearmed:
+                    return 0
+            if anchor is None:
+                anchor = snapshot_tree(cwd)
+            ns["impl"] = {"count": count + 1, "ts": int(time.time()), "anchor_tree": anchor,
+                          "rearms": rearms}
+            _write_pointer(cwd, "nudge-state.json", ns)
 
         reasons = "; ".join(risk["reasons"][:3])
         scope = ("the incremental change since your last council review" if incremental

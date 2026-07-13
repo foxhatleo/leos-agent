@@ -55,7 +55,7 @@ def ensure_in_text(text, marker, import_abs):
     blk = block_text(marker, import_abs)
     if begin in text and end in text:
         i = text.index(begin)
-        j = text.index(end) + len(end)
+        j = text.index(end, i) + len(end)   # search from i: an orphan END before BEGIN must not garble the splice
         return text[:i] + blk + text[j:]
     if text.strip() == "":
         return blk + "\n"

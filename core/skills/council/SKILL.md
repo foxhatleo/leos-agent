@@ -103,12 +103,14 @@ For a plan, use `review-plan.md` and `prompt-plan.md`. For implementation, use `
 
 ## Dispatch through the runner
 
-The runner is the only CLI dispatcher. It creates the active marker **before** process launch,
+The runner is the only CLI dispatcher. It creates the active marker **before** seat process launch,
 passes `LEOS_COUNCIL_SEAT=1` to every external seat, captures stdout/stderr privately, applies a
 process-group timeout, and emits a typed result. It does not use a shell or interpolate review text
 into a command line except where a chosen legacy `arg` transport explicitly requires it.
 It also appends private `events.jsonl` lifecycle records and emits terse stderr start/finish
-progress, so a long tool loop cannot look indistinguishable from a blank return.
+progress. Use its detached lifecycle by default so a host tool-call deadline or closed output pipe
+cannot cancel healthy seats. The detached child owns a new process session and keeps all artifacts
+under the same private work directory; this behavior is identical on every host.
 Each CLI seat runs in a private scratch directory under the run's work dir with its own synthetic
 Git root (per-seat `"cwd": "repo"` opt-out). The project-root boundary prevents parent repo
 instructions from loading even when this clone reviews itself. The runner injects the reviewed
@@ -116,17 +118,30 @@ repo's absolute path as a prompt header — the orchestrator's prompt template d
 include it, and the header is added even for a redacted prompt.
 
 ```
-"$RUNTIME" "$RUNNER" run \
+"$RUNTIME" "$RUNNER" start \
   --host "$HOST" --checkpoint impl --tier high --prompt "$PROMPT" --cwd "$PWD" \
   --approve-external
 ```
 
+Parse the returned `runId`, then poll without holding the original host tool call open:
+
+```
+"$RUNTIME" "$RUNNER" status --run-id <runId> --cwd "$PWD"
+```
+
+Continue polling while `state` is `running`. A terminal response embeds the typed runner result in
+`result`. To intentionally abort a detached run, use `stop --run-id <runId> --cwd "$PWD"`; it
+writes a private cancellation request that the runner observes before performing the same bounded
+seat-process-group teardown as synchronous cancellation. `run` remains available as a compatibility command only when the invoking host can
+guarantee its call lives longer than every configured seat.
+
 Use the actual checkpoint/tier. `--approve-external` means the developer/project policy has
 explicitly approved sending this prompt to the named providers; omit it and the runner refuses
-external dispatch. The command is explicit orchestrator action, not a daemon. Its result file is
+external dispatch. The command is explicit orchestrator action, not an autonomous trigger. Its result file is
 under `$ROOT/local/council/work/.../result.json`.
 
-- An `exec` native seat is run by the runner.
+- An `exec` native seat is run by the runner. External seats may define `planTimeoutSeconds` for
+  plan review; it does not affect implementation seats or native plan fallback.
 - A native `mode: subagent` result is `orchestrator-native-subagent-required`; dispatch exactly one
   native read-only subagent with the returned private `promptPath`. Tell it not to convene Leo's
   Agents council. It may otherwise use ordinary allowed tools/subagents. Save its mandatory
@@ -163,16 +178,22 @@ passes—no debate loops. Sample one rejected finding with a different seat when
 The re-review is a first-class runner pass:
 
 ```
-"$RUNTIME" "$RUNNER" run \
+"$RUNTIME" "$RUNNER" start \
   --host "$HOST" --checkpoint impl --tier <tier> --prompt "$PROMPT_FIX" --cwd "$PWD" \
   --approve-external --follow-up --seat <seat-name>
 ```
 
+Poll with `status --run-id <runId> --cwd "$PWD"`.
 `--follow-up` reuses the active run's marker and run id and writes under `<run>/pass-2/` — round-1
 artifacts stay immutable — and the runner refuses a third pass (`follow-up-passes-exhausted`) and
 refuses reusing a finished `--run-id` without it (`run-id-work-exists`). `--seat` is also how the
 different-seat reject-audit is dispatched. If the marker's TTL lapsed mid-fix, `--follow-up`
-returns `no-active-run-for-follow-up`; dispatch a fresh run instead.
+returns `no-active-run-for-follow-up`; dispatch a fresh run instead. The follow-up preconditions
+(no active run, checkpoint mismatch, missing first pass, passes exhausted) are checked at `start`,
+not only inside the detached child, so a bad follow-up returns its typed status without creating a
+`pass-2/` dir or consuming the run id. `status` and `stop` auto-detect a dispatched `pass-2` from
+its `launcher.json`, so `--follow-up` is optional for them (and required only for `start`); the
+bare `stop --run-id <runId> --cwd "$PWD"` form cancels a running follow-up.
 
 Finally close the active marker and write the reviewed baseline, passing the run id from
 `result.json` so another run's fresh marker can never be closed by mistake:

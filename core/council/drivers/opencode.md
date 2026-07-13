@@ -25,8 +25,9 @@ opencode run --agent plan -m openrouter/{MODEL} --variant {EFFORT} {PROMPT_TEXT}
   during self-review; the repo's absolute path arrives in a prompt header. Set seat `"cwd": "repo"`
   only if the installed version cannot read outside its cwd (re-opens repo-local instruction
   injection).
-- `{PROMPT_TEXT}` is replaced in-memory with the prompt-file content, then shell-quoted — never
-  interpolated into an unquoted fragment.
+- `{PROMPT_TEXT}` is replaced in-memory with the prompt-file content and passed as a single argv
+  element — the runner uses direct argv execution (no shell), so it is never interpolated into an
+  unquoted shell fragment.
 - efforts (GLM): `{ "default": "high", "max": "max" }`; (Gemini): `{ "default": "xhigh", "max": "max" }`.
 
 **Smoke test (per model):**

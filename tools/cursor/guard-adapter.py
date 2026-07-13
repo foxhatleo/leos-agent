@@ -34,16 +34,16 @@ def main():
                            text=True, timeout=10)
     except Exception:
         reason = "Leo's Agents guard is unavailable; refusing shell execution"
-        print(json.dumps({"permission": "deny", "userMessage": reason, "agentMessage": reason}))
+        print(json.dumps({"permission": "deny", "user_message": reason, "agent_message": reason}))
         return 0
     if r.returncode == 43:
         reason = (r.stderr or "blocked by bash-guard").strip()
-        print(json.dumps({"permission": "deny", "userMessage": reason,
-                          "agentMessage": reason}))
+        print(json.dumps({"permission": "deny", "user_message": reason,
+                          "agent_message": reason}))
         return 0
     if r.returncode != 0:
         reason = "Leo's Agents guard failed; refusing shell execution"
-        print(json.dumps({"permission": "deny", "userMessage": reason, "agentMessage": reason}))
+        print(json.dumps({"permission": "deny", "user_message": reason, "agent_message": reason}))
         return 0
     return 0
 

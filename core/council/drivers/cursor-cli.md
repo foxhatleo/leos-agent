@@ -27,7 +27,7 @@ cursor-agent -p --model {MODEL} --mode plan {PROMPT_TEXT}
   arrives in a prompt header instead) — not an absolute OS-level containment guarantee. Set seat
   `"cwd": "repo"` only if this Cursor version cannot read outside its cwd; that re-opens repo-local
   instruction injection.
-- `{PROMPT_TEXT}` replaced in-memory, then shell-quoted.
+- `{PROMPT_TEXT}` replaced in-memory and passed as a single argv element (direct argv execution; no shell).
 
 **Smoke test:**
 ```

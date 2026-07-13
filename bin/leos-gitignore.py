@@ -114,7 +114,11 @@ def main():
         path = _resolve(value)
 
         try:
-            current = open(path, encoding="utf-8").read() if os.path.exists(path) else ""
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as f:
+                    current = f.read()
+            else:
+                current = ""
         except OSError as exc:
             print(f"cannot read global excludes file {path}: {exc}", file=sys.stderr)
             return 1

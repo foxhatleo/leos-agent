@@ -11,13 +11,15 @@
         "provider": "anthropic",
         "transport": "stdin",
         "argv": ["claude", "--safe-mode", "--print", "--no-session-persistence", "--permission-mode", "plan", "--model", "{MODEL}", "--effort", "{EFFORT}"],
-        "efforts": { "default": "high", "max": "xhigh" }
+        "efforts": { "default": "high", "max": "xhigh" },
+        "planTimeoutSeconds": 600
       },
       "asExternalCursor": {
         "provider": "anthropic",
         "transport": "arg",
         "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
         "efforts": { "default": "high", "max": "xhigh" },
+        "planTimeoutSeconds": 600,
         "note": "Opus-line model via Cursor when the claude CLI is absent (confirm the Cursor slug is an Opus id with `cursor-agent --list-models`). Isolation = read-only `--mode plan` in the runner-provided scratch cwd with a synthetic Git root — weaker than native `--safe-mode`; acceptable fallback."
       }
     },
@@ -36,6 +38,7 @@
         "transport": "stdin",
         "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort={EFFORT}", "-m", "{MODEL}", "-"],
         "efforts": { "default": "high", "max": "xhigh" },
+        "planTimeoutSeconds": 600,
         "note": "On any non-Codex host, resolve per the flavor rule in modelGuidance (5.6 → Sol). Uses the host's normal authentication. --ephemeral prevents session files; the inherited LEOS_COUNCIL_SEAT sentinel mechanically refuses nested Leo councils."
       },
       "asExternalCursor": {
@@ -43,6 +46,7 @@
         "transport": "arg",
         "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
         "efforts": { "default": "high", "max": "xhigh" },
+        "planTimeoutSeconds": 600,
         "note": "GPT/OpenAI model via Cursor when the codex CLI is absent: resolve per the flavor rule in modelGuidance (5.6 → Sol), then confirm the exact Cursor slug with `cursor-agent --list-models`. Isolation = read-only `--mode plan` in the runner-provided scratch cwd with a synthetic Git root instead of an isolated CODEX_HOME."
       }
     },
@@ -54,13 +58,15 @@
         "provider": "zhipu",
         "transport": "arg",
         "argv": ["opencode", "run", "--agent", "plan", "-m", "openrouter/{MODEL}", "--variant", "{EFFORT}", "{PROMPT_TEXT}"],
-        "efforts": { "default": "high", "max": "max" }
+        "efforts": { "default": "high", "max": "max" },
+        "planTimeoutSeconds": 600
       },
       "asExternalCursor": {
         "provider": "zhipu",
         "transport": "arg",
         "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
         "efforts": { "default": "high", "max": "xhigh" },
+        "planTimeoutSeconds": 600,
         "note": "GLM via Cursor when opencode is absent — only if `cursor-agent --list-models` lists a GLM slug; {MODEL} is the Cursor slug, not the OpenRouter one."
       }
     },
@@ -72,13 +78,15 @@
         "provider": "google",
         "transport": "arg",
         "argv": ["opencode", "run", "--agent", "plan", "-m", "openrouter/{MODEL}", "--variant", "{EFFORT}", "{PROMPT_TEXT}"],
-        "efforts": { "default": "xhigh", "max": "max" }
+        "efforts": { "default": "xhigh", "max": "max" },
+        "planTimeoutSeconds": 600
       },
       "asExternalCursor": {
         "provider": "google",
         "transport": "arg",
         "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
         "efforts": { "default": "high", "max": "xhigh" },
+        "planTimeoutSeconds": 600,
         "note": "Gemini via Cursor when opencode is absent — only if `cursor-agent --list-models` lists a Gemini slug; {MODEL} is the Cursor slug, not the OpenRouter one."
       }
     },
@@ -90,13 +98,15 @@
         "provider": "xai",
         "transport": "arg",
         "argv": ["cursor-agent", "-p", "--model", "{MODEL}", "--mode", "plan", "{PROMPT_TEXT}"],
-        "efforts": { "default": "high", "max": "xhigh" }
+        "efforts": { "default": "high", "max": "xhigh" },
+        "planTimeoutSeconds": 600
       },
       "asExternalOpencode": {
         "provider": "xai",
         "transport": "arg",
         "argv": ["opencode", "run", "--agent", "plan", "-m", "openrouter/{MODEL}", "--variant", "{EFFORT}", "{PROMPT_TEXT}"],
-        "efforts": { "default": "high", "max": "max" }
+        "efforts": { "default": "high", "max": "max" },
+        "planTimeoutSeconds": 600
       }
     }
   ],
@@ -107,6 +117,8 @@
     "provider": "required on every external seat: anthropic | openai | zhipu | google | xai | custom; copied from the catalog roster identity, not inferred from the display name",
     "adapter": "optional seat adapter, allow-listed: claude | codex | opencode | cursor-json | raw (raw is explicit-only — an unknown binary without an adapter is an invalid seat); cursor requires cursor-json after an output-contract smoke test",
     "responsePath": "cursor-json external seat only: dotted JSON string field containing reviewer text",
+    "timeoutSeconds": "optional per-seat implementation/native wall-clock limit in seconds, integer 1..900 (default 300)",
+    "planTimeoutSeconds": "optional external-plan-only wall-clock limit in seconds, integer 1..900; catalog flagship transports use 600; ignored for implementation and native fallback after unconditional validation",
     "cwd": "optional per-seat working-directory mode: \"scratch\" (default — the runner creates a private dir with its own synthetic Git root under local/council/work/<run>/ and removes it after the seat, so parent-repo config like .cursor/rules or AGENTS.md never loads into a reviewer even during self-review; the reviewed repo's absolute path is injected as a prompt header) | \"repo\" (run inside the reviewed repo — opt-out for transports that cannot read outside their workspace; re-opens repo-local instruction injection)",
     "native": {
       "mode": "subagent | exec",
@@ -121,7 +133,8 @@
         "argv": ["codex", "exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "-c", "model_reasoning_effort={EFFORT}", "-m", "{MODEL}", "-"],
         "efforts": { "default": "high", "max": "xhigh" },
         "adapter": "codex",
-        "timeoutSeconds": 300
+        "timeoutSeconds": 300,
+        "planTimeoutSeconds": 600
       }
     ]
   }

@@ -138,6 +138,12 @@ def main():
     finally:
         if "rollback" in locals() and "real_subprocess_run" in locals():
             rollback.subprocess.run = real_subprocess_run
+        # Defensive: fake_run may leave a .venv-staging-* dir if rollback didn't tear it down.
+        if "rollback_local" in locals() and os.path.isdir(rollback_local):
+            import shutil as _shutil
+            for name in os.listdir(rollback_local):
+                if name.startswith(".venv-staging-"):
+                    _shutil.rmtree(os.path.join(rollback_local, name), ignore_errors=True)
         os.environ.pop("LEOS_LOCAL", None)
 
     total = passed + failed

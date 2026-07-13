@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Tests for bin/leos-gitignore.py using isolated HOME and global Git config files."""
 
+import atexit
 import os
+import glob
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -11,6 +14,15 @@ TEST_TMP = os.path.join(ROOT, "local", "test-work")
 os.makedirs(TEST_TMP, exist_ok=True)
 tempfile.tempdir = TEST_TMP
 TOOL = os.path.join(ROOT, "bin", "leos-gitignore.py")
+
+
+def _cleanup_tempdirs():
+    """Remove this battery's tempdirs so repeated runs don't accumulate under local/test-work."""
+    for d in glob.glob(os.path.join(TEST_TMP, "gitignore-*")):
+        shutil.rmtree(d, ignore_errors=True)
+
+
+atexit.register(_cleanup_tempdirs)
 
 passed = failed = 0
 

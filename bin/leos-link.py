@@ -183,6 +183,9 @@ def make_link(dest, src, force):
     if st == "foreign" and os.path.isdir(dest):
         return {"dest": dest, "action": "refused",
                 "reason": "existing directory is never replaced automatically; move it after backing it up"}
+    if not os.path.exists(src):
+        return {"dest": dest, "action": "refused",
+                "reason": f"source does not exist — refusing to install a dangling symlink: {src}"}
     backup = _backup_foreign(dest) if st == "foreign" else None
     try:
         _stage_symlink(dest, src)

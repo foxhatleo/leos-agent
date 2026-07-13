@@ -130,10 +130,51 @@ def run(repo, prompt, env, tier="elevated", cwd=None, checkpoint="impl", externa
     try:
         return subprocess.run(argv, capture_output=True, text=True, env=env, timeout=120)
     except subprocess.TimeoutExpired as e:
-        # One hung runner is a failing check with diagnostics, never a battery abort.
-        return subprocess.CompletedProcess(argv, -999, stdout=(e.stdout or b"").decode() if
-                                           isinstance(e.stdout, bytes) else (e.stdout or "{}"),
+        # One hung runner is a failing check with diagnostics, never a battery abort. Return a
+        # runner-summary-shaped sentinel (returncode -999) so callers that json.loads the stdout
+        # and index data["results"][0] record a clean FAIL instead of KeyError/IndexError, and the
+        # `result.returncode == <exp> and ...` checks short-circuit before touching the sentinel.
+        captured = (e.stdout or b"").decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
+        sentinel = json.dumps({"ok": False, "runId": "", "dispatchOk": False, "reviewComplete": False,
+                               "resultPath": "", "results": [{"seat": "", "status": "runner-timeout"}],
+                               "_timeout": True, "_captured": captured[-400:]})
+        return subprocess.CompletedProcess(argv, -999, stdout=sentinel,
                                            stderr="runner timed out after 120s")
+
+
+def start(repo, prompt, env, tier="low", checkpoint="impl", run_id=None,
+          approve_external=True, follow_up=False, seat=None):
+    argv = [sys.executable, RUNNER, "start", "--host", "codex", "--checkpoint", checkpoint,
+            "--tier", tier, "--prompt", prompt, "--cwd", repo]
+    if run_id:
+        argv.extend(["--run-id", run_id])
+    if approve_external:
+        argv.append("--approve-external")
+    if follow_up:
+        argv.append("--follow-up")
+    if seat:
+        argv.extend(["--seat", seat])
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, env=env, timeout=15)
+    except subprocess.TimeoutExpired as e:
+        return subprocess.CompletedProcess(argv, -999, stdout=(e.stdout or b"").decode()
+                                           if isinstance(e.stdout, bytes) else (e.stdout or ""),
+                                           stderr="start timed out after 15s")
+
+
+def poll_status(repo, env, run_id, deadline=15, follow_up=False):
+    argv = [sys.executable, RUNNER, "status", "--run-id", run_id, "--cwd", repo]
+    if follow_up:
+        argv.append("--follow-up")
+    end = time.time() + deadline
+    last = None
+    while time.time() < end:
+        last = subprocess.run(argv, capture_output=True, text=True, env=env, timeout=5)
+        data = json.loads(last.stdout)
+        if data.get("terminal"):
+            return last, data
+        time.sleep(0.05)
+    return last, json.loads(last.stdout) if last else {}
 
 
 def wait_for_event(local, name, deadline=15):
@@ -241,15 +282,17 @@ def main():
     check("cancellation test observes a running seat", os.path.exists(pid_receipt))
     proc.send_signal(signal.SIGTERM)
     stdout = communicate_checked(proc, "runner cancellation is typed and bounded", timeout=15)
+    try:
+        seat_pid = int(open(pid_receipt).read().strip())
+    except (OSError, ValueError):
+        seat_pid = None
+    # Asserted unconditionally: a timeout (stdout is None) where the seat survived is a real FAIL,
+    # not a silently-skipped check.
+    check("cancellation kills the seat process group", seat_pid is not None and pid_dead(seat_pid))
     if stdout is not None:
         cancelled = json.loads(stdout)
         check("runner cancellation is typed and bounded", proc.returncode == 1 and
               cancelled["results"][0]["status"] == "cancelled")
-        try:
-            seat_pid = int(open(pid_receipt).read().strip())
-        except (OSError, ValueError):
-            seat_pid = None
-        check("cancellation kills the seat process group", seat_pid is not None and pid_dead(seat_pid))
 
     # Cancellation BEFORE any seat launches never leaks an unkillable child and still writes a
     # typed result: the launch+registration critical section refuses under CANCELLED.
@@ -294,6 +337,91 @@ def main():
         statuses = {r["seat"]: r["status"] for r in mixed.get("results", [])}
         check("completed seat survives run-wide cancel",
               statuses.get("native") == "completed" and statuses.get("opus") == "cancelled")
+
+    # Detached start survives the short-lived launcher command and exposes a host-neutral polling
+    # contract. The runner owns a new process session, so no host tool call must remain open.
+    _, repo, local, bindir, prompt, env = fresh()
+    delayed = os.path.join(bindir, "codex")
+    executable(delayed, "cat >/dev/null\nsleep 1\nprintf '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"[]\"}}\\n'")
+    write_seats(local, [delayed, "exec", "-"])
+    launched = start(repo, prompt, env, run_id="detached-pass")
+    launch_data = json.loads(launched.stdout)
+    polled, detached = poll_status(repo, env, "detached-pass")
+    check("detached start returns a pollable run id", launched.returncode == 0 and
+          launch_data.get("runId") == "detached-pass" and launch_data.get("resultPath"))
+    check("detached runner survives launcher exit", polled.returncode == 0 and
+          detached.get("terminal") is True and detached.get("result", {}).get("reviewComplete") is True)
+    check("status includes lifecycle progress", any(e.get("event") == "runner-finished"
+          for e in detached.get("events", [])))
+    duplicate = start(repo, prompt, env, run_id="detached-pass")
+    check("detached start never reuses completed work", duplicate.returncode == 2 and
+          "run-id-work-exists" in duplicate.stdout)
+    already_terminal = subprocess.run([sys.executable, RUNNER, "stop", "--run-id", "detached-pass",
+                                       "--cwd", repo], capture_output=True, text=True, env=env)
+    terminal_stop = json.loads(already_terminal.stdout)
+    check("stop never signals a terminal run", already_terminal.returncode == 0 and
+          terminal_stop.get("status") == "already-terminal" and
+          terminal_stop.get("stopRequested") is False)
+
+    _, repo, local, bindir, prompt, env = fresh()
+    fast = os.path.join(bindir, "codex")
+    executable(fast, "cat >/dev/null\nprintf '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"[]\"}}\\n'")
+    write_seats(local, [fast, "exec", "-"])
+    synchronous = run(repo, prompt, env, tier="low", run_id="sync-first")
+    collision = start(repo, prompt, env, run_id="sync-first")
+    check("detached start refuses synchronous run work", synchronous.returncode == 0 and
+          collision.returncode == 2 and "run-id-work-exists" in collision.stdout)
+
+    # Atomic directory creation permits exactly one concurrent detached launcher for a run id.
+    _, repo, local, bindir, prompt, env = fresh()
+    sleeper = os.path.join(bindir, "codex")
+    executable(sleeper, "cat >/dev/null\nsleep 30")
+    write_seats(local, [sleeper, "exec", "-"])
+    start_argv = [sys.executable, RUNNER, "start", "--host", "codex", "--checkpoint", "impl",
+                  "--tier", "low", "--prompt", prompt, "--cwd", repo,
+                  "--run-id", "concurrent-start", "--approve-external"]
+    starters = [subprocess.Popen(start_argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 text=True, env=env) for _ in range(2)]
+    starter_outputs = [proc.communicate(timeout=10)[0] for proc in starters]
+    check("concurrent detached start has one owner", sorted(proc.returncode for proc in starters) == [0, 2] and
+          sum("run-id-work-exists" in output for output in starter_outputs) == 1)
+    subprocess.run([sys.executable, RUNNER, "stop", "--run-id", "concurrent-start", "--cwd", repo],
+                   capture_output=True, text=True, env=env, timeout=15)
+
+    # Detached jobs remain explicitly cancellable; stop signals the runner's process group and the
+    # runner performs its normal typed child teardown and marker release.
+    _, repo, local, bindir, prompt, env = fresh()
+    sleeper = os.path.join(bindir, "codex")
+    executable(sleeper, "cat >/dev/null\nsleep 30")
+    write_seats(local, [sleeper, "exec", "-"])
+    launched = start(repo, prompt, env, run_id="detached-stop")
+    launch_data = json.loads(launched.stdout)
+    stopped = subprocess.run([sys.executable, RUNNER, "stop", "--run-id", "detached-stop",
+                              "--cwd", repo], capture_output=True, text=True, env=env, timeout=15)
+    stop_data = json.loads(stopped.stdout)
+    stop_results = stop_data.get("result", {}).get("results", [])
+    check("detached stop yields a typed cancelled result", stopped.returncode == 0 and
+          stop_data.get("stopRequested") is True and stop_results and
+          stop_results[0].get("status") == "cancelled" and
+          os.path.isfile(os.path.join(os.path.dirname(launch_data["resultPath"]),
+                                      "cancel-request.json")))
+    check("detached stop kills the runner process group", pid_dead(launch_data.get("pid")))
+
+    # Early child validation failures and unsafe run ids remain typed; detached path construction
+    # never accepts traversal components.
+    _, repo, local, bindir, prompt, env = fresh()
+    executable(os.path.join(bindir, "codex"), "exit 99")
+    write_seats(local, [os.path.join(bindir, "codex"), "exec", "-"])
+    missing = start(repo, os.path.join(repo, "missing-prompt"), env, run_id="early-failure")
+    missing_data = json.loads(missing.stdout)
+    check("detached early failure is typed", missing.returncode == 1 and
+          missing_data.get("status") == "prompt-unreadable" and missing_data.get("ok") is False)
+    unsafe = start(repo, prompt, env, run_id="../escape")
+    check("detached run id rejects traversal", unsafe.returncode == 2 and
+          "invalid-run-id" in unsafe.stdout)
+    unsafe_sync = run(repo, prompt, env, tier="low", run_id="../escape")
+    check("synchronous run id rejects traversal", unsafe_sync.returncode == 2 and
+          "invalid-run-id" in unsafe_sync.stdout)
 
     # An externally SIGKILLed seat with no cancellation is signal-exit, not cancelled.
     _, repo, local, bindir, prompt, env = fresh()
@@ -429,10 +557,18 @@ def main():
     executable(os.path.join(bindir, "codex"), "cat >/dev/null\nprintf '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"[]\"}}\\n'")
     executable(os.path.join(bindir, "claude"), "cat >/dev/null\nprintf '{\"result\":\"[]\"}\\n'")
     write_seats(local, [os.path.join(bindir, "codex"), "exec", "-"], [os.path.join(bindir, "claude"), "--print"])
+    # Plan-specific deadlines are explicit and affect external plan seats only. There is no
+    # hidden vendor-wide cap; implementation seats retain timeoutSeconds.
+    config_path = os.path.join(local, "seats.codex.json")
+    config = json.load(open(config_path))
+    config["seats"][0]["planTimeoutSeconds"] = 7
+    with open(config_path, "w") as f:
+        json.dump(config, f)
     result = run(repo, prompt, env, tier="low", checkpoint="plan")
     data = json.loads(result.stdout)
     check("plan checkpoint uses configured external before native", result.returncode == 0 and
-          [item["seat"] for item in data["results"]] == ["opus"])
+          [item["seat"] for item in data["results"]] == ["opus"] and
+          data["results"][0].get("timeoutSeconds") == 7)
     result = run(repo, prompt, env, tier="low", checkpoint="plan", approve_external=False)
     check("external dispatch requires explicit project approval", result.returncode == 2 and
           "external-send-approval-required" in result.stdout)
@@ -448,7 +584,22 @@ def main():
     data = json.loads(result.stdout)
     check("failed plan external triggers native fallback", result.returncode == 1 and
           [item["seat"] for item in data["results"]] == ["opus", "native"] and
-          data["results"][1]["status"] == "completed" and data["reviewComplete"] is False)
+          data["results"][1]["status"] == "completed" and
+          data["results"][1].get("timeoutSeconds") == 300 and data["reviewComplete"] is False)
+
+    # planTimeoutSeconds is validated even when the current dispatch is not an external plan,
+    # preventing dormant invalid configuration from reaching a later plan run.
+    _, repo, local, bindir, prompt, env = fresh()
+    native = os.path.join(bindir, "codex")
+    external = os.path.join(bindir, "claude")
+    executable(native, "cat >/dev/null\nprintf '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"[]\"}}\\n'")
+    executable(external, "cat >/dev/null\nprintf '{\"result\":\"[]\"}\\n'")
+    write_seats(local, [native, "exec", "-"], [external, "--print"],
+                external_extra={"planTimeoutSeconds": 901})
+    result = run(repo, prompt, env, tier="low", checkpoint="impl")
+    data = json.loads(result.stdout)
+    check("invalid dormant plan timeout is rejected", result.returncode == 2 and
+          data.get("status") == "invalid-seats" and "planTimeoutSeconds" in data.get("reason", ""))
 
     # Vacuous selection is never a successful review.
     _, repo, local, _, prompt, env = fresh()
@@ -619,6 +770,63 @@ def main():
     fu = run(repo, prompt, env, tier="low", follow_up=True)
     check("follow-up without an active run is typed", fu.returncode == 2 and
           "no-active-run-for-follow-up" in fu.stdout)
+
+    # The detached follow-up lifecycle (start/status/stop --follow-up) must mirror the sync one:
+    # a bad `start --follow-up` is refused BEFORE creating pass-2/ (no orphan dir, run id reusable),
+    # and a running pass-2 is cancellable by the bare `stop --run-id R` form SKILL.md documents
+    # (auto-detecting pass-2 from launcher.json so the flag is optional for stop/status).
+    _, repo, local, bindir, prompt, env = fresh()
+    executable(os.path.join(bindir, "codex"), "cat >/dev/null\nprintf '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"[]\"}}\\n'")
+    executable(os.path.join(bindir, "claude"), "cat >/dev/null\nprintf '{\"result\":\"[]\"}\\n'")
+    write_seats(local, [os.path.join(bindir, "codex"), "exec", "-"], [os.path.join(bindir, "claude"), "--print"])
+    bad_fu_start = start(repo, prompt, env, tier="low", follow_up=True, run_id="fu-detached")
+    check("detached follow-up start without an active run is typed and leaves no work dir",
+          bad_fu_start.returncode == 2 and "no-active-run-for-follow-up" in bad_fu_start.stdout and
+          not os.path.isdir(os.path.join(local, "council", "work", "projects", repo.rsplit("/", 1)[-1], "fu-detached", "pass-2")))
+    # Reusing the same run id for a legitimate first pass succeeds (the refused start did not consume it).
+    first = run(repo, prompt, env, tier="elevated", run_id="fu-detached")
+    check("detached follow-up refused start did not consume the run id", first.returncode == 0)
+    # A detached follow-up that is exhausted (pass-2 already complete) is refused at start, not in the child.
+    second_sync = run(repo, prompt, env, tier="elevated", follow_up=True, seat="opus")
+    check("pass-2 completes for the auto-detect fixture", second_sync.returncode == 0)
+    exhausted = start(repo, prompt, env, tier="elevated", follow_up=True, run_id="fu-detached", seat="opus")
+    check("detached follow-up start refuses an exhausted pass at start",
+          exhausted.returncode == 2 and "follow-up-passes-exhausted" in exhausted.stdout)
+
+    # A running pass-2 is cancellable via the bare `stop --run-id R` (no --follow-up): the runner
+    # auto-detects pass-2 from launcher.json, writes cancel-request.json there, and the child exits.
+    _, repo, local, bindir, prompt, env = fresh()
+    fast_codex = os.path.join(bindir, "codex")
+    claude_bin = os.path.join(bindir, "claude")
+    executable(fast_codex, "cat >/dev/null\nprintf '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"[]\"}}\\n'")
+    executable(claude_bin, "cat >/dev/null\nprintf '{\"result\":\"[]\"}\\n'")
+    # First pass: both seats fast so it completes and leaves a pass-1 result.json.
+    write_seats(local, [fast_codex, "exec", "-"], [claude_bin, "--print"])
+    first = run(repo, prompt, env, tier="elevated", run_id="fu-stop")
+    check("fu-stop first pass completes", first.returncode == 0)
+    # Re-write the SAME claude stub to hang (basename must stay "claude" for adapter detection),
+    # then dispatch a detached follow-up that selects only it.
+    executable(claude_bin, "cat >/dev/null\nsleep 30")
+    fu_launched = start(repo, prompt, env, tier="elevated", follow_up=True, run_id="fu-stop", seat="opus")
+    fu_launch_data = json.loads(fu_launched.stdout)
+    check("detached follow-up start reports running under pass-2",
+          fu_launched.returncode == 0 and fu_launch_data.get("state") == "running")
+    # Bare status (no --follow-up) must auto-detect pass-2 and report it running, not pass-1 terminal.
+    bare_status = subprocess.run([sys.executable, RUNNER, "status", "--run-id", "fu-stop", "--cwd", repo],
+                                 capture_output=True, text=True, env=env, timeout=5)
+    bare_status_data = json.loads(bare_status.stdout)
+    check("bare status auto-detects a running pass-2", bare_status.returncode == 0 and
+          bare_status_data.get("state") == "running" and "pass-2" in bare_status_data.get("resultPath", ""))
+    # Bare stop (no --follow-up) cancels the pass-2 child.
+    bare_stop = subprocess.run([sys.executable, RUNNER, "stop", "--run-id", "fu-stop", "--cwd", repo],
+                               capture_output=True, text=True, env=env, timeout=15)
+    bare_stop_data = json.loads(bare_stop.stdout)
+    bare_stop_results = bare_stop_data.get("result", {}).get("results", [])
+    check("bare stop cancels a running pass-2", bare_stop.returncode == 0 and
+          bare_stop_data.get("stopRequested") is True and bare_stop_results and
+          bare_stop_results[0].get("status") == "cancelled" and
+          "pass-2" in bare_stop_data.get("resultPath", ""))
+    check("bare stop kills the follow-up runner process group", pid_dead(fu_launch_data.get("pid")))
 
     # A runner launched from a package directory normalizes to the git root, so the engine's
     # active marker blocks a second root-level council instead of permitting recursion by path.

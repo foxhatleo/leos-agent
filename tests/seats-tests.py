@@ -12,6 +12,7 @@ opus seat must all be refused. Run: bin/leos-python tests/seats-tests.py
 import copy
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -45,11 +46,13 @@ def resolve(recipe, model, extra=None):
 
 
 def validate(candidate, host):
-    path = os.path.join(tempfile.mkdtemp(prefix="seatcand."), "candidate.json")
+    d = tempfile.mkdtemp(prefix="seatcand.")
+    path = os.path.join(d, "candidate.json")
     with open(path, "w") as f:
         json.dump(candidate, f)
     r = subprocess.run([sys.executable, SEATS, "validate", "--host", host, "--input", path],
                        capture_output=True, text=True)
+    shutil.rmtree(d, ignore_errors=True)
     try:
         out = json.loads(r.stdout)
     except Exception:
@@ -162,6 +165,19 @@ def main():
             "seats": []}
     ec, out = validate(cand, "opencode")
     check("non-claude native subagent model is host's own affair", ec == 0 and out.get("ok"))
+
+    # 6. Plan-specific timeouts are validated at install time even though they are only applied
+    # to external plan dispatches.
+    cand = codex_candidate()
+    cand["seats"][0]["planTimeoutSeconds"] = 901
+    ec, out = validate(cand, "codex")
+    check("out-of-range plan timeout is refused during seat validation",
+          ec == 1 and any("planTimeoutSeconds" in p for p in out.get("problems", [])))
+    cand = claude_candidate()
+    cand["native"]["planTimeoutSeconds"] = "slow"
+    ec, out = validate(cand, "claude")
+    check("native subagent plan timeout is validated",
+          ec == 1 and any("planTimeoutSeconds" in p for p in out.get("problems", [])))
 
     total = passed + failed
     print(f"seats-tests: {passed}/{total} PASS" + (" — ALL PASS" if not failed else f" ({failed} FAIL)"))

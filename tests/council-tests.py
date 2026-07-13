@@ -441,6 +441,8 @@ def main():
     finally:
         if saved_home is not None:
             os.environ["HOME"] = saved_home
+        else:
+            os.environ.pop("HOME", None)
 
     # 19. Resolved seat files go through the private atomic writer; placeholders and missing
     # driver-smoke confirmations are refused.

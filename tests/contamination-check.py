@@ -26,8 +26,8 @@ def text_of(path):
 for p in ["tools/codex/command-policy-notes.json", "tools/codex/config-fragment.toml",
           "tools/codex/hooks.json"]:
     t = text_of(p)
-    if "Bash(" in t or '"permissions"' in t and "allow" in t and "Bash(" in t:
-        problems.append(f"{p}: contains a Claude-style Bash(...) permission token")
+    if ("Bash(" in t) or ('"permissions"' in t and "allow" in t):
+        problems.append(f"{p}: contains a Claude-style Bash(...)/permissions.allow permission token")
 
 # Cursor uses Shell()/Read() tokens — it must NOT carry Claude's Bash(...) tokens.
 for p in ["tools/cursor/permissions-fragment.json"]:

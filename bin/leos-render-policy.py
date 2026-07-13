@@ -11,10 +11,12 @@ import copy
 import json
 import os
 import sys
+import tempfile
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 POLICY = os.path.join(ROOT, "core", "policy", "policy-data.json")
+LOCAL = os.environ.get("LEOS_LOCAL", os.path.join(ROOT, "local"))
 TARGETS = {
     "claude": os.path.join(ROOT, "tools", "claude", "settings-fragment.json"),
     "opencode": os.path.join(ROOT, "tools", "opencode", "opencode-fragment.json"),
@@ -24,8 +26,40 @@ TARGETS = {
 
 
 def load(path):
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+    """Return the target JSON, or {} if the fragment is absent (fresh/partial checkout) so a
+    --check reports drift rather than crashing with an uncaught traceback."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"cannot read {path}: {e}", file=sys.stderr)
+        return {}
+
+
+def atomic_write(path, value):
+    """Stage under local/ then atomically replace (mirrors leos-merge._atomic_write) so an
+    interrupt mid-write never leaves a truncated committed fragment."""
+    staging = os.path.join(LOCAL, "staging")
+    os.makedirs(staging, exist_ok=True)
+    parent = os.path.dirname(path)
+    if os.stat(staging).st_dev != os.stat(parent).st_dev:
+        raise OSError("local staging and target are on different filesystems; refusing non-atomic write")
+    fd, tmp = tempfile.mkstemp(prefix="policy-", dir=staging)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(value, f, indent=2)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
 
 
 def expected(policy):
@@ -81,9 +115,7 @@ def main():
         if current != updated:
             drift.append(host)
             if args.write:
-                with open(target, "w", encoding="utf-8") as f:
-                    json.dump(updated, f, indent=2)
-                    f.write("\n")
+                atomic_write(target, updated)
     print(json.dumps({"ok": not drift, "drift": drift, "mode": "write" if args.write else "check"}, indent=2))
     return 0 if not drift or args.write else 1
 

@@ -134,7 +134,9 @@ For each host, prepare a candidate JSON under `local/`, then install it only thr
    proves a JSON output contract; record `"adapter":"cursor-json"` and its verified nonempty
    string `"responsePath"` in that seat.
 3. **Smoke-test every seat** before adding it (each driver in `core/council/drivers/` has the exact
-   command). Require the structured-output form for Claude/Codex/OpenCode. Drop any seat whose
+   command). Require the structured-output form for Claude/Codex/OpenCode. Preserve the catalog's
+   `timeoutSeconds: 300` implementation allowance and `planTimeoutSeconds: 600` external flagship
+   plan allowance; the latter never applies to native fallback. Drop any seat whose
    smoke test fails; note native-only fallback if none remain. The runner is invoked only by an
    orchestrator review decision; it never starts a council by itself.
    Claude and Codex transports must use their non-persistence flags. The documented OpenCode and

@@ -27,6 +27,7 @@ jobs:
           bin/leos-python tests/fmt-tests.py
           bin/leos-python tests/council-tests.py
           bin/leos-python tests/runner-tests.py
+          bin/leos-python tests/gitignore-tests.py
           bin/leos-python tests/merge-tests.py
           bin/leos-python tests/link-tests.py
           bin/leos-python tests/block-tests.py

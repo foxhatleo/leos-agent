@@ -73,7 +73,7 @@ It only checks hosts recorded during Leo setup, not every config directory that 
 | `tools/<host>/` | Thin per-host adapters: the settings/permission fragment, the symlink map, and setup deltas. No logic or prose forks. |
 | `bin/` | Private runtime/launcher, link/merge/block tools, validated seat writer, ownership-safe uninstaller, policy renderer, and doctor. |
 | `local/` | **Gitignored** machine-local config and all Leo runtime data: venv, resolved seats, guard extras, merge state/backups, council state/work/results. |
-| `tests/` | Guard / formatter / council / runner / merge / link / block / inject / uninstall batteries. |
+| `tests/` | Guard / formatter / council / runner / gitignore / merge / link / block / inject / uninstall / runtime / seats batteries, plus the contamination boundary check. |
 
 ## Uninstall
 

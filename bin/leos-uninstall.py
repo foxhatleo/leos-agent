@@ -13,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 LOCAL = Path(os.environ.get("LEOS_LOCAL", ROOT / "local"))
 HOSTS = ("claude", "codex", "opencode", "cursor")
+HOME = os.path.realpath(os.path.expanduser("~"))
 
 
 def load_json(path, default):
@@ -24,8 +25,14 @@ def load_json(path, default):
 
 
 def expand(value):
-    codex_home = os.environ.get("CODEX_HOME", os.path.join(os.path.expanduser("~"), ".codex"))
-    return os.path.abspath(os.path.expanduser(value.replace("{{CODEX_HOME}}", codex_home)))
+    """Expand a dest and REFUSE anything outside $HOME — mirroring leos-merge.expand /
+    leos-link._expand_dest so uninstall trusts the same boundary they enforce on creation."""
+    codex_home = os.environ.get("CODEX_HOME", os.path.join(HOME, ".codex"))
+    expanded = os.path.expanduser(value.replace("{{CODEX_HOME}}", codex_home))
+    path = os.path.join(os.path.realpath(os.path.dirname(expanded)), os.path.basename(expanded))
+    if not (path == HOME or path.startswith(HOME + os.sep)):
+        raise SystemExit(f"refusing dest outside HOME: {value}")
+    return path
 
 
 def atomic_json(path, value):

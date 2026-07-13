@@ -8,16 +8,19 @@ mutations), because the hosts' allow vocabularies cannot express flag exclusions
 False positives are cheap (the agent sees the reason and rephrases or asks); false
 negatives are not.
 
-Exit 0 = allow. Exit 43 = block — the host's hook wrapper maps 43 -> 2 (deny) and
-everything else -> 0, so interpreter/script failures (python exits 1/2 on its own
-errors) can never masquerade as a block. Fail-OPEN on internal errors.
+Exit 0 = allow. Exit 43 = block — the host's hook wrapper maps 43 -> 2 (deny) and any
+other non-zero -> 2 (deny) too, so interpreter/script failures (python exits 1/2 on its
+own errors) fail CLOSED: a broken guard denies the command rather than letting a
+catastrophic deletion through. (main() itself still returns 0 on an unparseable payload
+or a non-Bash tool_name, since those are not guardable commands; the wrappers' fail-closed
+behavior covers genuine internal errors during a check.)
 
 Tool-neutral: one script serves Claude Code, Codex, OpenCode, and Cursor. It self-
 locates its optional machine-local config at <repo>/local/guard-config.json (the repo
 root is found via realpath(__file__)), overridable with $LEOS_GUARD_CONFIG.
 
 Accepted out-of-scope (other layers' job): obfuscation via scripts/eval/base64,
-non-rm destruction (find -delete), network exfiltration.
+network exfiltration. `find -delete` and `find -exec rm` ARE covered (see check_find).
 """
 
 import json
@@ -38,7 +41,7 @@ def _repo_local(name):
     return os.path.join(root, "local", name)
 
 
-WRAPPERS = {"sudo", "command", "env", "nice", "nohup", "time", "doas"}
+WRAPPERS = {"sudo", "command", "env", "nice", "nohup", "time", "doas", "exec"}
 CONTROL_PREFIXES = {"if", "then", "elif", "else", "while", "until", "for", "select", "do", "case"}
 RECURSIVE_SHORT = re.compile(r"^-[a-zA-Z]*[rR]")
 FORCEABLE = re.compile(r"^-[a-zA-Z]*f")
@@ -46,7 +49,7 @@ FORCEABLE = re.compile(r"^-[a-zA-Z]*f")
 CRITICAL_DIRS = {
     "/", "/Users", "/home", "/root", "/dev", "/bin", "/boot", "/etc", "/lib",
     "/lib64", "/sbin", "/usr", "/var", "/opt", "/System", "/Library",
-    "/Applications", "/private/etc", HOME,
+    "/Applications", "/private", "/private/etc", HOME,
 }
 def _home_toplevel():
     """OS-standard home dirs + machine extras from optional guard-config.json
@@ -64,16 +67,18 @@ def _home_toplevel():
 
 HOME_TOPLEVEL = _home_toplevel()
 HOME_REF = re.compile(r"(~([A-Za-z_][\w-]*)?(/|[\s*]|$)|\$\{?HOME\}?)")
-WATCHED = {"rm", "dd", "chmod", "xargs", "cd", "git"}
+WATCHED = {"rm", "dd", "chmod", "xargs", "cd", "git", "find"}
 ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 UNKNOWN_DIR = "<unknown>"
 UNKNOWN_PATH = "<unexpanded-shell-path>"
 
 # Whole subtrees that are never rm -rf'd unattended. /var excepted for temp dirs;
 # home containers (/Users, /home) handled separately so the caller's OWN home
-# subtree stays allowed while OTHER users' home trees stay critical.
+# subtree stays allowed while OTHER users' home trees stay critical. /private is the
+# macOS backing store for /etc, /var, /tmp (which are symlinks into it), so its
+# subtree is critical except for the temp-dir exemptions above.
 PREFIX_CRITICAL = ("/bin", "/boot", "/etc", "/lib", "/lib64", "/sbin", "/usr",
-                   "/System", "/Library", "/Applications", "/dev", "/root")
+                   "/System", "/Library", "/Applications", "/dev", "/root", "/private")
 PREFIX_EXEMPT = ("/var/folders", "/var/tmp", "/private/var/folders", "/private/tmp")
 
 
@@ -98,7 +103,12 @@ def tokenize(segment):
 
 
 def split_statements(command):
-    """Split on ; && || & newline into statements; a statement may contain a pipeline."""
+    """Split on ; && || & newline into statements; a statement may contain a pipeline.
+
+    Backslash-newline line continuation is joined first: `rm -rf \\\n~` is one statement
+    in bash (the backslash escapes the newline), so splitting on the raw newline would
+    detach the target from `rm -rf` and let a recursive delete slip past check_rm."""
+    command = re.sub(r"\\\r?\n", " ", command)
     return [s for s in re.split(r"(?:\|\||&&|[;&\n])", command) if s.strip()]
 
 
@@ -253,6 +263,40 @@ def check_rm(tokens, cwd, cd_context):
     return None
 
 
+def check_find(tokens, cwd, cd_context, statement):
+    """find -delete and find -exec/-ok rm are recursive deletes wearing a find hat; block
+    when any path operand in the statement is critical or home-level. Bare `find -delete`
+    with no path (cwd-relative) stays allowed when cwd is a known project dir, matching
+    the rm branch's cwd handling."""
+    rest = tokens[1:]
+    deleting = False
+    i = 0
+    while i < len(rest):
+        t = rest[i]
+        if t == "-delete":
+            deleting = True
+        elif t in ("-exec", "-ok"):
+            # The token after -exec/-ok (skipping find's own flags) is the command to run.
+            j = i + 1
+            while j < len(rest) and rest[j].startswith("-") and rest[j] not in (";", "+"):
+                j += 1
+            if j < len(rest) and os.path.basename(rest[j]) == "rm":
+                deleting = True
+        i += 1
+    if not deleting:
+        return None
+    # Unknown working directory: a bare `find -delete` sweeps cwd unverifiably.
+    has_path_operand = any(
+        not t.startswith("-") and (t.startswith("/") or t == "~" or t.startswith("~/") or t.startswith("~"))
+        for t in rest
+    )
+    if not has_path_operand and not (cwd or cd_context):
+        return "find -delete / find -exec rm with unknown working directory"
+    if HOME_REF.search(statement) or statement_has_critical_literal(statement, cwd, cd_context):
+        return "find -delete / find -exec rm targeting a home/root/system path"
+    return None
+
+
 GIT_OUTPUT_SUBS = {"diff", "log", "show"}
 GIT_GLOBAL_VALUED = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
 BRANCH_MUTATING_LONG = {"--delete", "--force", "--move", "--copy", "--edit-description",
@@ -318,15 +362,21 @@ def check_statement(statement, cwd, cd_context):
             reason = check_rm(tokens, cwd, cd_context)
             if reason:
                 return reason, cd_context
+        if cmd == "find":
+            reason = check_find(tokens, cwd, cd_context, statement)
+            if reason:
+                return reason, cd_context
         if cmd == "xargs":
             # Scan past xargs flags/operands (-0, -n 1, -I{}, --no-run-if-empty...) to find rm.
             rest = tokens[1:]
             for j, t in enumerate(rest):
                 if os.path.basename(t) == "rm":
-                    rec = any(RECURSIVE_SHORT.match(x) or x == "--recursive" for x in rest[j + 1:])
-                    if rec and (stmt_home_ref or statement_has_critical_literal(
-                            statement, cwd, cd_context)):
-                        return "piped xargs rm -r with a home/root reference in the pipeline", cd_context
+                    # `find /etc | xargs rm` (no -r) deletes every file fed in — the recursion
+                    # flag is irrelevant when the pipeline already carries a critical/home path,
+                    # so the -r gate is intentionally dropped here.
+                    if stmt_home_ref or statement_has_critical_literal(
+                            statement, cwd, cd_context):
+                        return "piped xargs rm with a home/root reference in the pipeline", cd_context
                     break
         if cmd == "mkfs" or cmd.startswith("mkfs."):
             return "mkfs (filesystem format)", cd_context
@@ -335,7 +385,7 @@ def check_statement(statement, cwd, cd_context):
                 if t.startswith("of=/dev/"):
                     return "dd writing to a raw device", cd_context
         if cmd == "chmod":
-            rec = any(RECURSIVE_SHORT.match(t) for t in tokens[1:] if t.startswith("-"))
+            rec = any(RECURSIVE_SHORT.match(t) or t == "--recursive" for t in tokens[1:] if t.startswith("-"))
             if rec:
                 for t in tokens[1:]:
                     if t.startswith("-"):

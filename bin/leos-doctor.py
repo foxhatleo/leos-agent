@@ -40,7 +40,16 @@ def current_home():
 
 def expand_path(value):
     value = value.replace("{{CODEX_HOME}}", os.environ.get("CODEX_HOME", os.path.join(current_home(), ".codex")))
-    return os.path.expanduser(value)
+    expanded = os.path.expanduser(value)
+    # Resolve parent symlinks (matching leos-link._expand_dest / leos-merge.expand) but never
+    # follow a final symlink, and refuse anything outside $HOME so a CODEX_HOME override can't make
+    # doctor read/link-check paths outside the user's home tree.
+    home = current_home()
+    path = os.path.join(os.path.realpath(os.path.dirname(expanded)), os.path.basename(expanded))
+    if not (path == home or path.startswith(home + os.sep)):
+        print(f"refusing path outside HOME: {value}", file=sys.stderr)
+        return home
+    return path
 
 
 def load_json(path, default):
@@ -170,7 +179,7 @@ def check_tool(tool, configured, problems, report):
 
     for e in lm.get("links", []):
         dest = expand_path(e["dest"])
-        src = os.path.join(REPO_ROOT, e["src"])
+        src = os.path.realpath(os.path.join(REPO_ROOT, e["src"]))
         st = link_state(dest, src)
         if st != "linked":
             problems.append(f"{tool}: link {e['dest']} is '{st}' (want linked)")
@@ -302,17 +311,22 @@ def check_seat_flags(tool, seats):
             problems.append(f"external seat {name or '<unnamed>'} requires argv")
         if seat.get("transport") not in ("stdin", "arg"):
             problems.append(f"external seat {name or '<unnamed>'} transport must be stdin or arg")
-        timeout = seat.get("timeoutSeconds", 300)
-        if not isinstance(timeout, int) or not 1 <= timeout <= 900:
-            problems.append(f"external seat {name or '<unnamed>'} timeoutSeconds must be 1..900")
         env = seat.get("env", {})
         if not isinstance(env, dict) or any(not isinstance(k, str) or not isinstance(v, str)
                                             for k, v in env.items()):
             problems.append(f"external seat {name or '<unnamed>'} env must be string:string")
         all_seats.append(seat)
-    if native.get("mode") == "exec":
+    if isinstance(native, dict):
         all_seats = all_seats + [native]
     for seat in all_seats:
+        label = seat.get("name") or ("native" if seat is native else "<unnamed>")
+        timeout = seat.get("timeoutSeconds", 300)
+        if not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= 900:
+            problems.append(f"seat {label} timeoutSeconds must be 1..900")
+        plan_timeout = seat.get("planTimeoutSeconds")
+        if plan_timeout is not None and (not isinstance(plan_timeout, int) or
+                                         isinstance(plan_timeout, bool) or not 1 <= plan_timeout <= 900):
+            problems.append(f"seat {label} planTimeoutSeconds must be 1..900")
         argv = _argv_of(seat)
         if not argv:
             continue

@@ -41,9 +41,11 @@ MAX_ARG_PROMPT_BYTES = 128 * 1024
 MAX_OUTPUT_BYTES = 2 * 1024 * 1024
 HOSTS = ("claude", "codex", "opencode", "cursor")
 TIERS = ("low", "elevated", "high", "critical")
+RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 ACTIVE_PROCESSES = set()
 ACTIVE_LOCK = threading.Lock()
 CANCELLED = threading.Event()
+CANCEL_REQUEST_PATH = None
 
 # Deliberately narrow: this catches values/blocks that are very likely credentials without
 # treating ordinary source code that mentions "token" as secret material.
@@ -81,6 +83,10 @@ def prepare_scratch_root(path):
     secure_dir(path)
     git_env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
     git_env.pop("GIT_TEMPLATE_DIR", None)
+    # An inherited GIT_DIR/GIT_WORK_TREE would redirect the `git init` outside this private
+    # scratch dir; drop them so the isolation boundary is the path argument, not the caller's repo.
+    git_env.pop("GIT_DIR", None)
+    git_env.pop("GIT_WORK_TREE", None)
     try:
         result = subprocess.run(
             ["git", "init", "--quiet", "--template=", str(path)],
@@ -163,6 +169,101 @@ def fresh_active_run(cwd):
     if int(time.time()) - int(data.get("ts", 0)) >= IN_REVIEW_TTL:
         return None
     return data
+
+
+def valid_run_id(value):
+    return isinstance(value, str) and RUN_ID_RE.fullmatch(value) is not None
+
+
+def run_work(cwd, run_id, follow_up=False):
+    base = WORK_ROOT / project_slug(cwd) / run_id
+    return base / "pass-2" if follow_up else base
+
+
+def follow_up_preflight(cwd, args):
+    """Shared follow-up preconditions for cmd_start and cmd_run. Returns
+    (active, error_dict, exit_code): on success error_dict is None; for a follow-up,
+    active is the fresh marker the pass will reuse. The five typed refusals:
+    no-active-run, checkpoint-mismatch, run-mismatch, without-first-pass, passes-exhausted.
+    Running these at `start` (not only in the detached child) prevents orphan pass-2/ dirs
+    and a run id consumed by a launch that was always going to fail."""
+    active = fresh_active_run(cwd)
+    if not args.follow_up:
+        return active, None, None
+    if not active:
+        return None, {"ok": False, "status": "no-active-run-for-follow-up",
+                      "reason": "a follow-up pass needs the original run's fresh marker; dispatch a new run instead"}, 2
+    if active.get("checkpoint") != args.checkpoint:
+        return active, {"ok": False, "status": "follow-up-checkpoint-mismatch",
+                        "activeCheckpoint": active.get("checkpoint", "")}, 2
+    if args.run_id and args.run_id != active.get("run_id"):
+        return active, {"ok": False, "status": "follow-up-run-mismatch",
+                        "activeRun": active.get("run_id", "")}, 2
+    base_work = WORK_ROOT / project_slug(cwd) / active.get("run_id", "")
+    if not (base_work / "result.json").is_file():
+        return active, {"ok": False, "status": "follow-up-without-first-pass",
+                        "reason": "no completed first pass exists for the active run"}, 2
+    if (base_work / "pass-2" / "result.json").is_file():
+        return active, {"ok": False, "status": "follow-up-passes-exhausted",
+                        "reason": "maximum two total passes"}, 2
+    return active, None, None
+
+
+def resolve_follow_up(cwd, run_id, follow_up_flag):
+    """Pick the work-dir pass for status/stop. When the caller did NOT pass --follow-up,
+    auto-detect a dispatched pass-2 (launcher.json present) so `stop --run-id R` and
+    `status --run-id R` target pass-2 even when the caller forgot the flag — the SKILL.md
+    stop example documents exactly that bare form. --follow-up remains an explicit override."""
+    if follow_up_flag:
+        return True
+    return (run_work(cwd, run_id, False) / "pass-2" / "launcher.json").is_file()
+
+
+def read_events(path, limit=20):
+    records = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    value = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(value, dict):
+                    records.append(value)
+    except OSError:
+        pass
+    return records[-limit:]
+
+
+def process_alive(pid):
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid < 1:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def validate_timeout_fields(config):
+    seats = config.get("seats", [])
+    if not isinstance(seats, list):
+        raise ValueError("seats must be an array")
+    native = config.get("native")
+    candidates = list(seats) + ([native] if isinstance(native, dict) else [])
+    for index, seat in enumerate(candidates):
+        if not isinstance(seat, dict):
+            raise ValueError(f"invalid seat at index {index}")
+        timeout = seat.get("timeoutSeconds", 300)
+        plan_timeout = seat.get("planTimeoutSeconds")
+        label = seat.get("name") or ("native" if seat is native else str(index))
+        if not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= 900:
+            raise ValueError(f"seat {label} timeoutSeconds must be an integer in 1..900")
+        if plan_timeout is not None and (not isinstance(plan_timeout, int) or
+                                         isinstance(plan_timeout, bool) or not 1 <= plan_timeout <= 900):
+            raise ValueError(f"seat {label} planTimeoutSeconds must be an integer in 1..900")
 
 
 class EventLog:
@@ -285,8 +386,15 @@ def prepare_command(seat, tier, prompt):
     env = seat.get("env") if isinstance(seat.get("env"), dict) else {}
     env = {str(k): substitute(str(v), substitutions) for k, v in env.items()}
     timeout = seat.get("timeoutSeconds", 300)
-    if not isinstance(timeout, int) or not 1 <= timeout <= 900:
+    plan_timeout = seat.get("planTimeoutSeconds")
+    if not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= 900:
         raise ValueError("timeoutSeconds must be an integer in 1..900")
+    if plan_timeout is not None and (not isinstance(plan_timeout, int) or isinstance(plan_timeout, bool)
+                                     or not 1 <= plan_timeout <= 900):
+        raise ValueError("planTimeoutSeconds must be an integer in 1..900")
+    if seat.get("kind") == "external" and seat.get("checkpoint") == "plan" \
+            and plan_timeout is not None:
+        timeout = plan_timeout
     return argv, env, timeout, adapter, transport
 
 
@@ -408,6 +516,8 @@ def _wait_bounded(proc, timeout):
     timed_out = False
     while proc.poll() is None:
         now = time.monotonic()
+        if CANCEL_REQUEST_PATH is not None and CANCEL_REQUEST_PATH.is_file():
+            CANCELLED.set()
         if CANCELLED.is_set() and cancel_grace is None:
             cancel_grace = now + 5
             _killpg(proc, signal.SIGTERM)   # idempotent; covers a pre-snapshot registration
@@ -490,8 +600,17 @@ def run_one(work, cwd, seat, events):
         t_out.join(timeout=5); t_err.join(timeout=5)
         write_private(stdout_path, out["data"], binary=True)
         write_private(stderr_path, err["data"], binary=True)
+        # The persisted argv is for diagnostics only. For arg-transport seats it would otherwise
+        # echo the full prompt (and any non-matching secret) into result.json at rest — the live
+        # send already used the real argv, and the prompt is separately preserved at promptPath,
+        # so redact the prompt element in this diagnostic copy.
+        persist_argv = list(argv)
+        if transport == "arg" and isinstance(seat.get("prompt"), str) and seat["prompt"]:
+            _prompt = seat["prompt"]
+            persist_argv = [("<redacted prompt %d bytes>" % len(_prompt.encode("utf-8")))
+                            if v == _prompt else v for v in persist_argv]
         base.update({
-            "argv": argv, "exitCode": proc.returncode, "timeoutSeconds": timeout,
+            "argv": persist_argv, "exitCode": proc.returncode, "timeoutSeconds": timeout,
             "stdoutPath": str(stdout_path), "stderrPath": str(stderr_path),
             "stdoutBytes": out["total"], "stderrBytes": err["total"],
             "outputTruncated": out["total"] > len(out["data"]) or err["total"] > len(err["data"]),
@@ -588,6 +707,7 @@ def native_seats(config, count=1):
 
 
 def cmd_run(args):
+    global CANCEL_REQUEST_PATH
     if os.environ.get("LEOS_COUNCIL_SEAT"):
         print(json.dumps({"ok": False, "status": "nested-leos-council-refused",
                           "reason": "a council seat may use ordinary subagents but may not convene Leo's Agents council"}, indent=2))
@@ -596,10 +716,14 @@ def cmd_run(args):
     if not os.path.isdir(cwd):
         print(json.dumps({"ok": False, "status": "invalid-cwd"}, indent=2))
         return 2
+    if args.run_id and not valid_run_id(args.run_id):
+        print(json.dumps({"ok": False, "status": "invalid-run-id",
+                          "reason": "run id must be 1..64 path-safe characters"}, indent=2))
+        return 2
     prompt_source = Path(args.prompt).expanduser()
     try:
         prompt = prompt_source.read_text(encoding="utf-8")
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
         print(json.dumps({"ok": False, "status": "prompt-unreadable", "reason": str(e)}, indent=2))
         return 2
     if len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
@@ -627,6 +751,7 @@ def cmd_run(args):
         print(json.dumps({"ok": False, "status": "seats-unavailable", "host": args.host}, indent=2))
         return 2
     try:
+        validate_timeout_fields(config)
         selected = select_seats(config, args.checkpoint, args.tier, not args.external_only)
     except ValueError as e:
         print(json.dumps({"ok": False, "status": "invalid-seats", "reason": str(e)}, indent=2))
@@ -645,22 +770,13 @@ def cmd_run(args):
                           "reason": "confirm this project's prompt may be sent to configured external providers"}, indent=2))
         return 2
 
-    active = fresh_active_run(cwd)
+    active, err, code = follow_up_preflight(cwd, args)
+    if err:
+        print(json.dumps(err, indent=2))
+        return code
     if args.follow_up:
         # The mandated single fix->re-review pass reuses the ACTIVE run's marker and run id and
         # writes under <run>/pass-2/, so round-1 artifacts stay immutable.
-        if not active:
-            print(json.dumps({"ok": False, "status": "no-active-run-for-follow-up",
-                              "reason": "a follow-up pass needs the original run's fresh marker; dispatch a new run instead"}, indent=2))
-            return 2
-        if active.get("checkpoint") != args.checkpoint:
-            print(json.dumps({"ok": False, "status": "follow-up-checkpoint-mismatch",
-                              "activeCheckpoint": active.get("checkpoint", "")}, indent=2))
-            return 2
-        if args.run_id and args.run_id != active.get("run_id"):
-            print(json.dumps({"ok": False, "status": "follow-up-run-mismatch",
-                              "activeRun": active.get("run_id", "")}, indent=2))
-            return 2
         run_id = active.get("run_id")
     else:
         run_id = args.run_id or secrets.token_hex(12)
@@ -669,29 +785,41 @@ def cmd_run(args):
                               "reason": "an active Leo council marker already owns this checkpoint"}, indent=2))
             return 3
 
+    if not valid_run_id(run_id):
+        print(json.dumps({"ok": False, "status": "invalid-run-id"}, indent=2))
+        return 2
     base_work = WORK_ROOT / project_slug(cwd) / run_id
-    if args.follow_up:
-        if not (base_work / "result.json").is_file():
-            print(json.dumps({"ok": False, "status": "follow-up-without-first-pass",
-                              "reason": "no completed first pass exists for the active run"}, indent=2))
+    work = base_work / "pass-2" if args.follow_up else base_work
+    if args.detached_token:
+        reservation = read_json(work / "reservation.json", {})
+        if not isinstance(reservation, dict) or reservation.get("token") != args.detached_token \
+                or reservation.get("runId") != run_id:
+            print(json.dumps({"ok": False, "status": "invalid-detached-reservation"}, indent=2))
             return 2
-        if (base_work / "pass-2" / "result.json").is_file():
-            print(json.dumps({"ok": False, "status": "follow-up-passes-exhausted",
-                              "reason": "maximum two total passes"}, indent=2))
-            return 2
-        work = base_work / "pass-2"
     else:
-        if (base_work / "result.json").is_file():
+        secure_dir(work.parent)
+        try:
+            work.mkdir(mode=0o700)
+        except FileExistsError:
             print(json.dumps({"ok": False, "status": "run-id-work-exists",
-                              "reason": "refusing to overwrite a finished run's artifacts; use --follow-up for the re-review pass"}, indent=2))
+                              "reason": "refusing to overwrite or join existing run artifacts"}, indent=2))
             return 2
-        work = base_work
-    secure_dir(work)
+    CANCEL_REQUEST_PATH = work / "cancel-request.json"
+    if CANCEL_REQUEST_PATH.is_file():
+        CANCELLED.set()
     events = EventLog(work / "events.jsonl")
     prompt_path = work / f"prompt-{args.checkpoint}.md"
     write_private(prompt_path, prompt)
-    begin = subprocess.run([str(PYTHON), str(COUNCIL), "begin", "--checkpoint", args.checkpoint,
-                            "--run-id", run_id], cwd=cwd, text=True, capture_output=True)
+    try:
+        begin = subprocess.run([str(PYTHON), str(COUNCIL), "begin", "--checkpoint", args.checkpoint,
+                                "--run-id", run_id], cwd=cwd, text=True, capture_output=True)
+    except OSError as exc:
+        # bin/leos-python missing / not executable / broken symlink (CLI symlinks break on app
+        # updates) — emit a typed status and clean up rather than a raw traceback.
+        shutil.rmtree(work, ignore_errors=True)
+        print(json.dumps({"ok": False, "status": "begin-error",
+                          "reason": f"could not execute council engine: {exc}"}, indent=2))
+        return 2
     if begin.returncode != 0:
         if begin.returncode == 3:
             print(begin.stdout or json.dumps({"ok": False, "status": "nested-leos-council-refused"}, indent=2))
@@ -769,6 +897,202 @@ def cmd_run(args):
     return 0 if summary["ok"] else 1
 
 
+def dispatch_argv(args, run_id, detached_token):
+    argv = [str(PYTHON), str(HERE), "run", "--host", args.host,
+            "--checkpoint", args.checkpoint, "--tier", args.tier,
+            "--prompt", str(Path(args.prompt).expanduser()),
+            "--cwd", project_root(args.cwd or os.getcwd()), "--run-id", run_id,
+            "--detached-token", detached_token]
+    for flag, enabled in (("--external-only", args.external_only),
+                          ("--follow-up", args.follow_up),
+                          ("--approve-external", args.approve_external),
+                          ("--redact-sensitive", args.redact_sensitive)):
+        if enabled:
+            argv.append(flag)
+    if args.seat:
+        argv.extend(["--seat", args.seat])
+    return argv
+
+
+def _read_child_status(stdout_path):
+    """Best-effort recover the last JSON object a detached child printed before exiting, so
+    cmd_start can surface the child's typed status (e.g. invalid-seats, begin-error) instead of
+    the generic launcher-exited-without-result when the child failed before writing result.json."""
+    try:
+        text = Path(stdout_path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    # The child prints one indented JSON object; scan from the last '{' that begins a line and
+    # try to parse forward. Falls back to None if nothing parses.
+    for idx in range(text.rfind("{"), -1, -1):
+        if idx > 0 and text[idx - 1] not in ("\n", "\r", " ", "\t"):
+            continue
+        try:
+            value = json.loads(text[idx:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+    return None
+
+
+def status_payload(cwd, run_id, follow_up=False):
+    follow_up = resolve_follow_up(cwd, run_id, follow_up)
+    work = run_work(cwd, run_id, follow_up)
+    result_path = work / "result.json"
+    events_path = work / "events.jsonl"
+    launcher_path = work / "launcher.json"
+    launcher = read_json(launcher_path, {})
+    result = read_json(result_path)
+    payload = {
+        "ok": True,
+        "runId": run_id,
+        "state": "terminal" if isinstance(result, dict) else "running",
+        "terminal": isinstance(result, dict),
+        "resultPath": str(result_path),
+        "eventsPath": str(events_path),
+        "events": read_events(events_path),
+    }
+    if isinstance(result, dict):
+        payload["result"] = result
+        return payload
+    pid = launcher.get("pid") if isinstance(launcher, dict) else None
+    if not process_alive(pid):
+        payload.update(ok=False, state="launcher-failed", terminal=True,
+                       status="launcher-exited-without-result",
+                       stdoutPath=str(work / "launcher.stdout.txt"),
+                       stderrPath=str(work / "launcher.stderr.txt"))
+    else:
+        payload["pid"] = pid
+    return payload
+
+
+def cmd_start(args):
+    if os.environ.get("LEOS_COUNCIL_SEAT"):
+        print(json.dumps({"ok": False, "status": "nested-leos-council-refused"}, indent=2))
+        return 3
+    cwd = project_root(args.cwd or os.getcwd())
+    if not os.path.isdir(cwd):
+        print(json.dumps({"ok": False, "status": "invalid-cwd"}, indent=2))
+        return 2
+    if args.follow_up:
+        # Run the shared follow-up preconditions BEFORE creating pass-2/, so a bad follow-up
+        # (no active marker, checkpoint drift, missing first pass, passes exhausted) returns its
+        # typed status without spawning a child that would only fail inside cmd_run and leak the
+        # work dir.
+        active, err, code = follow_up_preflight(cwd, args)
+        if err:
+            print(json.dumps(err, indent=2))
+            return code
+        run_id = args.run_id or active.get("run_id")
+    else:
+        run_id = args.run_id or secrets.token_hex(12)
+    if not valid_run_id(run_id):
+        print(json.dumps({"ok": False, "status": "invalid-run-id",
+                          "reason": "run id must be 1..64 path-safe characters"}, indent=2))
+        return 2
+    work = run_work(cwd, run_id, args.follow_up)
+    secure_dir(work.parent)
+    try:
+        work.mkdir(mode=0o700)
+    except FileExistsError:
+        print(json.dumps({"ok": False, "status": "run-id-work-exists", "runId": run_id}, indent=2))
+        return 2
+    detached_token = secrets.token_hex(24)
+    write_json(work / "reservation.json", {"schema": 1, "runId": run_id,
+                                             "token": detached_token,
+                                             "createdAt": int(time.time())})
+    launcher_path = work / "launcher.json"
+    stdout_path = work / "launcher.stdout.txt"
+    stderr_path = work / "launcher.stderr.txt"
+    out_fd = os.open(stdout_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    err_fd = os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        proc = subprocess.Popen(dispatch_argv(args, run_id, detached_token), stdin=subprocess.DEVNULL,
+                                stdout=out_fd, stderr=err_fd, start_new_session=True,
+                                close_fds=True)
+    except OSError as exc:
+        shutil.rmtree(work, ignore_errors=True)
+        print(json.dumps({"ok": False, "status": "launcher-execution-error",
+                          "reason": str(exc)}, indent=2))
+        return 2
+    finally:
+        os.close(out_fd)
+        os.close(err_fd)
+    launcher = {"schema": 1, "runId": run_id, "pid": proc.pid, "startedAt": int(time.time()),
+                "cwd": cwd, "followUp": bool(args.follow_up),
+                "stdoutPath": str(stdout_path), "stderrPath": str(stderr_path)}
+    write_json(launcher_path, launcher)
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        if (work / "job.json").exists() or (work / "result.json").exists() or proc.poll() is not None:
+            break
+        time.sleep(0.05)
+    # If the child exited before writing job.json/result.json, it hit an early typed failure
+    # (invalid-seats, prompt-unreadable, begin-error, a follow-up precondition the preflight
+    # couldn't catch because state changed between start and the child's run). Tear down the
+    # reservation so the run id isn't permanently consumed, and surface the typed status the
+    # child printed instead of the generic launcher-exited-without-result.
+    if proc.poll() is not None and not (work / "result.json").exists():
+        child_status = _read_child_status(stdout_path)
+        shutil.rmtree(work, ignore_errors=True)
+        if child_status:
+            print(json.dumps(child_status, indent=2))
+            return 0 if child_status.get("ok") else 1
+        print(json.dumps({"ok": False, "state": "terminal", "terminal": True,
+                           "status": "launcher-exited-without-result",
+                           "runId": run_id, "stdoutPath": str(stdout_path),
+                           "stderrPath": str(stderr_path)}, indent=2))
+        return 1
+    payload = status_payload(cwd, run_id, args.follow_up)
+    payload.update(started=payload.get("state") == "running", launcherPath=str(launcher_path),
+                   stdoutPath=str(stdout_path), stderrPath=str(stderr_path))
+    print(json.dumps(payload, indent=2))
+    return 0 if payload["ok"] else 1
+
+
+def cmd_status(args):
+    cwd = project_root(args.cwd or os.getcwd())
+    if not valid_run_id(args.run_id):
+        print(json.dumps({"ok": False, "status": "invalid-run-id"}, indent=2))
+        return 2
+    follow_up = resolve_follow_up(cwd, args.run_id, args.follow_up)
+    payload = status_payload(cwd, args.run_id, follow_up)
+    print(json.dumps(payload, indent=2))
+    return 0 if payload["ok"] else 1
+
+
+def cmd_stop(args):
+    cwd = project_root(args.cwd or os.getcwd())
+    if not valid_run_id(args.run_id):
+        print(json.dumps({"ok": False, "status": "invalid-run-id"}, indent=2))
+        return 2
+    # Resolve pass-2 from launcher.json when the caller omitted --follow-up, so the bare
+    # `stop --run-id R --cwd $PWD` form documented in SKILL.md cancels a running follow-up
+    # (writing cancel-request.json to the pass-2 dir the child actually polls).
+    follow_up = resolve_follow_up(cwd, args.run_id, args.follow_up)
+    work = run_work(cwd, args.run_id, follow_up)
+    existing = read_json(work / "result.json")
+    if isinstance(existing, dict):
+        payload = status_payload(cwd, args.run_id, follow_up)
+        payload.update(stopRequested=False, status="already-terminal")
+        print(json.dumps(payload, indent=2))
+        return 0
+    active = fresh_active_run(cwd)
+    if not active or active.get("run_id") != args.run_id:
+        print(json.dumps({"ok": False, "status": "run-not-active", "runId": args.run_id}, indent=2))
+        return 2
+    write_json(work / "cancel-request.json", {"schema": 1, "runId": args.run_id,
+                                               "requestedAt": int(time.time())})
+    deadline = time.monotonic() + 7
+    while time.monotonic() < deadline and not (work / "result.json").exists():
+        time.sleep(0.05)
+    payload = status_payload(cwd, args.run_id, follow_up)
+    payload["stopRequested"] = True
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
 def cmd_collect_native(args):
     result_path = Path(args.result).expanduser().resolve()
     work_root = WORK_ROOT.resolve()
@@ -812,27 +1136,47 @@ def cmd_collect_native(args):
     return 0
 
 
+def add_dispatch_arguments(parser):
+    parser.add_argument("--host", required=True, choices=HOSTS)
+    parser.add_argument("--checkpoint", required=True, choices=("impl", "plan"))
+    parser.add_argument("--tier", required=True, choices=TIERS)
+    parser.add_argument("--prompt", required=True, help="orchestrator-created review prompt file")
+    parser.add_argument("--cwd", help="repository being reviewed (default: current directory)")
+    parser.add_argument("--external-only", action="store_true", help="do not run/report the native seat")
+    parser.add_argument("--run-id", help="path-safe id for this runner job")
+    parser.add_argument("--follow-up", action="store_true",
+                        help="dispatch the single re-review pass under the active run's marker (writes <run>/pass-2/)")
+    parser.add_argument("--seat", help="with --follow-up: dispatch exactly this configured seat")
+    parser.add_argument("--approve-external", action="store_true",
+                        help="explicitly approve sending this project prompt to configured external providers")
+    parser.add_argument("--redact-sensitive", action="store_true",
+                        help="replace probable credential material before dispatch; raw matched content is never sent")
+    parser.add_argument("--detached-token", help=argparse.SUPPRESS)
+
+
+def add_run_reference_arguments(parser):
+    parser.add_argument("--run-id", required=True, help="path-safe runner job id")
+    parser.add_argument("--cwd", help="repository being reviewed (default: current directory)")
+    parser.add_argument("--follow-up", action="store_true", help="target this run's pass-2 work directory")
+
+
 def main():
     signal.signal(signal.SIGINT, cancel_active)
     signal.signal(signal.SIGTERM, cancel_active)
     ap = argparse.ArgumentParser(prog="runner.py")
     sub = ap.add_subparsers(dest="command", required=True)
     p = sub.add_parser("run", help="explicitly run configured external CLI seats for one council job")
-    p.add_argument("--host", required=True, choices=HOSTS)
-    p.add_argument("--checkpoint", required=True, choices=("impl", "plan"))
-    p.add_argument("--tier", required=True, choices=TIERS)
-    p.add_argument("--prompt", required=True, help="orchestrator-created review prompt file")
-    p.add_argument("--cwd", help="repository being reviewed (default: current directory)")
-    p.add_argument("--external-only", action="store_true", help="do not run/report the native seat")
-    p.add_argument("--run-id", help="resume only the matching active runner job")
-    p.add_argument("--follow-up", action="store_true",
-                   help="dispatch the single re-review pass under the active run's marker (writes <run>/pass-2/)")
-    p.add_argument("--seat", help="with --follow-up: dispatch exactly this configured seat")
-    p.add_argument("--approve-external", action="store_true",
-                   help="explicitly approve sending this project prompt to configured external providers")
-    p.add_argument("--redact-sensitive", action="store_true",
-                   help="replace probable credential material before dispatch; raw matched content is never sent")
+    add_dispatch_arguments(p)
     p.set_defaults(fn=cmd_run)
+    p = sub.add_parser("start", help="detach a council job and return a pollable run id")
+    add_dispatch_arguments(p)
+    p.set_defaults(fn=cmd_start)
+    p = sub.add_parser("status", help="poll a detached council job")
+    add_run_reference_arguments(p)
+    p.set_defaults(fn=cmd_status)
+    p = sub.add_parser("stop", help="cancel a detached council job and its seat process groups")
+    add_run_reference_arguments(p)
+    p.set_defaults(fn=cmd_stop)
     p = sub.add_parser("collect-native", help="collect one orchestrator-run native subagent result")
     p.add_argument("--result", required=True, help="runner result.json path")
     p.add_argument("--seat", required=True, help="pending native seat name")

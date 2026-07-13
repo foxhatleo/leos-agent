@@ -10,10 +10,12 @@ Mythos (the Claude-5 / Mythos-class line). At setup, confirm the resolved model 
 
 **Seat argv (stdin transport):**
 ```
-claude --safe-mode --print --permission-mode plan --model opus --effort {EFFORT}
+claude --safe-mode --print --no-session-persistence --permission-mode plan --model opus --effort {EFFORT}
 ```
 - `--safe-mode` disables CLAUDE.md, skills, plugins, hooks, MCP, custom agents/commands — this is
   the mechanical guarantee the seat cannot convene its own council. Do **not** drop it.
+- `--no-session-persistence` ensures the seat leaves no resumable session behind (the catalog and
+  DESIGN.md both include this flag).
 - `--permission-mode plan` = read-only (no edits).
 - efforts: `{ "default": "high", "max": "xhigh" }`.
 
