@@ -13,7 +13,7 @@ when_to_use: >
   (that is /code-review or the reviewer subagent) and NOT for submitting a
   review — this only stages draft comments.
 argument-hint: "[pr-number]"
-model: opus
+model: opus[1m]
 allowed-tools:
   - Bash(gh *)
   - Bash(git *)
@@ -48,14 +48,19 @@ migration") — weight the review accordingly but still cover the whole diff.
 Two kinds of prior review state, handled differently:
 
 **A pending (staged) review of mine** — clear it and re-review from scratch
-(Leo's standing rule):
+(Leo's standing rule), but the script only auto-deletes when every comment on
+it carries the script's own marker (it embeds one in everything it stages):
 
 ```
 python3 ${CLAUDE_SKILL_DIR}/scripts/ghreview.py clear-pending -R OWNER/REPO -n N
 ```
 
-Note what was deleted in the final report. Still pass `--replace-pending` at
-the stage step as a race guard.
+If it exits 0, note what was deleted in the final report. If it exits 3, it
+refused — the pending review holds at least one comment this script didn't
+stage (likely something Leo hand-drafted). Print the JSON report verbatim to
+Leo and ask whether to discard it; only re-run with `--force` (or, at the
+stage step, `--replace-pending --force`) once he confirms. Still pass
+`--replace-pending` at the stage step as a race guard.
 
 **Posted (submitted) review threads of mine** — fetch them:
 
@@ -169,7 +174,13 @@ resolutions are public and go last, only once staging has succeeded):
    POSTs once with no `event`, and retries once against a refreshed head on
    422. Use `--dry-run` first if any line anchors feel uncertain. Zero new
    comments → skip this sub-step; **never create an empty review just for
-   comments** (the reply sub-step creates its own shell when needed).
+   comments** (the reply sub-step creates its own shell when needed). Every
+   staged comment is auto-marked with the script's hidden marker, which is
+   what lets a later clear-pending tell "staged by this skill" apart from
+   anything hand-drafted. With `--replace-pending`, the same guarded delete as
+   Step 1 applies — a mixed pending review makes `stage` exit 3 (refused)
+   *before* posting anything new; surface the report and get Leo's go-ahead
+   before retrying with `--force`.
 
 2. **Stage thread replies** — one call per Step 1 reply action, body from a
    scratchpad file:
@@ -224,7 +235,7 @@ error.
 
 | Situation | Behavior |
 |---|---|
-| My pending review exists | Deleted automatically in Step 1 and re-reviewed from scratch; deletion noted in the report. |
+| My pending review exists | Deleted automatically in Step 1 and re-reviewed from scratch only if every comment on it is marker-tagged; otherwise the script refuses (exit 3) — surface the report and ask Leo before `--force`. |
 | Someone replied in my thread | Reply drafted and staged into the pending review — never posted directly. |
 | My comment no longer applies | Thread resolved (immediate — GitHub can't stage this); disclosed in the report. |
 | Resolve denied (no write access, not PR author) | Thread left as-is; noted in the report. |

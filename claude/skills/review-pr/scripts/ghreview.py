@@ -24,7 +24,10 @@ line = absolute line number in the new file for side RIGHT (old file for LEFT).
 Off-diff lines are snapped to the nearest addressable line in the same hunk,
 or dropped (reported on stderr) — one bad line would 422 the entire review.
 
-Exit codes: 0 success; 1 API failure after retry; 2 usage/input error.
+Exit codes: 0 success; 1 API failure after retry; 2 usage/input error;
+3 refused — a pending review being cleared (clear-pending, or stage
+--replace-pending) contains comments not staged by this script; pass --force
+to discard them anyway.
 """
 import argparse
 import json
@@ -41,6 +44,16 @@ GENERATED_PATTERNS = [
 ]
 HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 SNAP_TOLERANCE = 3  # lines outside a hunk boundary still snapped into it
+SNAP_MAX_DISTANCE = 10  # beyond this from the requested line, drop instead of snapping
+
+MARKER = "<!-- leos-agent:review-pr -->"
+
+
+def _mark(body):
+    """Tag a comment body as tool-created, so clear-pending can tell it apart
+    from anything Leo hand-drafted into the same pending review."""
+    body = (body or "").rstrip()
+    return body if MARKER in body else f"{body}\n\n{MARKER}"
 
 
 def gh(args, payload=None):
@@ -122,18 +135,28 @@ def ranges(nums):
 
 
 def snap_line(diffmap, side, line):
-    """Return an addressable line for (side, line), or None to drop."""
+    """Return an addressable line for (side, line), or None to drop.
+
+    Candidates are collected across ALL matching hunks (not just the first),
+    and the nearest one wins; if even the nearest is more than
+    SNAP_MAX_DISTANCE away from the requested line, drop rather than snap —
+    a distant snap silently attaches a comment to the wrong code.
+    """
     lines = diffmap["right" if side == "RIGHT" else "left"]
     if line in lines:
         return line
     key = "r" if side == "RIGHT" else "l"
+    candidates = []
     for hunk in diffmap["hunks"]:
         start, end = hunk[key]
         if start - SNAP_TOLERANCE <= line <= end + SNAP_TOLERANCE:
-            in_hunk = [n for n in lines if start <= n <= end]
-            if in_hunk:
-                return min(in_hunk, key=lambda n: abs(n - line))
-    return None
+            candidates += [n for n in lines if start <= n <= end]
+    if not candidates:
+        return None
+    best = min(candidates, key=lambda n: abs(n - line))
+    if abs(best - line) > SNAP_MAX_DISTANCE:
+        return None
+    return best
 
 
 def validate_comments(comments, maps):
@@ -153,7 +176,7 @@ def validate_comments(comments, maps):
         if new_line is None:
             dropped.append({**c, "reason": f"line {line} ({side}) not addressable in any hunk"})
             continue
-        entry = {"path": path, "line": new_line, "side": side, "body": body}
+        entry = {"path": path, "line": new_line, "side": side, "body": _mark(body)}
         # Multi-line ranges: keep only if the start anchors cleanly before the
         # end on the same side; otherwise degrade to a single-line comment.
         start = c.get("start_line")
@@ -174,11 +197,16 @@ def current_login():
 
 
 def graphql(query, variables):
-    """Run a GraphQL query/mutation via gh. Int variables go through -F (typed)."""
+    """Run a GraphQL query/mutation via gh. Int/bool variables go through -F (typed)."""
     args = ["api", "graphql", "-f", f"query={query}"]
     for key, value in variables.items():
-        flag = "-F" if isinstance(value, (int, bool)) else "-f"
-        args += [flag, f"{key}={value}"]
+        # bool before int: bool is a subclass of int, so this order matters.
+        if isinstance(value, bool):
+            args += ["-F", f"{key}={str(value).lower()}"]
+        elif isinstance(value, int):
+            args += ["-F", f"{key}={value}"]
+        else:
+            args += ["-f", f"{key}={value}"]
     return json.loads(gh(args))
 
 
@@ -199,6 +227,37 @@ def pending_review(repo, pr):
     return None
 
 
+def review_comments(repo, pr, review_id):
+    """All comments on a (pending) review, oldest first."""
+    out = gh(["api", f"repos/{repo}/pulls/{pr}/reviews/{review_id}/comments",
+              "--paginate", "--jq", ".[]"])
+    return [json.loads(l) for l in out.splitlines() if l.strip()]
+
+
+def clear_pending_guarded(repo, pr, force):
+    """Delete the current user's pending review, but only if every comment on
+    it carries MARKER (i.e. this script staged it) — otherwise refuse so we
+    never silently discard something Leo hand-drafted, unless --force.
+
+    Returns (result, refusal): exactly one is not None.
+    """
+    review = pending_review(repo, pr)
+    if not review:
+        return {"deleted": None}, None
+    comments = review_comments(repo, pr, review["id"])
+    unmarked = [c for c in comments if MARKER not in (c.get("body") or "")]
+    if unmarked and not force:
+        return None, {
+            "refused": True,
+            "reason": "pending review contains comments not staged by review-pr",
+            "unmarked_count": len(unmarked),
+            "total_count": len(comments),
+            "samples": [(c.get("body") or "").strip().splitlines()[0][:120] for c in unmarked[:5]],
+        }
+    gh(["api", f"repos/{repo}/pulls/{pr}/reviews/{review['id']}", "--method", "DELETE"])
+    return {"deleted": review["id"], "forced": bool(unmarked)}, None
+
+
 THREADS_QUERY = """
 query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
   repository(owner: $owner, name: $name) {
@@ -207,7 +266,11 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
         pageInfo { hasNextPage endCursor }
         nodes {
           id isResolved isOutdated path line
-          comments(first: 50) {
+          comments(first: 100) {
+            # 100 covers the overwhelming majority of threads without inner
+            # pagination; a thread with >100 comments truncates here, so
+            # comments[-1] / replies_after_mine may be stale for it — accepted
+            # tradeoff, full inner pagination isn't worth the complexity.
             nodes {
               id author { login } body createdAt
               pullRequestReview { id state }
@@ -293,10 +356,11 @@ def cmd_pending(a):
 
 
 def cmd_clear_pending(a):
-    review = pending_review(a.repo, a.pr)
-    if review:
-        gh(["api", f"repos/{a.repo}/pulls/{a.pr}/reviews/{review['id']}", "--method", "DELETE"])
-    print(json.dumps({"deleted": review["id"] if review else None}))
+    result, refusal = clear_pending_guarded(a.repo, a.pr, a.force)
+    if refusal:
+        print(json.dumps(refusal, indent=1))
+        sys.exit(3)
+    print(json.dumps(result))
 
 
 def cmd_threads(a):
@@ -354,6 +418,7 @@ def cmd_reply(a):
     if not body:
         print("input error: empty reply body", file=sys.stderr)
         sys.exit(2)
+    body = _mark(body)
     review = pending_review(a.repo, a.pr)
     if a.dry_run:
         print(json.dumps({"would_reply_to": a.thread_id, "pending_review": review, "body": body}))
@@ -398,10 +463,14 @@ def cmd_stage(a):
         return
 
     if a.replace_pending:
-        review = pending_review(a.repo, a.pr)
-        if review:
-            gh(["api", f"repos/{a.repo}/pulls/{a.pr}/reviews/{review['id']}", "--method", "DELETE"])
-            report["deleted_pending"] = review["id"]
+        # Refuse (and print the report) BEFORE posting anything new — never
+        # discard a pending review that isn't fully ours to begin with.
+        cleared, refusal = clear_pending_guarded(a.repo, a.pr, a.force)
+        if refusal:
+            print(json.dumps(refusal, indent=1))
+            sys.exit(3)
+        if cleared.get("deleted"):
+            report["deleted_pending"] = cleared["deleted"]
 
     try:
         review = post_review(a.repo, a.pr, a.commit, staged)
@@ -445,6 +514,9 @@ def main():
         sp = sub.add_parser(name)
         sp.add_argument("-R", "--repo", required=True, help="OWNER/REPO of the PR's base repo")
         sp.add_argument("-n", "--pr", required=True, type=int)
+        if name == "clear-pending":
+            sp.add_argument("--force", action="store_true",
+                             help="delete even if it holds comments not staged by this script")
         if name == "extract":
             sp.add_argument("paths", nargs="*")
         if name == "threads":
@@ -460,6 +532,9 @@ def main():
             sp.add_argument("--commit", required=True, help="head SHA (headRefOid) to anchor comments to")
             sp.add_argument("--input", required=True, help="JSON file with the comments array")
             sp.add_argument("--replace-pending", action="store_true")
+            sp.add_argument("--force", action="store_true",
+                             help="with --replace-pending, delete even if it holds "
+                                  "comments not staged by this script")
             sp.add_argument("--dry-run", action="store_true")
     a = p.parse_args()
     try:
