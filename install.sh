@@ -207,6 +207,10 @@ if [[ -n "${LEOS_AGENT_PATH:-}" ]]; then
     echo "WARN: LEOS_AGENT_PATH=$LEOS_AGENT_PATH does not point at this repo ($REPO_DIR)"
     echo "      Skills keep state under \$LEOS_AGENT_PATH/local — unset it or point it here."
   fi
+elif [[ "$REPO_DIR" != "$HOME/.leos-agent" ]]; then
+  echo "WARN: this clone is at $REPO_DIR but LEOS_AGENT_PATH is unset."
+  echo "      Skills resolve state.py via \${LEOS_AGENT_PATH:-\$HOME/.leos-agent}, which is not this clone."
+  echo "      Add 'export LEOS_AGENT_PATH=$REPO_DIR' to your shell profile."
 fi
 
 [[ "$MODE" == "check" ]] || mkdir -p "$CLAUDE_DIR" "$REPO_DIR/local"
