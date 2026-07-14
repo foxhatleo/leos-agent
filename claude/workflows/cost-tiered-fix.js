@@ -3,9 +3,9 @@ export const meta = {
   description: 'Fix a batch of independent tasks with tiered models: Opus plans and verifies, Haiku/Sonnet execute, low-confidence items escalate to Opus',
   whenToUse: 'A list of independent, well-scoped fixes (many tickets, many files) — NOT one large stateful change, which belongs in a normal session with subagents',
   phases: [
-    { title: 'Plan', detail: 'decompose the goal into tiered work items', model: 'opus' },
+    { title: 'Plan', detail: 'decompose the goal into tiered work items', model: 'opus[1m]' },
     { title: 'Execute', detail: 'cheap executors, one isolated worktree per item' },
-    { title: 'Verify', detail: 'Opus reviews each branch diff', model: 'opus' },
+    { title: 'Verify', detail: 'Opus reviews each branch diff', model: 'opus[1m]' },
   ],
 }
 
@@ -33,7 +33,7 @@ const PLAN_SCHEMA = {
         type: 'object',
         properties: {
           task: { type: 'string', description: 'self-contained instruction: exact file paths, expected behavior, how to check it' },
-          tier: { type: 'string', enum: ['haiku', 'sonnet'], description: 'haiku for mechanical work, sonnet for normal implementation' },
+          tier: { type: 'string', enum: ['haiku', 'sonnet[1m]'], description: 'haiku for mechanical work, sonnet[1m] for normal implementation' },
         },
         required: ['task', 'tier'],
       },
@@ -71,15 +71,27 @@ function execPrompt(task, branch) {
   ].join('\n')
 }
 
+// Next tier up the escalation ladder. Opus is the ceiling: it has nowhere
+// left to escalate to, so it maps to itself.
+function nextTier(tier) {
+  if (tier === 'haiku') return 'sonnet[1m]'
+  if (tier === 'sonnet[1m]') return 'opus[1m]'
+  return 'opus[1m]'
+}
+
+function effortFor(tier) {
+  return tier === 'opus[1m]' ? 'high' : 'low'
+}
+
 phase('Plan')
 let items
 if (Array.isArray(args.tasks)) {
-  items = args.tasks.map(t => (typeof t === 'string' ? { task: t, tier: 'sonnet' } : { tier: 'sonnet', ...t }))
+  items = args.tasks.map(t => (typeof t === 'string' ? { task: t, tier: 'sonnet[1m]' } : { tier: 'sonnet[1m]', ...t }))
   log(`Using ${items.length} caller-provided tasks (planning skipped)`)
 } else {
   const plan = await agent(
-    'Decompose this goal into independent, well-scoped work items that can each be done in an isolated worktree without touching the same files. For each item write a self-contained instruction (exact file paths, expected behavior, how to check it) and pick a tier: haiku for mechanical work, sonnet for normal implementation. At most 10 items — if the goal needs more, return the 10 highest-value and say so in the last item.\n\nGoal: ' + args.goal,
-    { label: 'plan', phase: 'Plan', model: 'opus', schema: PLAN_SCHEMA },
+    'Decompose this goal into independent, well-scoped work items that can each be done in an isolated worktree without touching the same files. For each item write a self-contained instruction (exact file paths, expected behavior, how to check it) and pick a tier: haiku for mechanical work, sonnet[1m] for normal implementation. At most 10 items — if the goal needs more, return the 10 highest-value and say so in the last item.\n\nGoal: ' + args.goal,
+    { label: 'plan', phase: 'Plan', model: 'opus[1m]', effort: 'high', schema: PLAN_SCHEMA },
   )
   if (!plan || !Array.isArray(plan.items) || plan.items.length === 0) {
     log('Planning agent failed or returned no items — aborting cleanly')
@@ -98,7 +110,7 @@ if (items.length > 10) {
 const results = await pipeline(
   items,
 
-  // Stage 1 — execute cheap (haiku/sonnet, effort low: the cost levers)
+  // Stage 1 — execute cheap (haiku/sonnet[1m], effort low: the cost levers)
   (item, _orig, i) =>
     agent(execPrompt(item.task, `${BRANCH_PREFIX}-${i}`), {
       label: `exec-${i}:${item.tier}`,
@@ -109,16 +121,48 @@ const results = await pipeline(
       schema: EXEC_SCHEMA,
     }),
 
-  // Stage 2 — escalate to Opus only when the cheap run wasn't confident
+  // Stage 2 — escalation ladder:
+  //   - confident result (non-null, confidence !== 'low') -> return as-is, no escalation.
+  //   - null result -> ONE retry at the same tier (haiku retries at sonnet[1m], since
+  //     haiku already failed cheap); if that retry is also null/low, ONE escalation to
+  //     the next tier up.
+  //   - low-confidence result -> ONE escalation exactly one rung up.
+  //   Stop at the first confident attempt. Every superseded attempt's branch is
+  //   collected into supersededBranches so the tail can flag it as an orphan.
   async (run, item, i) => {
     if (run && run.confidence !== 'low') return run
-    log(`Item ${i} low confidence — escalating to Opus`)
-    const retry = await agent(
-      execPrompt(item.task, `${BRANCH_PREFIX}-${i}-r2`) +
-        `\n\nA cheaper model already attempted this and reported: "${run ? run.summary : 'no result (agent failed)'}". Start from the task itself on a fresh branch off the same base as mainline — do NOT build on the failed attempt's branch.`,
-      { label: `escalate-${i}`, phase: 'Execute', model: 'opus', effort: 'high', isolation: 'worktree', schema: EXEC_SCHEMA },
-    )
-    return retry ? { ...retry, escalated: true } : null
+
+    const supersededBranches = []
+
+    async function attempt(tier, suffix, priorSummary) {
+      const branch = `${BRANCH_PREFIX}-${i}-${suffix}`
+      return agent(
+        execPrompt(item.task, branch) +
+          `\n\nA cheaper model already attempted this and reported: "${priorSummary}". Start from the task itself on a fresh branch off the same base as mainline — do NOT build on the earlier attempt's branch.`,
+        { label: `escalate-${i}-${suffix}`, phase: 'Execute', model: tier, effort: effortFor(tier), isolation: 'worktree', schema: EXEC_SCHEMA },
+      )
+    }
+
+    let result
+    if (!run) {
+      const retryTier = item.tier === 'haiku' ? 'sonnet[1m]' : item.tier
+      log(`Item ${i} produced no result — retrying at ${retryTier}`)
+      result = await attempt(retryTier, 'r2', 'no result (agent failed)')
+      if (!result || result.confidence === 'low') {
+        if (result && result.branch) supersededBranches.push(result.branch)
+        const escTier = nextTier(retryTier)
+        log(`Item ${i} still ${result ? 'low confidence' : 'no result'} at ${retryTier} — escalating to ${escTier}`)
+        result = await attempt(escTier, 'r3', result ? result.summary : 'no result on retry')
+      }
+    } else {
+      if (run.branch) supersededBranches.push(run.branch)
+      const escTier = nextTier(item.tier)
+      log(`Item ${i} low confidence — escalating to ${escTier}`)
+      result = await attempt(escTier, 'r2', run.summary)
+    }
+
+    if (!result) return null
+    return { ...result, supersededBranches, escalated: true }
   },
 
   // Stage 3 — Opus verifies the actual diff, not the executor's self-report
@@ -136,7 +180,7 @@ const results = await pipeline(
         'Judge correctness and completeness only: is the task actually done, does anything break, was scope respected?',
         `Executor self-report (do not trust it, verify it): ${run.summary} — checks: ${run.checks || 'none reported'}`,
       ].join('\n'),
-      { label: `verify-${i}`, phase: 'Verify', model: 'opus', effort: 'medium', schema: VERDICT_SCHEMA },
+      { label: `verify-${i}`, phase: 'Verify', model: 'opus[1m]', effort: 'medium', schema: VERDICT_SCHEMA },
     )
     return { task: item.task, ...run, verdict }
   },
@@ -147,9 +191,14 @@ const approved = done.filter(r => r.verdict && r.verdict.approved)
 const rejected = done.filter(r => !r.verdict || !r.verdict.approved)
 log(`${approved.length} approved, ${rejected.length} rejected, ${items.length - done.length} failed to run`)
 
-const branches = done.filter(r => r.branch).map(r => r.branch)
+// Orphan tracking: every branch that got created (including superseded retries
+// and rejected attempts) but wasn't kept as an approved fix is safe to delete.
+const created = [...new Set(done.flatMap(r => [r.branch, ...(r.supersededBranches || [])].filter(Boolean)))]
+const kept = approved.map(r => r.branch).filter(Boolean)
+const orphans = created.filter(b => !kept.includes(b))
+
 return {
   approved: approved.map(r => ({ task: r.task, branch: r.branch, escalated: !!r.escalated })),
   rejected: rejected.map(r => ({ task: r.task, branch: r.branch || null, issues: r.verdict ? r.verdict.issues : ['agent failed, no verdict'] })),
-  note: `Each approved fix is a committed branch; merge them from the main session. Branches created: ${branches.join(', ') || 'none'}. After merging, clean up with: git branch -D <branch> … && git worktree prune`,
+  note: `Approved (merge these from the main session): ${kept.join(', ') || 'none'}. Orphaned (superseded retries or rejected attempts — safe to delete): ${orphans.join(', ') || 'none'}. To clean up an orphan: \`git worktree list\` to find its path, then \`git worktree remove <path>\` (prune does not remove live worktrees).`,
 }
