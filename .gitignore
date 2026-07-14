@@ -42,5 +42,6 @@ ENV/
 
 # ---- leos-agent ----
 # Machine-local overrides, never synced
-local/
+local/*
+!local/.gitkeep
 *.bak
