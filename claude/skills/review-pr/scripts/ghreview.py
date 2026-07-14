@@ -2,12 +2,21 @@
 """ghreview: helpers for staging PENDING GitHub PR reviews via gh.
 
 Subcommands:
-  map      -R OWNER/REPO -n PR                    JSON: per-file addressable-line ranges + flags
-  extract  -R OWNER/REPO -n PR [PATH ...]         unified patches for the given files (all if none)
-  pending  -R OWNER/REPO -n PR                    id of the current user's PENDING review, if any
-  stage    -R OWNER/REPO -n PR --commit SHA --input FILE [--replace-pending] [--dry-run]
-           validate comments against the diff, then create ONE pending review
-           (payload deliberately has NO "event" field -> review stays PENDING)
+  map            -R OWNER/REPO -n PR              JSON: per-file addressable-line ranges + flags
+  extract        -R OWNER/REPO -n PR [PATH ...]   unified patches for the given files (all if none)
+  pending        -R OWNER/REPO -n PR              current user's PENDING review {id, node_id}, if any
+  clear-pending  -R OWNER/REPO -n PR              DELETE the current user's PENDING review, if any
+  threads        -R OWNER/REPO -n PR [--all]      JSON: unresolved review threads rooted by the
+                                                  current user (--all includes resolved ones)
+  resolve-thread -R OWNER/REPO -n PR --thread-id PRRT_… [--dry-run]
+                                                  mark a thread resolved (immediate, not staged;
+                                                  needs PR authorship or write access)
+  reply          -R OWNER/REPO -n PR --thread-id PRRT_… --body-file FILE [--dry-run]
+                                                  STAGE a reply into the current user's pending
+                                                  review (created as an empty shell if absent)
+  stage          -R OWNER/REPO -n PR --commit SHA --input FILE [--replace-pending] [--dry-run]
+                 validate comments against the diff, then create ONE pending review
+                 (payload deliberately has NO "event" field -> review stays PENDING)
 
 stage --input file: {"comments": [{"path", "line", "side", "body",
                                    "start_line"?, "start_side"?}, ...]}
@@ -164,7 +173,21 @@ def current_login():
     return gh(["api", "user", "-q", ".login"]).strip()
 
 
-def pending_review_id(repo, pr):
+def graphql(query, variables):
+    """Run a GraphQL query/mutation via gh. Int variables go through -F (typed)."""
+    args = ["api", "graphql", "-f", f"query={query}"]
+    for key, value in variables.items():
+        flag = "-F" if isinstance(value, (int, bool)) else "-f"
+        args += [flag, f"{key}={value}"]
+    return json.loads(gh(args))
+
+
+def pending_review(repo, pr):
+    """The current user's PENDING review as {"id", "node_id"}, or None.
+
+    REST node_id is the GraphQL PullRequestReview id (verified identical) —
+    usable directly in mutations.
+    """
     out = gh(["api", f"repos/{repo}/pulls/{pr}/reviews", "--paginate", "--jq", ".[]"])
     login = current_login()
     for line in out.splitlines():
@@ -172,8 +195,55 @@ def pending_review_id(repo, pr):
             continue
         review = json.loads(line)
         if review.get("state") == "PENDING" and review.get("user", {}).get("login") == login:
-            return review["id"]
+            return {"id": review["id"], "node_id": review["node_id"]}
     return None
+
+
+THREADS_QUERY = """
+query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 50, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id isResolved isOutdated path line
+          comments(first: 50) {
+            nodes {
+              id author { login } body createdAt
+              pullRequestReview { id state }
+            }
+          }
+        }
+      }
+    }
+  }
+}"""
+
+RESOLVE_MUTATION = """
+mutation($thread: ID!) {
+  resolveReviewThread(input: {threadId: $thread}) { thread { id isResolved } }
+}"""
+
+REPLY_MUTATION = """
+mutation($thread: ID!, $review: ID!, $body: String!) {
+  addPullRequestReviewThreadReply(
+    input: {pullRequestReviewThreadId: $thread, pullRequestReviewId: $review, body: $body}
+  ) { comment { id } }
+}"""
+
+
+def fetch_threads(repo, pr):
+    owner, name = repo.split("/", 1)
+    nodes, cursor = [], None
+    while True:
+        variables = {"owner": owner, "name": name, "number": int(pr)}
+        if cursor:
+            variables["cursor"] = cursor
+        conn = graphql(THREADS_QUERY, variables)["data"]["repository"]["pullRequest"]["reviewThreads"]
+        nodes += conn["nodes"]
+        if not conn["pageInfo"]["hasNextPage"]:
+            return nodes
+        cursor = conn["pageInfo"]["endCursor"]
 
 
 def post_review(repo, pr, commit, staged):
@@ -217,9 +287,92 @@ def cmd_extract(a):
 
 
 def cmd_pending(a):
-    review_id = pending_review_id(a.repo, a.pr)
-    if review_id:
-        print(review_id)
+    review = pending_review(a.repo, a.pr)
+    if review:
+        print(json.dumps(review))
+
+
+def cmd_clear_pending(a):
+    review = pending_review(a.repo, a.pr)
+    if review:
+        gh(["api", f"repos/{a.repo}/pulls/{a.pr}/reviews/{review['id']}", "--method", "DELETE"])
+    print(json.dumps({"deleted": review["id"] if review else None}))
+
+
+def cmd_threads(a):
+    """Unresolved threads whose root comment is the current user's.
+
+    Threads rooted in a PENDING review are excluded — those are staged
+    drafts, not posted conversation. line is null for file-level threads.
+    """
+    login = current_login()
+    threads = []
+    for node in fetch_threads(a.repo, a.pr):
+        comments = node["comments"]["nodes"]
+        if not comments:
+            continue
+        root = comments[0]
+        if (root.get("author") or {}).get("login") != login:
+            continue
+        if (root.get("pullRequestReview") or {}).get("state") == "PENDING":
+            continue
+        if node["isResolved"] and not a.all:
+            continue
+        last = comments[-1]
+        threads.append({
+            "thread_id": node["id"],
+            "path": node["path"],
+            "line": node["line"],
+            "is_resolved": node["isResolved"],
+            "is_outdated": node["isOutdated"],
+            "replies_after_mine": (last.get("author") or {}).get("login") != login,
+            "comments": [{
+                "author": (c.get("author") or {}).get("login"),
+                "body": c["body"],
+                "created_at": c["createdAt"],
+            } for c in comments],
+        })
+    print(json.dumps({"my_login": login, "threads": threads}, indent=1))
+
+
+def cmd_resolve_thread(a):
+    if a.dry_run:
+        print(json.dumps({"would_resolve": a.thread_id}))
+        return
+    try:
+        result = graphql(RESOLVE_MUTATION, {"thread": a.thread_id})
+    except subprocess.CalledProcessError as e:
+        # Resolving needs PR authorship or repo write access.
+        print(f"could not resolve thread (no write access to this repo?): {e.stderr.strip()}", file=sys.stderr)
+        sys.exit(1)
+    print(json.dumps({"resolved": result["data"]["resolveReviewThread"]["thread"]}))
+
+
+def cmd_reply(a):
+    with open(a.body_file) as fh:
+        body = fh.read().strip()
+    if not body:
+        print("input error: empty reply body", file=sys.stderr)
+        sys.exit(2)
+    review = pending_review(a.repo, a.pr)
+    if a.dry_run:
+        print(json.dumps({"would_reply_to": a.thread_id, "pending_review": review, "body": body}))
+        return
+    if review is None:
+        # Empty pending shell: POST with no event and no comments stays PENDING.
+        created = json.loads(gh(
+            ["api", f"repos/{a.repo}/pulls/{a.pr}/reviews", "--method", "POST", "--input", "-"],
+            json.dumps({}),
+        ))
+        review = {"id": created["id"], "node_id": created["node_id"]}
+    result = graphql(REPLY_MUTATION, {
+        "thread": a.thread_id, "review": review["node_id"], "body": body,
+    })
+    print(json.dumps({
+        "staged_reply": result["data"]["addPullRequestReviewThreadReply"]["comment"]["id"],
+        "thread": a.thread_id,
+        "pending_review": review["id"],
+    }))
 
 
 def cmd_stage(a):
@@ -245,10 +398,10 @@ def cmd_stage(a):
         return
 
     if a.replace_pending:
-        review_id = pending_review_id(a.repo, a.pr)
-        if review_id:
-            gh(["api", f"repos/{a.repo}/pulls/{a.pr}/reviews/{review_id}", "--method", "DELETE"])
-            report["deleted_pending"] = review_id
+        review = pending_review(a.repo, a.pr)
+        if review:
+            gh(["api", f"repos/{a.repo}/pulls/{a.pr}/reviews/{review['id']}", "--method", "DELETE"])
+            report["deleted_pending"] = review["id"]
 
     try:
         review = post_review(a.repo, a.pr, a.commit, staged)
@@ -273,15 +426,36 @@ def cmd_stage(a):
     print(json.dumps(report, indent=1))
 
 
+COMMANDS = {
+    "map": cmd_map,
+    "extract": cmd_extract,
+    "pending": cmd_pending,
+    "clear-pending": cmd_clear_pending,
+    "threads": cmd_threads,
+    "resolve-thread": cmd_resolve_thread,
+    "reply": cmd_reply,
+    "stage": cmd_stage,
+}
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
-    for name in ("map", "extract", "pending", "stage"):
+    for name in COMMANDS:
         sp = sub.add_parser(name)
         sp.add_argument("-R", "--repo", required=True, help="OWNER/REPO of the PR's base repo")
         sp.add_argument("-n", "--pr", required=True, type=int)
         if name == "extract":
             sp.add_argument("paths", nargs="*")
+        if name == "threads":
+            sp.add_argument("--all", action="store_true", help="include resolved threads")
+        if name == "resolve-thread":
+            sp.add_argument("--thread-id", required=True, help="PRRT_… thread node id")
+            sp.add_argument("--dry-run", action="store_true")
+        if name == "reply":
+            sp.add_argument("--thread-id", required=True, help="PRRT_… thread node id")
+            sp.add_argument("--body-file", required=True, help="file holding the reply body")
+            sp.add_argument("--dry-run", action="store_true")
         if name == "stage":
             sp.add_argument("--commit", required=True, help="head SHA (headRefOid) to anchor comments to")
             sp.add_argument("--input", required=True, help="JSON file with the comments array")
@@ -289,7 +463,7 @@ def main():
             sp.add_argument("--dry-run", action="store_true")
     a = p.parse_args()
     try:
-        {"map": cmd_map, "extract": cmd_extract, "pending": cmd_pending, "stage": cmd_stage}[a.cmd](a)
+        COMMANDS[a.cmd](a)
     except subprocess.CalledProcessError as e:
         print(f"gh failed: {e.stderr.strip() if e.stderr else e}", file=sys.stderr)
         sys.exit(1)

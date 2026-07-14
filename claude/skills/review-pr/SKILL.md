@@ -3,8 +3,10 @@ name: review-pr
 description: >
   Review a GitHub pull request of the current repo and stage inline review
   comments that remain PENDING on GitHub — visible only to Leo, never
-  submitted. Reports the staged comments and a merge verdict in chat.
-  Requires gh, installed and authenticated.
+  submitted. Handles Leo's existing reviews: a stale pending review is
+  replaced; posted threads are left, resolved, or get a staged reply.
+  Reports the staged comments and a merge verdict in chat. Requires gh,
+  installed and authenticated.
 when_to_use: >
   Leo asks to review a pull request by number ("review PR 42", "/review-pr 42")
   or "review the PR for this branch". NOT for reviewing the local working diff
@@ -41,14 +43,41 @@ for the current branch), stop with a one-line diagnosis. Otherwise parse
 the preflight JSON). Any further arguments are focus hints (e.g. "focus on the
 migration") — weight the review accordingly but still cover the whole diff.
 
-## Step 1 — Pending-review conflict
+## Step 1 — Existing reviews by me
 
-The preflight `reviews` array may include a review with `state: "PENDING"`. If
-one exists for the authenticated user (confirm with
-`python3 ${CLAUDE_SKILL_DIR}/scripts/ghreview.py pending -R OWNER/REPO -n N`),
-ask Leo via AskUserQuestion: **Replace it** (pass `--replace-pending` at the
-stage step) or **Abort**. Never delete a pending review silently — it may hold
-his half-written comments.
+Two kinds of prior review state, handled differently:
+
+**A pending (staged) review of mine** — clear it and re-review from scratch
+(Leo's standing rule):
+
+```
+python3 ${CLAUDE_SKILL_DIR}/scripts/ghreview.py clear-pending -R OWNER/REPO -n N
+```
+
+Note what was deleted in the final report. Still pass `--replace-pending` at
+the stage step as a race guard.
+
+**Posted (submitted) review threads of mine** — fetch them:
+
+```
+python3 ${CLAUDE_SKILL_DIR}/scripts/ghreview.py threads -R OWNER/REPO -n N
+```
+
+Returns unresolved threads whose root comment is mine (threads from pending
+reviews are excluded automatically; `line` is null for file-level threads).
+For each thread, judge the original comment against the **current** diff
+(`ghreview.py extract` for that path — `is_outdated` means the nearby code
+changed, which is a hint, not a verdict) and pick one action, defaulting to
+*leave* when torn:
+
+| Judgment | Action |
+|---|---|
+| Issue no longer applies (fixed, code removed, moot) | **Resolve** the thread — applied in Step 5. |
+| Still applies, `replies_after_mine: false` | **Leave** untouched. |
+| Still applies, `replies_after_mine: true` | **Reply**: draft a response in the Step 4 voice — answer their actual point, concede plainly when they're right (if they're right that it's moot, resolve instead of replying). Staged in Step 5, never posted directly. |
+
+Hold the chosen actions until Step 5 — no mutations happen before
+adjudication is complete.
 
 ## Step 2 — Map the diff and pick a route
 
@@ -98,6 +127,10 @@ drop what you cannot confirm or what a competent human reviewer wouldn't
 bother writing, dedupe across lenses, then rewrite survivors in the voice
 below. Cap at **15 comments**, priority blocking > major > minor > nit.
 
+Also dedupe against Step 1's still-open threads: a finding that repeats an
+existing thread of mine (same file, overlapping lines, same issue) is never
+staged as a new comment — the thread's leave/reply action already covers it.
+
 ### Voice — every comment must pass these rules
 
 - One or two sentences. Lead with the problem. No greeting, praise, sign-off,
@@ -118,28 +151,63 @@ below. Cap at **15 comments**, priority blocking > major > minor > nit.
 | "Consider adding a null check to improve robustness. 🙂" | "`user` is nil when the session expired mid-request; this panics. Guard before the deref." |
 | "It's worth noting this loop could be optimized." | "nit: this is O(n²) via `includes`; a Set lookup keeps it linear. Fine if n stays small." |
 
-## Step 5 — Stage
+## Step 5 — Apply: stage comments, stage replies, resolve threads
 
-Write the final comments to a JSON file in the scratchpad
-(`{"comments": [{path, line, side, body, start_line?, start_side?}]}`), then:
+Strictly in this order (comments and replies are invisible-until-submit;
+resolutions are public and go last, only once staging has succeeded):
 
-```
-python3 ${CLAUDE_SKILL_DIR}/scripts/ghreview.py stage -R OWNER/REPO -n N \
-  --commit <headRefOid> --input comments.json [--replace-pending]
-```
+1. **Stage new comments.** Write them to a JSON file in the scratchpad
+   (`{"comments": [{path, line, side, body, start_line?, start_side?}]}`), then:
 
-The script re-validates every line against the hunk map (snaps within a hunk,
-drops what can't anchor — one bad line would 422 the entire review), POSTs
-once with no `event`, and retries once against a refreshed head on 422. Use
-`--dry-run` first if any line anchors feel uncertain. **Zero findings after
-adjudication → skip this step entirely**; never create an empty review.
+   ```
+   python3 ${CLAUDE_SKILL_DIR}/scripts/ghreview.py stage -R OWNER/REPO -n N \
+     --commit <headRefOid> --input comments.json --replace-pending
+   ```
+
+   The script re-validates every line against the hunk map (snaps within a
+   hunk, drops what can't anchor — one bad line would 422 the entire review),
+   POSTs once with no `event`, and retries once against a refreshed head on
+   422. Use `--dry-run` first if any line anchors feel uncertain. Zero new
+   comments → skip this sub-step; **never create an empty review just for
+   comments** (the reply sub-step creates its own shell when needed).
+
+2. **Stage thread replies** — one call per Step 1 reply action, body from a
+   scratchpad file:
+
+   ```
+   python3 ${CLAUDE_SKILL_DIR}/scripts/ghreview.py reply -R OWNER/REPO -n N \
+     --thread-id PRRT_… --body-file reply.txt
+   ```
+
+   Attaches to the pending review from sub-step 1, or creates an empty
+   pending shell first when there were no new comments. Replies stay pending
+   alongside everything else.
+
+3. **Resolve stale threads** — one call per Step 1 resolve action:
+
+   ```
+   python3 ${CLAUDE_SKILL_DIR}/scripts/ghreview.py resolve-thread -R OWNER/REPO -n N \
+     --thread-id PRRT_…
+   ```
+
+   This is the one immediate, publicly visible action in the whole skill
+   (GitHub has no staged resolution) — say so in the report. A denial
+   (resolving needs PR authorship or write access) is not a failure: leave
+   the thread and note it.
+
+If sub-step 1 failed hard (422 after retry), apply nothing else: report all
+findings, replies, and would-be resolutions chat-only with the verbatim API
+error.
 
 ## Step 6 — Report (chat only)
 
 1. Staged comments as a table: `path:line — comment`.
-2. Unstaged findings (dropped anchors, overflow past the cap) — clearly marked.
-3. Coverage: excluded generated files, unreviewed files on huge PRs, CI status.
-4. **Verdict** with 1–2 lines of rationale, from this rubric:
+2. Existing threads as a table: `path:line — left / resolved / reply staged`
+   (+ what was said in staged replies; note if a stale pending review was
+   replaced, and that resolutions are already live).
+3. Unstaged findings (dropped anchors, overflow past the cap) — clearly marked.
+4. Coverage: excluded generated files, unreviewed files on huge PRs, CI status.
+5. **Verdict** with 1–2 lines of rationale, from this rubric:
    - **ready-to-merge** — no blocking or major findings; CI green or clearly
      unrelated; full coverage.
    - **neutral** — real but non-blocking findings, missing tests for changed
@@ -149,15 +217,19 @@ adjudication → skip this step entirely**; never create an empty review.
      unacknowledged breaking API change, or the diff doesn't do what the PR
      claims. This maps to "would warrant request-changes" — say so, but never
      submit any review event.
-5. Close with: "Comments are staged as a pending review — only you can see
+6. Close with: "Comments are staged as a pending review — only you can see
    them until you submit or discard on GitHub."
 
 ## Edge cases
 
 | Situation | Behavior |
 |---|---|
-| Existing pending review | Ask replace/abort (Step 1); `--replace-pending` only after explicit approval. |
-| Zero findings | No review created; verdict still reported. |
+| My pending review exists | Deleted automatically in Step 1 and re-reviewed from scratch; deletion noted in the report. |
+| Someone replied in my thread | Reply drafted and staged into the pending review — never posted directly. |
+| My comment no longer applies | Thread resolved (immediate — GitHub can't stage this); disclosed in the report. |
+| Resolve denied (no write access, not PR author) | Thread left as-is; noted in the report. |
+| Unsure whether a thread still applies | Leave it — resolving someone into silence is worse than a stale thread. |
+| Zero findings | No review created (unless replies need a pending shell); verdict still reported. |
 | Huge PR | Shard; cap agents; disclose coverage; verdict ≤ neutral if partial. |
 | Fork PR | `OWNER/REPO` from PR url; never checkout; review is API-only. |
 | Own PR | Pending reviews on your own PR work; no special case. |
