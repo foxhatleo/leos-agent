@@ -2,7 +2,7 @@
 # Bootstrap Leo's portable Claude config: symlink ~/.claude into this repo.
 #
 #   ./install.sh          install or repair links (idempotent, safe to re-run)
-#   ./install.sh check    report drift, change nothing
+#   ./install.sh check    report drift, change nothing (exit 1 on drift)
 #
 # Anything replaced by a link is moved to ~/.claude/backups/leos-agent-<ts>/.
 set -euo pipefail
@@ -11,6 +11,11 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
 BACKUP_DIR="$CLAUDE_DIR/backups/leos-agent-$(date +%Y%m%d-%H%M%S)"
 MODE="${1:-install}"
+
+case "$MODE" in
+  install|check) ;;
+  *) echo "usage: install.sh [install|check]" >&2; exit 2 ;;
+esac
 
 # Symlinked wholesale. CLAUDE.md is handled via @import instead, so the local
 # file keeps room for machine-specific notes.
@@ -47,6 +52,12 @@ link_one() {
 
 ensure_import() {
   local md="$CLAUDE_DIR/CLAUDE.md"
+  # A leos-agent import that doesn't match this clone's path is stale (repo
+  # moved or was re-cloned elsewhere) and would break every session silently.
+  if [[ -f "$md" ]] && grep -E '^@.*leos-agent/claude/CLAUDE\.md' "$md" | grep -qvF "$IMPORT_LINE"; then
+    echo "  WARN  CLAUDE.md has a stale leos-agent import pointing elsewhere — remove it manually"
+    drift=1
+  fi
   if [[ -f "$md" ]] && grep -qF "$IMPORT_LINE" "$md"; then
     echo "  ok    CLAUDE.md import"
     return
@@ -70,7 +81,7 @@ EOF
   fi
 }
 
-mkdir -p "$CLAUDE_DIR"
+[[ "$MODE" == "check" ]] || mkdir -p "$CLAUDE_DIR"
 echo "leos-agent $MODE  (repo: $REPO_DIR, target: $CLAUDE_DIR)"
 for l in "${LINKS[@]}"; do link_one "$l"; done
 ensure_import
