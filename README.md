@@ -43,6 +43,8 @@ claude/
     implementer.md              sonnet — executes an approved plan
     investigator.md             opus, read-only — root-cause diagnosis
     reviewer.md                 opus, read-only — diff verdicts, confidence-gated findings
+    expert.md                   fable, read-only — ceiling tier: hardest verdicts and
+                                arbitration only, manual triggers or rare auto-escalation
   skills/
     review-pr/                  /review-pr — stage a pending GitHub PR review + verdict
     resolve-ticket/             /resolve-ticket — ticket to draft PR with a sign-off gate
@@ -54,7 +56,7 @@ claude/
 
 ## Model routing (summary)
 
-Canonical version lives in [claude/CLAUDE.md](claude/CLAUDE.md): Opus for investigation/planning/review, Sonnet as default executor, Haiku for mechanical work; **every execute request ends with an Opus review of the diff before it is called done**; escalate a tier on ambiguity or two failures; multi-agent fan-out only on explicit trigger phrases ("fan this out", "workflow this", "grind on this", "do this properly").
+Canonical version lives in [claude/CLAUDE.md](claude/CLAUDE.md): Opus for investigation/planning/review, Sonnet as default executor, Haiku for mechanical work; **every execute request ends with an Opus review of the diff before it is called done**; escalate a tier on ambiguity or two failures, with "default up" **capped at Opus**. Above that sits the Fable `expert` — verdicts and arbitration only, reached by the trigger phrases "use expert" / "deep thinking" / "deep investigate" / naming Fable, or auto (announced, one line) only when an opus agent failed twice / reported low confidence, or two opus verdicts deadlock. Multi-agent fan-out only on explicit trigger phrases ("fan this out", "workflow this", "grind on this", "do this properly").
 
 ## Skills
 

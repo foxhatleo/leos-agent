@@ -111,7 +111,10 @@ change, landmines named in ticket comments. Scale down to 1 when the ticket
 names the file and fix; up to 3 max for gnarly cross-cutting work — never
 more. Feed them the normalized ticket, resource summaries, and Leo's steering
 constraints; let cheap `Explore` scouts handle raw searching. Synthesize root
-cause and approach here.
+cause and approach here. If the investigators return low confidence on the
+same core question, that is the standing auto-escalation condition: announce
+it in one line and put that question (not the whole investigation) to the
+`expert` agent — raw artifact paths and the failed attempts included.
 
 ## Step 4 — Plan and sign-off gate
 
@@ -168,9 +171,12 @@ ticket, the approved plan, and the diff scope
 
 - Blocking findings → each becomes a sonnet executor fix task → re-review the
   delta (reviewer gets prior findings + new diff). **Max 2 rounds.**
-- Still blocking after round 2 → AskUserQuestion: **Push anyway as draft**
-  (PR body gains a "Known issues" section listing the findings) / **Abort**
-  (branch and worktree left local; report the path).
+- Still blocking after round 2 → AskUserQuestion: **Expert arbitration**
+  (the `expert` agent rules on the disputed findings from the raw diff and
+  both review rounds; a "findings stand" ruling routes back to fix-and-push,
+  a "findings wrong" ruling means push) / **Push anyway as draft** (PR body
+  gains a "Known issues" section listing the findings) / **Abort** (branch
+  and worktree left local; report the path).
 - Non-blocking findings ride along into the PR body's review notes.
 
 ## Step 8 — Ship
