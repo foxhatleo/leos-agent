@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "defaultMode": "auto"
+  },
+  "tui": "fullscreen",
+  "skipWorkflowUsageWarning": true,
+  "theme": "auto",
+  "agentPushNotifEnabled": true
+}

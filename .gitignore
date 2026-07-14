@@ -39,3 +39,8 @@ ENV/
 # ---- Logs & temp ----
 *.log
 *.tmp
+
+# ---- leos-agent ----
+# Machine-local overrides, never synced
+local/
+*.bak
