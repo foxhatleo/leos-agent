@@ -14,19 +14,42 @@ repo/project.
 
 merge semantics: dicts merge recursively, lists union in order (deduped,
 so merging {"reviewed": [13]} twice never double-adds), scalars overwrite.
-Writes are atomic (tempfile + os.replace). Exit codes: 0 ok, non-zero on error.
+merge calls are serialized (flock on a sibling <name>.json.lock) and each
+write is atomic (tempfile + os.replace), so concurrent merges from parallel
+agents never lose an update; get is lock-free. Exit codes: 0 ok, non-zero on
+error.
 """
+import contextlib
+import fcntl
 import json
 import os
 import sys
 import tempfile
 
 
+def _repo_root():
+    # scripts/ is NOT symlinked; skills call this file by absolute path, so
+    # __file__ is always inside the real clone. claude/scripts/state.py -> repo root.
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
 def state_file(name):
-    root = os.environ.get("LEOS_AGENT_PATH") or os.path.expanduser("~/.leos-agent")
+    root = os.environ.get("LEOS_AGENT_PATH") or _repo_root()
     if not os.path.isdir(root):
         sys.exit(f"state: {root} does not exist — clone leos-agent there or set LEOS_AGENT_PATH")
     return os.path.join(root, "local", f"{name}.json")
+
+
+@contextlib.contextmanager
+def _locked(path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd = os.open(path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 def load(path):
@@ -81,9 +104,10 @@ def main(argv):
         except json.JSONDecodeError as e:
             sys.exit(f"state: patch is not valid JSON ({e})")
         path = state_file(argv[1])
-        data = load(path)
-        data[argv[2]] = deep_merge(data.get(argv[2], {}), patch)
-        atomic_write(path, data)
+        with _locked(path):
+            data = load(path)
+            data[argv[2]] = deep_merge(data.get(argv[2], {}), patch)
+            atomic_write(path, data)
         print(json.dumps(data[argv[2]], indent=1, sort_keys=True))
     else:
         sys.exit(__doc__.strip())
