@@ -1,5 +1,5 @@
 ---
-name: fix
+name: resolve-ticket
 description: >
   End-to-end ticket fix: resolve the ticket (Linear or Jira), pull linked
   context (Confluence, Slack, GitHub), investigate and plan at Opus tier, get
@@ -8,7 +8,7 @@ description: >
   the browser.
 when_to_use: >
   Leo asks to fix or implement a specific tracked ticket by ID ("fix ENG-123",
-  "/fix PLAT-42"). NOT for ad-hoc fixes with no ticket (normal
+  "/resolve-ticket PLAT-42"). NOT for ad-hoc fixes with no ticket (normal
   execute-then-review flow) and NOT for batches of independent items (that is
   the cost-tiered-fix workflow).
 argument-hint: "[ticket-id]"
@@ -16,15 +16,15 @@ model: opus
 allowed-tools:
   - Bash(gh *)
   - Bash(git *)
+  - Bash(python3 *)
   - Agent
   - AskUserQuestion
   - EnterWorktree
   - ExitWorktree
   - WebFetch
-  - Edit
 ---
 
-# /fix — ticket to draft PR
+# /resolve-ticket — ticket to draft PR
 
 Tier map: this main loop (opus) triages, plans, gates, and synthesizes;
 `investigator` (opus) diagnoses; `executor` implements (haiku for mechanical
@@ -33,9 +33,9 @@ diff before anything is pushed.
 
 Hard rule: **nothing is created in the project — no worktree, no branch, no
 code edit — before Leo approves the plan in Step 4.** Steps 0–3 touch the
-project read-only. One sanctioned exception: persisting a confirmed
-ticket-prefix mapping to the config repo's CLAUDE.md in Step 1 (config
-bookkeeping Leo already approved by answering, not project work).
+project read-only. Writing the machine-local state file in Step 1 (a confirmed
+ticket-prefix mapping under `$LEOS_AGENT_PATH/local/`) is config bookkeeping,
+not project work — it doesn't touch the project.
 
 ## Preflight (injected)
 
@@ -56,15 +56,21 @@ capability at runtime (a Linear issue-fetch tool; the Atlassian tools
 `getAccessibleAtlassianResources` → cloudId → `getJiraIssue`). Use ToolSearch
 if the tools are deferred.
 
-1. **Known prefix**: the global CLAUDE.md has a `## Ticket sources` prefix →
-   tracker table (project CLAUDE.md may override). If the ticket's prefix is
-   mapped, go straight to that tracker.
+Prefix → tracker mappings live in machine-local state (see CLAUDE.md ›
+Machine-local state): `STATE="python3 ${LEOS_AGENT_PATH:-$HOME/.leos-agent}/claude/scripts/state.py"`,
+file `resolve-ticket.json`, keyed by this repo's `owner/repo`, shaped
+`{"prefixes": {"ENG": "linear"}}`. A project CLAUDE.md may still declare its
+tracker outright — that wins without a lookup.
+
+1. **Known prefix**: `state.py get resolve-ticket <owner/repo>` has the
+   ticket's prefix under `prefixes` → go straight to that tracker.
 2. **Unknown prefix**: probe whichever tracker MCPs are connected. Exactly one
    hit → use it, then ask via AskUserQuestion whether to remember the mapping.
    Both hit, or ambiguous → AskUserQuestion with the two titles; Leo picks.
-   Either way, **persist the mapping**: append the row to the table in
-   `~/.leos-agent/claude/CLAUDE.md` (the repo copy — never the machine-local
-   stub) and remind Leo to commit the repo.
+   Before asking, check the whole state file (`state.py get resolve-ticket`)
+   for the same prefix under other repos — if found, present that tracker as
+   the recommended option. Persist the confirmed mapping per repo:
+   `state.py merge resolve-ticket <owner/repo> '{"prefixes": {"<PREFIX>": "<tracker>"}}'`.
 3. **No tracker reachable**: tell Leo which MCP is missing and the remedy
    (`~/.leos-agent/install.sh mcp`, or
    `claude mcp add --transport http linear-server https://mcp.linear.app/mcp`,
