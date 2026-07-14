@@ -53,6 +53,17 @@ link_one() {
 
 ensure_import() {
   local md="$CLAUDE_DIR/CLAUDE.md"
+  # A symlinked CLAUDE.md (stow/chezmoi setups, or pointing back into this
+  # repo) must not be appended to — the redirect would write into the target.
+  if [[ -L "$md" ]]; then
+    if grep -qF "$IMPORT_LINE" "$md" 2>/dev/null; then
+      echo "  ok    CLAUDE.md import (via symlink)"
+    else
+      echo "  WARN  CLAUDE.md is a symlink; not modifying its target — add the import there yourself: $IMPORT_LINE"
+      drift=1
+    fi
+    return
+  fi
   # A leos-agent import that doesn't match this clone's path is stale (repo
   # moved or was re-cloned elsewhere) and would break every session silently.
   if [[ -f "$md" ]] && grep -E '^@.*leos-agent/claude/CLAUDE\.md' "$md" | grep -qvF "$IMPORT_LINE"; then

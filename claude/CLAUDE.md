@@ -31,7 +31,7 @@ Every implementation request — "fix", "implement", "execute the plan", anythin
 The main loop orchestrates; subagents do the volume. In an Opus session, inline bulk work burns the expensive tier — delegate down:
 
 - Locating code, mapping structure → `Explore` (Haiku), in parallel when questions are independent.
-- Diagnosis needing a verdict → `investigator` (Opus) — spawn ONE per question, fed by cheap exploration; never fan out Opus.
+- Diagnosis needing a verdict → `investigator` (Opus) — spawn ONE per question, fed by cheap exploration; distinct questions may run in parallel, but never fan the same question across multiple Opus agents.
 - Mechanical edits → `executor` (Haiku), fanned across independent items.
 - Executing a written plan → `implementer` (Sonnet).
 - Judging a diff → `reviewer` (Opus).

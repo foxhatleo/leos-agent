@@ -21,6 +21,7 @@ allowed-tools:
   - EnterWorktree
   - ExitWorktree
   - WebFetch
+  - Edit
 ---
 
 # /fix — ticket to draft PR
@@ -30,8 +31,11 @@ Tier map: this main loop (opus) triages, plans, gates, and synthesizes;
 steps, `model: sonnet` override for normal ones); `reviewer` (opus) judges the
 diff before anything is pushed.
 
-Hard rule: **nothing is created — no worktree, no branch, no edit — before Leo
-approves the plan in Step 4.** Steps 0–3 are read-only.
+Hard rule: **nothing is created in the project — no worktree, no branch, no
+code edit — before Leo approves the plan in Step 4.** Steps 0–3 touch the
+project read-only. One sanctioned exception: persisting a confirmed
+ticket-prefix mapping to the config repo's CLAUDE.md in Step 1 (config
+bookkeeping Leo already approved by answering, not project work).
 
 ## Preflight (injected)
 

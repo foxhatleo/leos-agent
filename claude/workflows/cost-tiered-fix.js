@@ -81,12 +81,16 @@ if (Array.isArray(args.tasks)) {
     'Decompose this goal into independent, well-scoped work items that can each be done in an isolated worktree without touching the same files. For each item write a self-contained instruction (exact file paths, expected behavior, how to check it) and pick a tier: haiku for mechanical work, sonnet for normal implementation. At most 10 items — if the goal needs more, return the 10 highest-value and say so in the last item.\n\nGoal: ' + args.goal,
     { label: 'plan', phase: 'Plan', model: 'opus', schema: PLAN_SCHEMA },
   )
+  if (!plan || !Array.isArray(plan.items) || plan.items.length === 0) {
+    log('Planning agent failed or returned no items — aborting cleanly')
+    return { approved: [], rejected: [], note: 'planning agent died or produced no work items; nothing was run' }
+  }
   items = plan.items
   log(`Planned ${items.length} work items`)
 }
-if (items.length > 12) {
-  log(`Capping fan-out: running the first 12 of ${items.length} items`)
-  items = items.slice(0, 12)
+if (items.length > 10) {
+  log(`Capping fan-out: running the first 10 of ${items.length} items`)
+  items = items.slice(0, 10)
 }
 
 // pipeline(): no barrier between stages — item 0 can be verifying while item 3
