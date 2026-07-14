@@ -44,13 +44,9 @@ These phrases are my standing opt-in to multi-agent orchestration (Workflow tool
 
 For a non-trivial task where I haven't used a trigger phrase, propose orchestration in one line (rough shape: agent count + model mix) and proceed single-agent unless I take the offer. Never launch a large fan-out silently.
 
-## Ticket sources
+## Machine-local state
 
-Prefix → tracker mapping used by `/fix` to resolve ticket IDs. When `/fix` meets an unknown prefix, it asks once, then appends the mapping here (edit `~/.leos-agent/claude/CLAUDE.md`, not the machine-local stub) and reminds me to commit. Project CLAUDE.md files can override for repo-specific trackers.
-
-| Prefix | Tracker |
-|---|---|
-| _(none yet — /fix fills this in)_ | |
+Any skill or agent that needs to persist information writes JSON to `$LEOS_AGENT_PATH/local/<skill-or-agent-name>.json` — `LEOS_AGENT_PATH` is an optional override, unset it defaults to `~/.leos-agent` (in bash: `${LEOS_AGENT_PATH:-$HOME/.leos-agent}`). Top-level keys are `owner/repo` (or the absolute project path when there's no GitHub repo): **data always stays separate per repo/project**. Read and write through `$LEOS_AGENT_PATH/claude/scripts/state.py` (`get` / `merge` / `path`) instead of hand-rolling read-modify-write. `local/` is gitignored — this state is per-machine, never committed, never synced. Examples: `review-watcher.json` (PR numbers already auto-reviewed), `resolve-ticket.json` (ticket-prefix → tracker mappings).
 
 ## Cost discipline
 

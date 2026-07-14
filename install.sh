@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Bootstrap Leo's portable Claude config: symlink ~/.claude into this repo.
+# Bootstrap Leo's portable Claude config: content dirs (agents, skills, hooks,
+# workflows) are symlinked into this repo; CLAUDE.md is wired via @import;
+# settings.json is populated (merged) as a real file.
 #
 #   ./install.sh          install or repair links (idempotent, safe to re-run)
 #   ./install.sh check    report drift, change nothing (exit 1 on drift)
@@ -18,9 +20,11 @@ case "$MODE" in
   *) echo "usage: install.sh [install|check|mcp]" >&2; exit 2 ;;
 esac
 
-# Symlinked wholesale. CLAUDE.md is handled via @import instead, so the local
-# file keeps room for machine-specific notes.
-LINKS=(settings.json agents skills hooks workflows)
+# Wiring principle: symlinks are only for ADDITIONS (whole content dirs).
+# Config files use an import directive where the format supports it
+# (CLAUDE.md via @import) and are populated — written as real, merged files —
+# where it doesn't (settings.json).
+LINKS=(agents skills hooks workflows)
 IMPORT_LINE="@${REPO_DIR}/claude/CLAUDE.md"
 
 drift=0
@@ -51,6 +55,72 @@ link_one() {
   echo "  link  $name -> $src"
 }
 
+# settings.json is populated, not symlinked: repo-defined keys are canonical
+# (a pull + re-run propagates them), every other machine-local key survives.
+merge_settings() {
+  local src="$REPO_DIR/claude/settings.json" dst="$CLAUDE_DIR/settings.json"
+  [[ -f "$src" ]] || { echo "  skip  settings.json (not in repo)"; return; }
+  command -v python3 >/dev/null || { echo "  WARN  settings.json needs python3 to merge"; drift=1; return; }
+  if [[ -L "$dst" ]]; then
+    if [[ "$MODE" == "check" ]]; then
+      echo "  DRIFT settings.json (symlink from the old layout; re-run install.sh to convert)"
+      drift=1
+      return
+    fi
+    # Old layout linked this file into the repo; replace the link with a real
+    # merged file. A link we didn't create is backed up rather than removed.
+    if [[ "$(readlink "$dst")" == "$src" ]]; then
+      rm "$dst"
+    else
+      backup "$dst"
+    fi
+  fi
+  local result
+  result=$(python3 - "$src" "$dst" "$MODE" <<'PY'
+import json, os, sys, tempfile
+src, dst, mode = sys.argv[1:4]
+
+def deep_merge(base, patch):
+    if isinstance(base, dict) and isinstance(patch, dict):
+        out = dict(base)
+        for k, v in patch.items():
+            out[k] = deep_merge(base[k], v) if k in base else v
+        return out
+    return patch
+
+with open(src) as fh:
+    repo = json.load(fh)
+local = {}
+if os.path.exists(dst):
+    try:
+        with open(dst) as fh:
+            local = json.load(fh)
+    except json.JSONDecodeError:
+        print("unreadable")
+        sys.exit(0)
+merged = deep_merge(local, repo)  # repo keys win; machine-local extras survive
+if merged == local:
+    print("ok")
+elif mode == "check":
+    print("drift")
+else:
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(dst), suffix=".tmp")
+    with os.fdopen(fd, "w") as fh:
+        json.dump(merged, fh, indent=2)
+        fh.write("\n")
+    os.replace(tmp, dst)
+    print("merged")
+PY
+  )
+  case "$result" in
+    ok)         echo "  ok    settings.json (repo keys present)" ;;
+    merged)     echo "  merge settings.json (repo keys applied, machine-local keys kept)" ;;
+    drift)      echo "  DRIFT settings.json (repo keys missing or changed)"; drift=1 ;;
+    unreadable) echo "  WARN  settings.json is not valid JSON — fix it by hand; not overwriting"; drift=1 ;;
+    *)          echo "  WARN  settings.json merge failed"; drift=1 ;;
+  esac
+}
+
 ensure_import() {
   local md="$CLAUDE_DIR/CLAUDE.md"
   # A symlinked CLAUDE.md (stow/chezmoi setups, or pointing back into this
@@ -66,9 +136,17 @@ ensure_import() {
   fi
   # A leos-agent import that doesn't match this clone's path is stale (repo
   # moved or was re-cloned elsewhere) and would break every session silently.
+  # install mode repairs it in place; check mode only reports.
   if [[ -f "$md" ]] && grep -E '^@.*leos-agent/claude/CLAUDE\.md' "$md" | grep -qvF "$IMPORT_LINE"; then
-    echo "  WARN  CLAUDE.md has a stale leos-agent import pointing elsewhere — remove it manually"
-    drift=1
+    if [[ "$MODE" == "check" ]]; then
+      echo "  DRIFT CLAUDE.md (stale leos-agent import pointing elsewhere)"
+      drift=1
+    else
+      awk -v good="$IMPORT_LINE" \
+        '!($0 ~ /^@.*leos-agent\/claude\/CLAUDE\.md/ && $0 != good)' \
+        "$md" >"$md.tmp" && mv "$md.tmp" "$md"
+      echo "  fix   removed stale leos-agent import from CLAUDE.md"
+    fi
   fi
   if [[ -f "$md" ]] && grep -qF "$IMPORT_LINE" "$md"; then
     echo "  ok    CLAUDE.md import"
@@ -121,9 +199,20 @@ if [[ "$MODE" == "mcp" ]]; then
   exit 0
 fi
 
-[[ "$MODE" == "check" ]] || mkdir -p "$CLAUDE_DIR"
+# LEOS_AGENT_PATH is an optional override skills use to find this repo (and
+# its local/ state dir). install.sh never sets it — but a value pointing at a
+# different clone would silently send all skill state elsewhere.
+if [[ -n "${LEOS_AGENT_PATH:-}" ]]; then
+  if [[ "$(cd "$LEOS_AGENT_PATH" 2>/dev/null && pwd)" != "$REPO_DIR" ]]; then
+    echo "WARN: LEOS_AGENT_PATH=$LEOS_AGENT_PATH does not point at this repo ($REPO_DIR)"
+    echo "      Skills keep state under \$LEOS_AGENT_PATH/local — unset it or point it here."
+  fi
+fi
+
+[[ "$MODE" == "check" ]] || mkdir -p "$CLAUDE_DIR" "$REPO_DIR/local"
 echo "leos-agent $MODE  (repo: $REPO_DIR, target: $CLAUDE_DIR)"
 for l in "${LINKS[@]}"; do link_one "$l"; done
+merge_settings
 ensure_import
 
 if [[ "$MODE" == "check" ]]; then
