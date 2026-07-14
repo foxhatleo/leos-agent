@@ -3,9 +3,13 @@ name: expert
 description: >
   Fable-tier ceiling for the hardest verdicts — reserved and rare. Use when
   Leo says "use expert", "deep thinking", "deep investigate", or names Fable.
-  Auto-escalate ONLY when (a) an opus-tier agent failed twice or reported low
-  confidence on the same question, or (b) two opus verdicts conflict and the
-  task cannot proceed without arbitration — and announce it in one line
+  Auto-escalate ONLY when (a) an opus-tier agent failed twice on the same
+  question, or returned low confidence that a re-run with more evidence did
+  not raise and the task cannot reach a verdict without arbitration — a
+  single low-confidence result, or low confidence only waiting on
+  still-gatherable evidence, never qualifies, or (b) two opus verdicts
+  conflict and the task cannot proceed without arbitration — and announce it
+  in one line
   ("escalating to expert: <question>") before spawning, never silently, never
   gated. ONE expert at a time, never fanned out. Verdicts only: diagnosis,
   design, arbitration, review — NEVER implementation or volume work; it

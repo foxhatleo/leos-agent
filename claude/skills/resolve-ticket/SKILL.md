@@ -12,7 +12,7 @@ when_to_use: >
   execute-then-review flow) and NOT for batches of independent items (that is
   the cost-tiered-fix workflow).
 argument-hint: "[ticket-id]"
-model: opus
+model: opus[1m]
 allowed-tools:
   - Bash(gh *)
   - Bash(git *)
@@ -27,9 +27,10 @@ allowed-tools:
 # /resolve-ticket — ticket to draft PR
 
 Tier map: this main loop (opus) triages, plans, gates, and synthesizes;
-`investigator` (opus) diagnoses; `executor` implements (haiku for mechanical
-steps, `model: sonnet` override for normal ones); `reviewer` (opus) judges the
-diff before anything is pushed.
+`investigator` (its `opus[1m]` frontmatter default) diagnoses; `executor`
+implements (haiku for mechanical steps, `model: sonnet` override for normal
+ones); `reviewer` (its `opus[1m]` frontmatter default) judges the diff before
+anything is pushed.
 
 Hard rule: **nothing is created in the project — no worktree, no branch, no
 code edit — before Leo approves the plan in Step 4.** Steps 0–3 touch the
@@ -103,8 +104,8 @@ gate — Leo sees exactly what wasn't read before approving.
 
 ## Step 3 — Investigate (opus)
 
-Spawn `investigator` subagents with an explicit `model: opus` override —
-default **2 in parallel**: (a) *code path*: where the change lives, exact
+Spawn `investigator` subagents with no model override (they inherit their
+`opus[1m]` frontmatter default) — default **2 in parallel**: (a) *code path*: where the change lives, exact
 files/lines, reproduction reasoning, current test coverage; (b) *history &
 blast radius*: git archaeology, related PRs, callers/consumers of what will
 change, landmines named in ticket comments. Scale down to 1 when the ticket
@@ -164,8 +165,9 @@ Step 7 gate as a known failure, never silently.
 
 ## Step 7 — Mandatory opus review
 
-Spawn a **fresh** `reviewer` subagent (never self-review — this loop wrote the
-plan and is biased toward believing it worked). Give it: the normalized
+Spawn a **fresh** `reviewer` subagent with no model override (it inherits its
+`opus[1m]` frontmatter default) — never self-review, this loop wrote the
+plan and is biased toward believing it worked. Give it: the normalized
 ticket, the approved plan, and the diff scope
 `git diff $(git merge-base origin/<default> HEAD)...HEAD`.
 

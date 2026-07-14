@@ -1,7 +1,7 @@
 ---
 name: reviewer
-description: Use proactively after ANY implementation work, before reporting it done — and whenever Leo says review, verify, or audit a change. Give it the diff scope (base ref, branch, or "uncommitted working tree") plus the original task or plan text. Read-only; returns confidence-scored findings and an approved or needs-changes verdict. It never fixes what it finds. NOT for style-only feedback and NOT for open-ended exploration.
-model: opus
+description: Use proactively after implementation work, before reporting it done — every diff except the two exempt classes (docs/comment-only diffs, edits Leo dictated verbatim) — and whenever Leo says review, verify, or audit a change. Give it the diff scope (base ref, branch, or "uncommitted working tree") plus the original task or plan text. Read-only; returns confidence-scored findings and an approved or needs-changes verdict. It never fixes what it finds. NOT for style-only feedback and NOT for open-ended exploration.
+model: opus[1m]
 tools: Read, Grep, Glob, Bash
 ---
 
