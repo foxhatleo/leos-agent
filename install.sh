@@ -3,6 +3,7 @@
 #
 #   ./install.sh          install or repair links (idempotent, safe to re-run)
 #   ./install.sh check    report drift, change nothing (exit 1 on drift)
+#   ./install.sh mcp      register MCP servers from claude/mcp.list (opt-in)
 #
 # Anything replaced by a link is moved to ~/.claude/backups/leos-agent-<ts>/.
 set -euo pipefail
@@ -13,8 +14,8 @@ BACKUP_DIR="$CLAUDE_DIR/backups/leos-agent-$(date +%Y%m%d-%H%M%S)"
 MODE="${1:-install}"
 
 case "$MODE" in
-  install|check) ;;
-  *) echo "usage: install.sh [install|check]" >&2; exit 2 ;;
+  install|check|mcp) ;;
+  *) echo "usage: install.sh [install|check|mcp]" >&2; exit 2 ;;
 esac
 
 # Symlinked wholesale. CLAUDE.md is handled via @import instead, so the local
@@ -80,6 +81,34 @@ EOF
     echo "  write CLAUDE.md stub with import"
   fi
 }
+
+# Kept opt-in (not part of default install): work machines may not want
+# personal MCP servers registered.
+install_mcp() {
+  command -v claude >/dev/null || { echo "claude CLI not found on PATH" >&2; exit 1; }
+  local manifest="$REPO_DIR/claude/mcp.list"
+  [[ -f "$manifest" ]] || { echo "no claude/mcp.list in repo"; return; }
+  local name transport target header
+  while read -r name transport target header; do
+    [[ -z "$name" || "$name" == \#* ]] && continue
+    if claude mcp get "$name" >/dev/null 2>&1; then
+      echo "  ok    mcp:$name"
+    elif [[ -n "$header" ]]; then
+      claude mcp add --scope user --transport "$transport" --header "$header" "$name" "$target"
+      echo "  add   mcp:$name"
+    else
+      claude mcp add --scope user --transport "$transport" "$name" "$target"
+      echo "  add   mcp:$name"
+    fi
+  done <"$manifest"
+  echo "OAuth servers need one-time interactive auth per machine: run /mcp inside a session."
+  echo "Slack needs SLACK_MCP_TOKEN in the environment (see README > MCP servers)."
+}
+
+if [[ "$MODE" == "mcp" ]]; then
+  install_mcp
+  exit 0
+fi
 
 [[ "$MODE" == "check" ]] || mkdir -p "$CLAUDE_DIR"
 echo "leos-agent $MODE  (repo: $REPO_DIR, target: $CLAUDE_DIR)"

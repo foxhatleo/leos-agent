@@ -1,0 +1,10 @@
+# Portable MCP server manifest — register on a machine with: ./install.sh mcp
+# Format: name  transport  url  [header … (rest of line, passed literally)]
+# Registration and OAuth state stay machine-local in ~/.claude.json; this file
+# only says WHAT to register. OAuth servers (Linear, Atlassian) still need a
+# one-time interactive /mcp auth per machine. Slack's server doesn't support
+# the standard OAuth flow — it needs SLACK_MCP_TOKEN in the environment (see
+# README > MCP servers).
+linear-server  http  https://mcp.linear.app/mcp
+atlassian      http  https://mcp.atlassian.com/v1/mcp
+slack          http  https://mcp.slack.com/mcp  Authorization: Bearer ${SLACK_MCP_TOKEN}
