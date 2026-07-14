@@ -1,6 +1,6 @@
 ---
 name: executor
-description: Use for mechanical, well-specified work — renames, applying a known pattern across files, boilerplate, formatting fixes, running commands and reporting output. Give it exact instructions and file paths. NOT for tasks that need design decisions, debugging an unknown cause, or ambiguous scope — those belong at a stronger tier.
+description: Use proactively for mechanical, well-specified work — renames, applying a known pattern across files, boilerplate, formatting fixes, running commands and reporting output. Fan out in parallel across independent items. Give it exact instructions and file paths. NOT for tasks that need design decisions, debugging an unknown cause, or ambiguous scope — escalate those a tier.
 model: haiku
 ---
 

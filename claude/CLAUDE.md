@@ -4,24 +4,53 @@ These apply in every session on every machine. Canonical copy: `~/.leos-agent/cl
 
 ## Model routing
 
-Pick the model tier per task from the kind of work, not per session. When a task spans phases ("investigate X and fix it and review"), split it and tier each phase separately.
+Tier every task by the kind of work, not per session. When a request spans phases ("investigate X and fix it"), split it and tier each phase separately.
 
-| Work type | Typical verbs | Tier |
-|---|---|---|
-| Investigation | investigate, diagnose, debug, root-cause | Opus |
-| Planning / design | plan, design, architect, decide | Opus |
-| Implementation | implement, fix, build, refactor | Sonnet (default) |
-| Mechanical | rename, codemod, apply known pattern, boilerplate, format | Haiku |
-| Verification | review, verify, audit, judge | Opus |
+| Work type | Typical verbs | Tier | Do it via |
+|---|---|---|---|
+| Investigation | investigate, diagnose, debug, root-cause, "why does…" | Opus | `investigator` subagent |
+| Planning / design | plan, design, architect, decide | Opus | plan mode in the main loop |
+| Implementation | implement, fix, build, refactor, execute | Sonnet | main loop if session is Sonnet, else `implementer` |
+| Mechanical | rename, codemod, apply known pattern, boilerplate, format | Haiku | `executor` subagent |
+| Review / verification | review, verify, audit, judge | Opus | `reviewer` subagent on the real diff |
 
-- **Escalate, don't struggle**: if a cheap-tier task turns out ambiguous or fails twice, step up one tier rather than retrying at the same tier. When the right tier is unclear, default up.
-- **Delegate the labor**: prefer spawning the `executor` subagent for well-specified mechanical work and the `investigator` subagent for read-only research, fanned out in parallel across independent items. Keep planning, synthesis, and verification in the main loop.
+**Escalate, don't struggle**: if a cheap-tier task turns out ambiguous or fails twice, step up one tier rather than retrying at the same tier. When the right tier is unclear, default up.
+
+## Execute means execute-then-review
+
+Every implementation request — "fix", "implement", "execute the plan", anything that changes code — implicitly includes a review phase, whether or not review was mentioned. Written code is not "done"; **done means an Opus review of the actual diff came back clean.**
+
+1. Before editing, record the base: `git rev-parse HEAD` (note if changes will stay uncommitted).
+2. Implement at the routed tier; run the narrowest relevant checks (touched tests, typecheck, build).
+3. Spawn `reviewer` on the actual diff, passing the base ref (or "uncommitted working tree") and the original request/plan text. Never self-review instead; never skip because the change "is small". Only exemptions: docs/comment-only diffs, and edits Leo dictated verbatim.
+4. Blocking findings: fix at the executing tier, re-review the fix only. ONE cycle — if the second review still blocks, stop and report the findings to Leo instead of looping.
+5. Report done as three lines: what changed / checks run / review verdict.
+
+## Delegate the labor
+
+The main loop orchestrates; subagents do the volume. In an Opus session, inline bulk work burns the expensive tier — delegate down:
+
+- Locating code, mapping structure → `Explore` (Haiku), in parallel when questions are independent.
+- Diagnosis needing a verdict → `investigator` (Opus) — spawn ONE per question, fed by cheap exploration; never fan out Opus.
+- Mechanical edits → `executor` (Haiku), fanned across independent items.
+- Executing a written plan → `implementer` (Sonnet).
+- Judging a diff → `reviewer` (Opus).
+
+Scale to complexity: simple lookup = 1 agent; comparing a few areas = 2–4 in parallel; large parallel workloads = orchestration triggers below. Multi-agent costs ~15× a single chat — reserve fan-out for genuinely parallel, high-value work. Smell test: more than ~3 inline file edits or ~5 inline searches in an Opus session means I should have delegated.
 
 ## Orchestration triggers
 
 These phrases are my standing opt-in to multi-agent orchestration (Workflow tool): **"fan this out"**, **"workflow this"**, **"grind on this"**, **"do this properly"**.
 
 For a non-trivial task where I haven't used a trigger phrase, propose orchestration in one line (rough shape: agent count + model mix) and proceed single-agent unless I take the offer. Never launch a large fan-out silently.
+
+## Ticket sources
+
+Prefix → tracker mapping used by `/fix` to resolve ticket IDs. When `/fix` meets an unknown prefix, it asks once, then appends the mapping here (edit `~/.leos-agent/claude/CLAUDE.md`, not the machine-local stub) and reminds me to commit. Project CLAUDE.md files can override for repo-specific trackers.
+
+| Prefix | Tracker |
+|---|---|
+| _(none yet — /fix fills this in)_ | |
 
 ## Cost discipline
 

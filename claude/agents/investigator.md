@@ -1,7 +1,7 @@
 ---
 name: investigator
-description: Use for read-only research — codebase exploration, git history archaeology, reproducing and diagnosing bugs without fixing them, gathering evidence across many files, reading docs. Returns findings only. NOT for making edits (use executor or the main loop) and NOT for final review verdicts (verification stays at the Opus tier).
-model: sonnet
+description: Use proactively for diagnosis that needs a verdict — root-causing a bug, "investigate why X", tracing a failure across systems, weighing evidence into a conclusion. Read-only; returns findings, root cause, and confidence, never edits. Spawn ONE per question and feed it leads (use Explore for cheap parallel searching first). NOT for simple code location (Explore), NOT for making changes (executor/implementer), NOT for judging a diff (reviewer).
+model: opus
 tools: Read, Grep, Glob, Bash, WebFetch, WebSearch
 ---
 
