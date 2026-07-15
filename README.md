@@ -16,12 +16,12 @@ git clone git@github.com:foxhatleo/leos-agent.git ~/.leos-agent
 git -C ~/.leos-agent pull
 ```
 
-Content directories under `~/.claude` are **symlinked into this repo** (and `CLAUDE.md` is pulled in via `@import`), so a pull is live immediately for agents, skills, hooks, and workflows. Re-run `install.sh` after a pull that changes `claude/settings.json` (it's populated, not linked) or adds a new top-level entry; re-run `install.sh mcp` after a pull that changes `claude/mcp.list`. `install.sh check` reports drift and exits 1.
+The items inside each content directory under `~/.claude` are **symlinked into this repo one by one** (and `CLAUDE.md` is pulled in via `@import`), so a pull is live immediately for agents, skills, hooks, and workflows. Because `~/.claude/skills` (and the other dirs) stay real directories, a machine-local skill dropped alongside the linked ones is left untouched. Re-run `install.sh` after a pull that changes `claude/settings.json` (it's populated, not linked) or adds a new top-level entry; re-run `install.sh mcp` after a pull that changes `claude/mcp.list`. `install.sh check` reports drift and exits 1.
 
 ## Wiring principles
 
 - **Config files**: an **import directive** where the format supports it (`CLAUDE.md` via `@import`); **populated** — written as real, merged files — where it doesn't (`settings.json`). Populating is the fallback, not the preference.
-- **Symlinks are only for additions**: whole content directories (`agents/`, `skills/`, `hooks/`, `workflows/`) where the repo owns everything inside.
+- **Symlinks are only for additions, and per-item**: each entry inside a content directory (`agents/`, `skills/`, `hooks/`, `workflows/`) is linked individually, so the repo's items and any machine-local siblings coexist in the same real directory.
 - **`$LEOS_AGENT_PATH`** is an *optional* override, defaulting to `~/.leos-agent`. Nothing sets or exports it — everything reads `${LEOS_AGENT_PATH:-$HOME/.leos-agent}` at use time. Export it (shell profile) only if you cloned the repo somewhere else.
 - **Machine-local state**: anything a skill or agent persists is JSON in `local/<name>.json`, keyed per `owner/repo` — written via `claude/scripts/state.py`, gitignored, never synced.
 
@@ -70,7 +70,7 @@ Canonical version lives in [claude/CLAUDE.md](claude/CLAUDE.md): Opus for invest
 
 | Synced (this repo) | Machine-local (never committed) |
 |---|---|
-| `agents/`, `skills/`, `hooks/`, `workflows/` (symlinked); `mcp.list` + `claude/scripts/` (used from the repo path) | `local/` — per-repo skill/agent state JSON |
+| `agents/`, `skills/`, `hooks/`, `workflows/` (items symlinked individually); `mcp.list` + `claude/scripts/` (used from the repo path) | `local/` — per-repo skill/agent state JSON |
 | Global `CLAUDE.md` (via `@import`) | `~/.claude/CLAUDE.md` content below the `@import` line |
 | `settings.json` (populated: repo keys merged into `~/.claude/settings.json`) | Extra keys you add to `~/.claude/settings.json`; `settings.local.json` files |
 | | MCP registrations + OAuth state in `~/.claude.json` |
@@ -87,7 +87,7 @@ Secrets and API keys never go in this repo — keep them in environment variable
 
 ## Using the shared workflows
 
-`~/.claude/workflows` is symlinked to this repo and picked up globally (verified: the workflows appear as invocable by name in any session). In any project, ask Claude to "run the cost-tiered-fix workflow" with a goal or an explicit task list. A project can also carry its own `.claude/workflows/` for repo-specific scripts.
+`~/.claude/workflows` holds per-item symlinks into this repo and is picked up globally (verified: the workflows appear as invocable by name in any session). In any project, ask Claude to "run the cost-tiered-fix workflow" with a goal or an explicit task list. A project can also carry its own `.claude/workflows/` for repo-specific scripts.
 
 ## Editing flow
 

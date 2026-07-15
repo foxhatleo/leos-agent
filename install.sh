@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Bootstrap Leo's portable Claude config: content dirs (agents, skills, hooks,
-# workflows) are symlinked into this repo; CLAUDE.md is wired via @import;
+# Bootstrap Leo's portable Claude config: the *items* inside each content dir
+# (agents, skills, hooks, workflows) are symlinked into this repo one by one,
+# leaving ~/.claude/<dir> a real directory so machine-local items (e.g. a
+# local-only skill) live alongside the repo's; CLAUDE.md is wired via @import;
 # settings.json is populated (merged) as a real file.
 #
 #   ./install.sh          install or repair links (idempotent, safe to re-run)
@@ -20,10 +22,11 @@ case "$MODE" in
   *) echo "usage: install.sh [install|check|mcp]" >&2; exit 2 ;;
 esac
 
-# Wiring principle: symlinks are only for ADDITIONS (whole content dirs).
-# Config files use an import directive where the format supports it
-# (CLAUDE.md via @import) and are populated — written as real, merged files —
-# where it doesn't (settings.json).
+# Wiring principle: symlinks are only for ADDITIONS, and per-item — each entry
+# inside a content dir is linked individually so a local-only sibling in the
+# same dir is never clobbered. Config files use an import directive where the
+# format supports it (CLAUDE.md via @import) and are populated — written as
+# real, merged files — where it doesn't (settings.json).
 LINKS=(agents skills hooks workflows)
 IMPORT_LINE="@${REPO_DIR}/claude/CLAUDE.md"
 
@@ -35,24 +38,50 @@ backup() {
   echo "  moved existing $(basename "$1") -> $BACKUP_DIR/"
 }
 
-link_one() {
+# Link every item inside repo/claude/<name> into ~/.claude/<name>, keeping the
+# destination a real directory. This never touches items the repo doesn't own,
+# so a machine-local skill/agent/hook sitting in the same dir survives.
+link_dir() {
   local name="$1" src="$REPO_DIR/claude/$1" dst="$CLAUDE_DIR/$1"
-  if [[ ! -e "$src" ]]; then
+  if [[ ! -d "$src" ]]; then
     echo "  skip  $name (not in repo)"
     return
   fi
-  if [[ -L "$dst" && "$(readlink "$dst")" == "$src" ]]; then
-    echo "  ok    $name"
-    return
+  # Old layout linked the whole dir. Convert that link into a real directory so
+  # per-item links can live beside local items. A link into this repo carries
+  # nothing of its own, so drop it; a link elsewhere is backed up.
+  if [[ -L "$dst" ]]; then
+    if [[ "$MODE" == "check" ]]; then
+      echo "  DRIFT $name (whole-dir symlink from the old layout; re-run install.sh to convert)"
+      drift=1
+      return
+    fi
+    if [[ "$(readlink "$dst")" == "$src" ]]; then
+      rm "$dst"
+    else
+      backup "$dst"
+    fi
   fi
-  if [[ "$MODE" == "check" ]]; then
-    echo "  DRIFT $name (not linked to repo)"
-    drift=1
-    return
-  fi
-  [[ -e "$dst" || -L "$dst" ]] && backup "$dst"
-  ln -s "$src" "$dst"
-  echo "  link  $name -> $src"
+  [[ "$MODE" == "check" ]] || mkdir -p "$dst"
+  # Glob skips dotfiles (.gitkeep, .DS_Store) — exactly the entries we don't link.
+  local item base idst
+  for item in "$src"/*; do
+    [[ -e "$item" ]] || continue          # empty dir: glob stayed literal
+    base="$(basename "$item")"
+    idst="$dst/$base"
+    if [[ -L "$idst" && "$(readlink "$idst")" == "$item" ]]; then
+      echo "  ok    $name/$base"
+      continue
+    fi
+    if [[ "$MODE" == "check" ]]; then
+      echo "  DRIFT $name/$base (not linked to repo)"
+      drift=1
+      continue
+    fi
+    [[ -e "$idst" || -L "$idst" ]] && backup "$idst"
+    ln -s "$item" "$idst"
+    echo "  link  $name/$base -> $item"
+  done
 }
 
 # settings.json is populated, not symlinked: repo-defined keys are canonical
@@ -215,7 +244,7 @@ fi
 
 [[ "$MODE" == "check" ]] || mkdir -p "$CLAUDE_DIR" "$REPO_DIR/local"
 echo "leos-agent $MODE  (repo: $REPO_DIR, target: $CLAUDE_DIR)"
-for l in "${LINKS[@]}"; do link_one "$l"; done
+for l in "${LINKS[@]}"; do link_dir "$l"; done
 merge_settings
 ensure_import
 
