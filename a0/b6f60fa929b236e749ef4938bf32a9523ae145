@@ -1,0 +1,27 @@
+install.sh
+  s_bf90a176096ff9::t_ca3ec2adad66ba 2-5
+  s_bf90a176096ff9::t_ae6d90659e8a1b 247
+  s_bf90a176096ff9::t_e67d97cb3e26b2 25-29
+  s_bf90a176096ff9::t_ed793e8d053865 41-44,46,50-63,65-84
+README.md
+  s_bf90a176096ff9::t_fb32e26a2d5ae9 19
+  s_bf90a176096ff9::t_5e9538351189be 24
+  s_bf90a176096ff9::t_2d7becad40ccb9 73
+  s_bf90a176096ff9::t_da3d0c795235c5 90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "a0b6f60fa929b236e749ef4938bf32a9523ae145",
+  "prompts": {},
+  "sessions": {
+    "s_bf90a176096ff9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0683d55f-7bfd-44ee-9e9d-27adb50f20a1",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Wenhao \"Leo\" Liang <36321327+foxhatleo@users.noreply.github.com>"
+    }
+  }
+}
