@@ -176,13 +176,15 @@ export default async function leoPlugin(_ctx) {
                 // catastrophic rm class for write-capable agents. The
                 // precise tripwire stays hooks/bash-guard.py; OpenCode's
                 // own external_directory ask remains the outer layer.
+                // No wildcard allow entry: unmatched commands keep OpenCode's
+                // default behavior, so these denies hold regardless of
+                // whether the resolver is most-specific-match or last-match.
                 permission: {
                   bash: {
                     'rm -rf ~': 'deny',
                     'rm -rf ~/*': 'deny',
                     'rm -rf /': 'deny',
                     'rm -rf /*': 'deny',
-                    '*': 'allow',
                   },
                 },
               }),

@@ -3,10 +3,8 @@ unittest only.
 
 Run: python3 -m unittest tests.test_version_alignment -v
 
-Note: .claude-plugin/plugin.json's version is owned by a different writer
-in this v3.1 harness rollout. If it still reads "3.0.0" when this test
-runs, the assertion below is expected to fail — that is a real gap to
-close (the bump lands elsewhere), not a reason to weaken this test.
+All four manifests were bumped to 3.1.0 in the harness rollout; this
+test is the tripwire that keeps future bumps atomic across them.
 """
 
 import json
