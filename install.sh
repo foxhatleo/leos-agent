@@ -109,7 +109,7 @@ merge_settings() {
     echo "  backed up settings.json -> $BACKUP_DIR/settings.json"
   fi
   result=$(python3 - "$src" "$dst" "$mode" <<'PY'
-import json, os, sys, tempfile
+import copy, json, os, sys, tempfile
 src, dst, mode = sys.argv[1:4]
 def merge(b, p):
     if not isinstance(b, dict) or not isinstance(p, dict):
@@ -128,7 +128,10 @@ if os.path.exists(dst):
     except json.JSONDecodeError:
         print("skip:unreadable"); sys.exit()
 hook = "stale" if has_bash_guard((local.get("hooks") or {}).get("PreToolUse")) else "clean"
-merged = merge(local, repo)
+# Deep-copy: merge() shallow-copies, so without this the strip below would
+# mutate local["hooks"] through the shared reference and merged == local
+# would compare equal — silently skipping the write.
+merged = merge(copy.deepcopy(local), repo)
 pre = merged.get("hooks", {}).get("PreToolUse")
 if isinstance(pre, list):
     merged["hooks"]["PreToolUse"] = [e for e in pre if not (isinstance(e, dict) and has_bash_guard([e]))]
