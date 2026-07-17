@@ -24,7 +24,7 @@ scan_symlinks() {
   for d in agents skills hooks workflows; do
     dst="$CLAUDE_DIR/$d"
     if [[ -L "$dst" ]]; then
-      if [[ "$(readlink "$dst")" != *"/leos-agent/claude/"* ]]; then
+      if [[ "$(readlink "$dst")" != *"leos-agent/claude/"* ]]; then
         echo "  ok    $d (foreign symlink, left alone)"
       elif [[ "$mode" == "check" ]]; then
         echo "  DRIFT $d (whole-dir v2 symlink)"; drift=1
@@ -40,7 +40,10 @@ scan_symlinks() {
       # A literal unmatched glob is not a symlink, so -L also covers that.
       [[ -L "$item" ]] || continue
       base="$(basename "$item")"; target="$(readlink "$item")"
-      [[ "$target" == *"/leos-agent/claude/"* ]] || continue
+      # No leading slash: the default clone dir is ~/.leos-agent, so the
+      # path component is ".leos-agent" and a "/leos-agent/" pattern never
+      # matches. "leos-agent/claude/" catches both dotted and plain clones.
+      [[ "$target" == *"leos-agent/claude/"* ]] || continue
       if [[ "$mode" == "check" ]]; then
         echo "  DRIFT $d/$base (v2 symlink into deleted layout)"; drift=1
       else
