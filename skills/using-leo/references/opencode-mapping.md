@@ -36,4 +36,6 @@ Machine-local state reads and writes go through `python3 <repo>/scripts/state.py
 
 No Workflow tool and no `cost-tiered-fix.js` here — a batch of independent tasks is fanned out as manual parallel task-tool subagent spawns instead. MCP servers are not injected through this mapping; they are configured separately in `opencode.json`.
 
+Guard note: the bash deletion tripwire is confirmed for the primary agent. Whether `tool.execute.before` also intercepts subagent bash is unconfirmed (opencode#5894); write-capable agents therefore carry coarse `rm -rf` deny patterns as a stopgap, and OpenCode's own permission layer (`external_directory` asks for out-of-tree writes) remains the outer defense.
+
 using-leo is already loaded in this block — do not re-load it via the skill tool.

@@ -121,48 +121,6 @@ async function getBootstrap() {
   return bootstrapCache;
 }
 
-// ---------------------------------------------------------------------------
-// Message shape helpers — tolerate a plain string `content`, an array
-// `content` of typed parts, or an array `parts` of typed parts, since the
-// exact chat-message shape delivered to `experimental.chat.messages.transform`
-// is not pinned by this bridge.
-// ---------------------------------------------------------------------------
-
-function messageText(message) {
-  if (!message) return '';
-  if (typeof message.content === 'string') return message.content;
-  if (Array.isArray(message.parts)) {
-    return message.parts
-      .filter((p) => p && p.type === 'text' && typeof p.text === 'string')
-      .map((p) => p.text)
-      .join('');
-  }
-  if (Array.isArray(message.content)) {
-    return message.content
-      .filter((p) => p && p.type === 'text' && typeof p.text === 'string')
-      .map((p) => p.text)
-      .join('');
-  }
-  return '';
-}
-
-function injectBootstrap(message, bootstrap) {
-  if (typeof message.content === 'string') {
-    message.content = bootstrap + '\n\n' + message.content;
-    return true;
-  }
-  const list = Array.isArray(message.parts) ? message.parts : Array.isArray(message.content) ? message.content : null;
-  if (list) {
-    const idx = list.findIndex((p) => p && p.type === 'text');
-    if (idx !== -1) {
-      list[idx] = { ...list[idx], text: bootstrap + '\n\n' + list[idx].text };
-    } else {
-      list.unshift({ type: 'text', text: bootstrap });
-    }
-    return true;
-  }
-  return false;
-}
 
 // ---------------------------------------------------------------------------
 // Plugin
@@ -210,24 +168,42 @@ export default async function leoPlugin(_ctx) {
           mode: 'subagent',
           model: TIER_MODEL[tier],
           prompt: body,
-          ...(readOnly ? { permission: { edit: 'deny' } } : {}),
+          ...(readOnly
+            ? { permission: { edit: 'deny' } }
+            : {
+                // Stopgap for opencode#5894 (tool.execute.before may not
+                // intercept subagent tool calls): coarse denies on the
+                // catastrophic rm class for write-capable agents. The
+                // precise tripwire stays hooks/bash-guard.py; OpenCode's
+                // own external_directory ask remains the outer layer.
+                permission: {
+                  bash: {
+                    'rm -rf ~': 'deny',
+                    'rm -rf ~/*': 'deny',
+                    'rm -rf /': 'deny',
+                    'rm -rf /*': 'deny',
+                    '*': 'allow',
+                  },
+                },
+              }),
         };
       }
 
       return config;
     },
 
-    'experimental.chat.messages.transform': async (input, output) => {
-      const messages = (output && output.messages) || (input && input.messages);
-      if (!Array.isArray(messages)) return;
-
-      const firstUser = messages.find((m) => m && m.role === 'user');
-      if (!firstUser) return;
-
-      if (messageText(firstUser).includes(LEO_POLICY_MARKER)) return; // already injected this session
+    // The system array is the reliable injection point: it takes plain
+    // strings (no Part[] schema to satisfy) and this hook fires on every
+    // request, so the policy also survives context compaction — same
+    // property the Claude SessionStart matcher provides via `compact`.
+    'experimental.chat.system.transform': async (input, output) => {
+      const system = output && output.system;
+      if (!Array.isArray(system)) return;
+      // Dedupe: skip if the policy marker is already present in the array.
+      if (system.some((s) => typeof s === 'string' && s.includes(LEO_POLICY_MARKER))) return;
 
       const bootstrap = await getBootstrap();
-      injectBootstrap(firstUser, bootstrap);
+      if (bootstrap) system.push(bootstrap);
     },
 
     'tool.execute.before': async (input, output) => {

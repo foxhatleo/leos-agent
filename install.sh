@@ -119,9 +119,13 @@ import json, sys
 try:
     installed = json.loads(sys.argv[1])
     if isinstance(installed, dict):
-        installed = installed.get("plugins", [])
+        # Real codex CLI wraps entries as {"installed": [...]}; tolerate a
+        # claude-style {"plugins": [...]} too.
+        installed = installed.get("installed") or installed.get("plugins") or []
     match = next(p for p in installed if isinstance(p, dict)
-                 and (p.get("id") or p.get("name")) in ("leo", "leo@leos-agent"))
+                 and (p.get("pluginId") or p.get("id") or p.get("name"))
+                 in ("leo", "leo@leos-agent")
+                 and p.get("installed", True))
 except StopIteration:
     print("not-found"); sys.exit()
 except Exception:
