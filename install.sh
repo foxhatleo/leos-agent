@@ -276,7 +276,8 @@ run_check() {
 run_update() {
   command -v claude >/dev/null || { echo "claude CLI not found on PATH — install it first, then re-run: ./install.sh update" >&2; exit 1; }
   claude plugin marketplace update leos-agent
-  claude plugin update leo
+  # The CLI addresses installed plugins by full id, not bare name.
+  claude plugin update leo@leos-agent
 }
 # Codex has no repo-relative marketplace source (unlike `claude plugin
 # marketplace add $REPO_DIR`), so this stages a local-marketplace tree
