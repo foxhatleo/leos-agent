@@ -35,7 +35,10 @@ scan_symlinks() {
     fi
     [[ -d "$dst" ]] || { echo "  ok    $d (not present)"; continue; }
     for item in "$dst"/*; do
-      [[ -e "$item" && -L "$item" ]] || continue   # empty dir: glob stayed literal
+      # -L only: -e follows symlinks, and the v2 links are DANGLING once the
+      # old layout is deleted — exactly the entries this scan must remove.
+      # A literal unmatched glob is not a symlink, so -L also covers that.
+      [[ -L "$item" ]] || continue
       base="$(basename "$item")"; target="$(readlink "$item")"
       [[ "$target" == *"/leos-agent/claude/"* ]] || continue
       if [[ "$mode" == "check" ]]; then
