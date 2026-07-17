@@ -100,6 +100,46 @@ class TestMigrateRemovesV2Symlinks(InstallTestCase):
         self.assertEqual(self.links(), before, "check mode must not mutate")
 
 
+class TestCheckPluginVersion(InstallTestCase):
+    """check must recognize the plugin via the REAL `claude plugin list
+    --json` shape: a top-level array whose entries carry `id`, not `name`
+    (captured from claude CLI on 2026-07-17)."""
+
+    def fake_claude(self, version):
+        bin_dir = os.path.join(self.tmp.name, "bin")
+        os.makedirs(bin_dir, exist_ok=True)
+        payload = json.dumps([{
+            "id": "leo@leos-agent", "version": version,
+            "scope": "user", "enabled": True,
+        }])
+        with open(os.path.join(bin_dir, "claude"), "w") as fh:
+            fh.write("#!/bin/sh\n"
+                     f"if [ \"$1\" = plugin ] && [ \"$2\" = list ]; then echo '{payload}'; exit 0; fi\n"
+                     "exit 0\n")
+        os.chmod(os.path.join(bin_dir, "claude"), 0o755)
+        return bin_dir
+
+    def run_check(self, version):
+        bin_dir = self.fake_claude(version)
+        return run_install("check", self.claude_dir, extra_env={
+            "PATH": bin_dir + os.pathsep + os.environ.get("PATH", ""),
+        })
+
+    def repo_version(self):
+        with open(os.path.join(REPO, ".claude-plugin", "plugin.json")) as fh:
+            return json.load(fh)["version"]
+
+    def test_installed_matching_version_is_ok(self):
+        result = self.run_check(self.repo_version())
+        self.assertNotIn("plugin leo not installed", result.stdout)
+        self.assertIn("ok    plugin leo@", result.stdout)
+
+    def test_version_drift_is_flagged(self):
+        result = self.run_check("0.0.1")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("version drift", result.stdout.lower())
+
+
 class TestSettingsMerge(InstallTestCase):
     """settings must merge prefs, strip the stale bash-guard hook entry, and
     keep machine-local keys — in one write."""

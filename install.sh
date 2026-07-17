@@ -79,7 +79,10 @@ try:
     # Tolerate both output shapes: a top-level array, or {"plugins": [...]}.
     if isinstance(installed, dict):
         installed = installed.get("plugins", [])
-    match = next(p for p in installed if isinstance(p, dict) and p.get("name") in ("leo", "leo@leos-agent"))
+    # Real CLI output keys the entry as id ("leo@leos-agent"); tolerate a
+    # name field too in case the shape shifts.
+    match = next(p for p in installed if isinstance(p, dict)
+                 and (p.get("id") or p.get("name")) in ("leo", "leo@leos-agent"))
 except StopIteration:
     print("not-found"); sys.exit()
 except Exception:
