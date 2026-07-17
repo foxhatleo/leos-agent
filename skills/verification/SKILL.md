@@ -93,10 +93,10 @@ it as such.
 
 ## Works with
 
-- CLAUDE.md.v2-policy — execute-then-review is the outer loop this gate
-  feeds into; the reviewer subagent judges the diff, this skill governs the
-  evidence claimed leading up to that judgment.
+- The execute-then-review policy (injected leo:using-leo) — that gate is the
+  outer loop this skill feeds into; the reviewer subagent judges the diff,
+  this skill governs the evidence claimed leading up to that judgment.
 - reviewer — its verdict is itself a claim to relay accurately, not to
   soften or summarize away.
-- verify, run — concrete ways to exercise a change end-to-end when the
-  falsifying command is "does the real flow work," not just a test suite.
+- End-to-end exercise — when the falsifying command is "does the real flow
+  work," drive the actual app or flow, not just the test suite.

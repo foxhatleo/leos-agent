@@ -70,6 +70,9 @@ check_plugin_version() {
 import json, sys
 try:
     installed = json.loads(sys.argv[1])
+    # Tolerate both output shapes: a top-level array, or {"plugins": [...]}.
+    if isinstance(installed, dict):
+        installed = installed.get("plugins", [])
     match = next(p for p in installed if isinstance(p, dict) and p.get("name") in ("leo", "leo@leos-agent"))
 except StopIteration:
     print("not-found"); sys.exit()

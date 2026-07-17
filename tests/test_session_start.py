@@ -23,6 +23,9 @@ REQUIRED_SUBSTRINGS = (
     "failed twice on the same question",
 )
 
+# Deliberate deviation from the plan's "< 8000": the plan estimated the v2
+# policy at ~4KB but its real body is ~8KB; with the Skill index the injected
+# text lands at ~9.1KB. 12000 guards against future creep, not the estimate.
 MAX_ADDITIONAL_CONTEXT_LEN = 12000
 
 

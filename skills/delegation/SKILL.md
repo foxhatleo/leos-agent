@@ -9,8 +9,8 @@ when_to_use: >
   Any time work is routed to a subagent (Explore, investigator, executor,
   implementer, reviewer, expert) rather than done inline — single dispatch or
   fan-out. NOT for deciding *which* tier a task belongs in (that's the
-  routing table in CLAUDE.md); this skill covers what to do once the tier is
-  already chosen.
+  routing table in the injected leo:using-leo policy); this skill covers what
+  to do once the tier is already chosen.
 ---
 
 # delegation

@@ -57,8 +57,8 @@ capability at runtime (a Linear issue-fetch tool; the Atlassian tools
 `getAccessibleAtlassianResources` → cloudId → `getJiraIssue`). Use ToolSearch
 if the tools are deferred.
 
-Prefix → tracker mappings live in machine-local state (see CLAUDE.md ›
-Machine-local state): `STATE='python3 "${CLAUDE_PLUGIN_ROOT}/scripts/state.py"'`,
+Prefix → tracker mappings live in machine-local state (see the injected
+leo:using-leo policy › Machine-local state): `STATE='python3 "${CLAUDE_PLUGIN_ROOT}/scripts/state.py"'`,
 file `resolve-ticket.json`, keyed by this repo's `owner/repo`, shaped
 `{"prefixes": {"ENG": "linear"}}`. A project CLAUDE.md may still declare its
 tracker outright — that wins without a lookup.
