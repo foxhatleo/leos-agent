@@ -1,0 +1,14 @@
+{
+  "name": "leo",
+  "displayName": "leo",
+  "description": "Leo's portable agent config: cost-tiered model routing, execute-then-review policy, process skills, and guards.",
+  "version": "3.1.0",
+  "author": { "name": "Leo Liang" },
+  "homepage": "https://github.com/foxhatleo/leos-agent",
+  "repository": "https://github.com/foxhatleo/leos-agent",
+  "license": "MIT",
+  "keywords": ["routing", "review", "process", "guardrails"],
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks-cursor.json",
+  "agents": []
+}

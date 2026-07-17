@@ -21,12 +21,15 @@ REQUIRED_SUBSTRINGS = (
     "[1m]",
     "Skill index",
     "failed twice on the same question",
+    "Claude Code harness mapping",
 )
 
-# Deliberate deviation from the plan's "< 8000": the plan estimated the v2
-# policy at ~4KB but its real body is ~8KB; with the Skill index the injected
-# text lands at ~9.1KB. 12000 guards against future creep, not the estimate.
-MAX_ADDITIONAL_CONTEXT_LEN = 12000
+# Deliberate raise from 12000: the policy body is now harness-neutral (tier
+# names as role labels, no [1m]/Agent-tool/Workflow-tool specifics) and the
+# injector appends the Claude harness mapping on top of it, so the combined
+# payload (body + mapping) runs larger than the body alone did. 14000 guards
+# against future creep of body+mapping together, not a fresh estimate.
+MAX_ADDITIONAL_CONTEXT_LEN = 14000
 
 
 def _run(plugin_root):

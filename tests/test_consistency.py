@@ -16,6 +16,12 @@ SKILLS_DIR = os.path.join(REPO, "skills")
 WORKFLOWS_DIR = os.path.join(REPO, "workflows")
 HOOKS_DIR = os.path.join(REPO, "hooks")
 POLICY_FILE = os.path.join(SKILLS_DIR, "using-leo", "SKILL.md")
+# The Claude-specific concretes ([1m] aliases, Agent-tool enum, Workflow-tool
+# paragraph) moved out of the harness-neutral POLICY_FILE and into this
+# per-harness mapping, appended by hooks/session-start.py for Claude
+# sessions only. Any assertion that used to pin "[1m]" against POLICY_FILE
+# now pins it here instead.
+CLAUDE_MAPPING = os.path.join(SKILLS_DIR, "using-leo", "references", "claude-mapping.md")
 PERSONAL_SETTINGS = os.path.join(REPO, "install", "personal-settings.json")
 HOOKS_JSON = os.path.join(HOOKS_DIR, "hooks.json")
 
@@ -165,6 +171,21 @@ def skill_dirs():
     }
 
 
+def reference_files():
+    """Per-harness mapping docs under skills/*/references/*.md (e.g.
+    claude-mapping.md). Not SKILL.md files, so skill_files() never sees
+    them — they need their own explicit inclusion wherever a scan claims
+    to cover "everything a leo: token could live in"."""
+    paths = []
+    for root, _dirs, files in os.walk(SKILLS_DIR):
+        if os.path.basename(root) != "references":
+            continue
+        for f in files:
+            if f.endswith(".md"):
+                paths.append(os.path.join(root, f))
+    return sorted(paths)
+
+
 class TestAgentRoster(unittest.TestCase):
     def test_agent_file_set(self):
         stems = {os.path.splitext(f)[0].lower() for f in agent_files()}
@@ -183,6 +204,14 @@ class TestFrontmatterNameMatchesFilename(unittest.TestCase):
 
 
 class TestRoutingTableAgentsResolve(unittest.TestCase):
+    # The neutral-core routing table phrases each role as prose inside a
+    # table cell ("the `investigator` role", "the `planner` role (or ...)",
+    # "the `executor` role", ...) rather than a bare backticked name. The
+    # extraction below already tolerates that: it scans every "|"-prefixed
+    # line (any table row) plus the Explore special-case line for *any*
+    # backticked, colon-free token, so "the `investigator` role" still
+    # yields the candidate "investigator". No change needed here beyond
+    # this note — verified against the neutral SKILL.md body.
     def test_backtick_agent_names_exist(self):
         with open(POLICY_FILE, encoding="utf-8") as fh:
             lines = fh.read().splitlines()
@@ -286,6 +315,31 @@ class TestExpertClauseAlignment(unittest.TestCase):
         self.assertIn(clause, policy_text)
 
 
+class TestClaudeMapping(unittest.TestCase):
+    """The [1m]-alias rule used to live in POLICY_FILE; the neutral-core
+    split moved it out to the Claude-only harness mapping. Pin its
+    existence and content here so a future edit can't silently drop the
+    rule while trimming the (now harness-neutral) policy body."""
+
+    def test_mapping_file_exists(self):
+        self.assertTrue(os.path.isfile(CLAUDE_MAPPING), f"missing {CLAUDE_MAPPING}")
+
+    def test_mapping_states_the_1m_alias_rule(self):
+        with open(CLAUDE_MAPPING, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("[1m]", text)
+        self.assertIn("opus[1m]", text)
+        self.assertIn("sonnet[1m]", text)
+
+    def test_policy_file_no_longer_pins_1m(self):
+        # The body is harness-neutral now: no [1m] alias literal, no
+        # Agent-tool model enum, no Workflow-tool paragraph — those are
+        # Claude-mapping concerns.
+        with open(POLICY_FILE, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertNotIn("[1m]", text)
+
+
 class TestExplicitToolsDeclared(unittest.TestCase):
     def test_readonly_agents_declare_tools(self):
         for stem in ("investigator", "reviewer", "expert", "explore", "planner"):
@@ -313,15 +367,26 @@ class TestExecutorImplementerTools(unittest.TestCase):
                 )
 
 
-def _state_py_prefix_matches(line, idx):
-    """True if the STATE_PREFIX immediately precedes `state.py` at `idx`,
+# Harness mapping files legitimately reference state.py through their own
+# harness's root spelling; skill BODIES stay on the Claude-neutral prefix.
+HARNESS_STATE_PREFIXES = (
+    STATE_PREFIX,                 # ${CLAUDE_PLUGIN_ROOT}/scripts/
+    "$PLUGIN_ROOT/scripts/",      # Codex
+    "<repo>/scripts/",            # OpenCode mapping prose
+    "<plugin-root>/scripts/",     # Cursor mapping prose
+)
+
+
+def _state_py_prefix_matches(line, idx, prefixes=(STATE_PREFIX,)):
+    """True if an allowed prefix immediately precedes `state.py` at `idx`,
     tolerating a leading double-quote right before the prefix (state.py is
-    now invoked as a quoted shell arg: `"${CLAUDE_PLUGIN_ROOT}/scripts/state.py"`)."""
-    plen = len(STATE_PREFIX)
-    if idx - plen >= 0 and line[idx - plen:idx] == STATE_PREFIX:
-        return True
-    if idx - plen - 1 >= 0 and line[idx - plen - 1:idx] == '"' + STATE_PREFIX:
-        return True
+    invoked as a quoted shell arg: `"${CLAUDE_PLUGIN_ROOT}/scripts/state.py"`)."""
+    for prefix in prefixes:
+        plen = len(prefix)
+        if idx - plen >= 0 and line[idx - plen:idx] == prefix:
+            return True
+        if idx - plen - 1 >= 0 and line[idx - plen - 1:idx] == '"' + prefix:
+            return True
     return False
 
 
@@ -347,13 +412,20 @@ class TestStatePyReferencesPrefixed(unittest.TestCase):
                     for line in lines
                 )
 
+                # Harness mapping appendices speak their own harness's root
+                # variable; everything else stays on the Claude-neutral prefix.
+                in_references = (
+                    os.sep + os.path.join("using-leo", "references") + os.sep in path
+                )
+                allowed = HARNESS_STATE_PREFIXES if in_references else (STATE_PREFIX,)
+
                 for lineno, line in enumerate(lines, start=1):
                     if "state.py" not in line:
                         continue
                     for m in re.finditer(re.escape("state.py"), line):
                         idx = m.start()
 
-                        has_full_prefix = _state_py_prefix_matches(line, idx)
+                        has_full_prefix = _state_py_prefix_matches(line, idx, allowed)
 
                         # Check if this is bare shorthand (not /state.py)
                         is_bare_shorthand = idx == 0 or line[idx - 1] != "/"
@@ -413,7 +485,10 @@ class TestSkillRoster(unittest.TestCase):
 class TestCrossReferences(unittest.TestCase):
     def test_every_leo_token_resolves_to_a_skill_dir(self):
         dirs = skill_dirs()
-        paths = agent_paths() + skill_files()
+        # Per-harness mapping docs (e.g. claude-mapping.md) are sources too:
+        # a mapping can introduce leo:<name> tokens of its own, and those
+        # must resolve exactly like a token in the policy body or a skill.
+        paths = agent_paths() + skill_files() + reference_files()
         if os.path.isfile(POLICY_FILE) and POLICY_FILE not in paths:
             paths.append(POLICY_FILE)
 

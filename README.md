@@ -1,10 +1,39 @@
 # leo
 
-A portable personal Claude Code environment, packaged as a Claude Code plugin: cost-tiered model routing, 7 subagents, 13 skills, a bash-guard `PreToolUse` hook, MCP servers, and machine-local state — one clone, works on any machine.
+A portable personal AI coding environment: cost-tiered model routing, 7 subagents, 13 skills, a bash-guard `PreToolUse` hook, MCP servers, and machine-local state — one clone, works on any machine, across four harnesses:
 
-The routing policy isn't a doc you have to remember to read — a `SessionStart` hook injects it as context at the start of every session, and again after `/clear` and after compaction, so it survives the moments that normally wipe it.
+- **Claude Code** — native, full system. The reference implementation everything else maps onto.
+- **Codex CLI** — near-full parity: policy bootstrap, skills, tier agents (as `leo-*` agent TOMLs), guard.
+- **OpenCode** — full skills + agents + guard, shipped as a native JS plugin.
+- **Cursor** — skills + bootstrap + guard; tier personas are guidance layered on Cursor's own model picker, pending live validation on a Cursor machine.
 
-## Install
+The routing policy isn't a doc you have to remember to read — each harness's own bootstrap mechanism (Claude: `SessionStart` hook; others: the harness's equivalent injection point) injects it as context at the start of every session, and again after a context reset, so it survives the moments that normally wipe it. `skills/using-leo/SKILL.md` is the neutral policy body (tier names are role labels, not model names); each harness appends its own mapping from `skills/using-leo/references/`.
+
+## Harness support
+
+| Harness | Policy bootstrap | Skills | Tier agents | Guard | MCP | Install |
+|---|---|---|---|---|---|---|
+| Claude Code | `SessionStart` hook | native (`skills/`) | native subagents | `PreToolUse` hook | native (`.mcp.json`) | `claude plugin install` |
+| Codex CLI | session bootstrap | native | `leo-*` agent TOMLs in `~/.codex/agents/` | guard hook | supported | `./install.sh codex` |
+| OpenCode | plugin bootstrap | native, via JS plugin | native, via JS plugin | native, via JS plugin | supported | one-line `opencode.jsonc` entry |
+| Cursor | packaged skill bootstrap | native | guidance only (no enforced model switch) | native | supported | `/add-plugin leo`, or symlink fallback |
+
+Cursor row is honest, not aspirational: skills/bootstrap/guard ship and load, but tier-persona enforcement and the packaged-plugin install path are **unverified live** — nobody has run them end-to-end on an actual Cursor install yet. See the Cursor install section below for the fallback and the verification checklist.
+
+## Tier mapping per harness
+
+Tier names (Opus / Sonnet / Haiku / Fable) are role labels from `skills/using-leo/SKILL.md`. Concrete models per harness:
+
+| Tier | Claude Code | Codex CLI | Cursor | OpenCode |
+|---|---|---|---|---|
+| Opus | `opus[1m]` | `gpt-5.6-sol` (effort high) | Claude Opus 4.8 | `openrouter/z-ai/glm-5.2` |
+| Sonnet | `sonnet[1m]` | `gpt-5.6-terra` (effort medium) | Grok 4.5 | `openrouter/minimax/minimax-m3` |
+| Haiku | `haiku` | `gpt-5.6-luna` (effort low) | Composer 2.5 | `openrouter/deepseek/deepseek-v4-pro` |
+| Fable | `fable` | — (no Fable) | Claude Fable 5 | — (no Fable) |
+
+On Codex and OpenCode, escalation past Opus caps out: stop and report, offering an Opus-tier continuation (`gpt-5.6-sol`) or a handoff to a harness that has the Fable rung (Claude Code or Cursor). OpenCode's three model IDs are defaults — override any of them per-machine with `LEO_MODEL_OPUS`, `LEO_MODEL_SONNET`, `LEO_MODEL_HAIKU`.
+
+## Install — Claude Code
 
 ```sh
 git clone git@github.com:foxhatleo/leos-agent.git ~/.leos-agent
@@ -15,7 +44,7 @@ claude plugin install leo@leos-agent
 ~/.leos-agent/install.sh check      # confirms wiring, exits 1 on drift
 ```
 
-## Update
+### Update
 
 ```sh
 git -C ~/.leos-agent pull
@@ -27,6 +56,51 @@ A marketplace install is a cached copy, not a symlink — `install.sh update` re
 ### Dev loop
 
 `claude --plugin-dir ~/.leos-agent` loads the clone in place — edits are live immediately, no reinstall, no version bump.
+
+## Install — Codex CLI
+
+```sh
+~/.leos-agent/install.sh codex
+```
+
+Builds a local marketplace under Codex's plugin search path and adds `leo` as a Codex plugin, same as the Claude Code flow. The one copy exception in the whole repo: six `leo-*` agent TOMLs — one per Claude agent stem (`executor`/`explore`/`implementer`/`investigator`/`planner`/`reviewer`) except `expert`, since Codex has no Fable tier to run it at — are copied, not symlinked, to `~/.codex/agents/`, because Codex reads agents from a fixed real-file directory. Any existing file there is backed up first, same convention as the Claude `install.sh` backup dir. Re-run `./install.sh codex` after a version bump — there's no separate update verb yet.
+
+## Install — OpenCode
+
+Add one line to the plugin array in `~/.config/opencode/opencode.jsonc`:
+
+```jsonc
+{ "plugin": ["/Users/leoliang/.leos-agent"] }
+```
+
+or, off this machine, the git spec: `"plugin": ["git+https://github.com/foxhatleo/leos-agent"]`. Then export an OpenRouter key (`OPENROUTER_API_KEY`) so the three `openrouter/*` tier models resolve. No separate build step — the plugin is a native JS module OpenCode loads directly.
+
+## Install — Cursor
+
+Two ways in, one recommended, one fallback:
+
+**Packaged route (needs live verification on a Cursor machine):**
+
+```
+add plugin source ~/.leos-agent
+/add-plugin leo
+```
+
+**Local-dir symlink fallback (pragmatic, works today):**
+
+```sh
+mkdir -p ~/.cursor/plugins/local
+ln -s ~/.leos-agent ~/.cursor/plugins/local/leo
+```
+
+Use the fallback if `/add-plugin` doesn't pick up the packaged source — Cursor's plugin loader hasn't been confirmed against this repo's manifest shape yet.
+
+**Live-verification checklist** (run through this on an actual Cursor install before trusting the packaged route):
+
+- Env vars the bootstrap expects (`LEOS_AGENT_PATH`, any Cursor-specific equivalent) actually resolve inside a Cursor session.
+- `agents:[]` suppression works — Cursor doesn't surface leo's tier agents as pickable personas in the UI where that would conflict with its own agent picker.
+- The bash guard hook actually denies a catastrophic command inside Cursor's tool-call path, not just in a standalone test.
+- The tier-persona picker slugs (Opus/Sonnet/Haiku/Fable → Claude Opus 4.8/Grok 4.5/Composer 2.5/Claude Fable 5) show up correctly and are selectable from Cursor's own model picker.
 
 ## Layout
 
@@ -144,3 +218,7 @@ Secrets and API keys never go in this repo — keep them in environment variable
 ## v2 → v3
 
 v2 was a dotfiles-style repo: `install.sh` symlinked `agents/`, `skills/`, `hooks/`, `workflows/` item-by-item into `~/.claude/`, and `CLAUDE.md` picked up the policy via `@import`. v3 packages the same content as a Claude Code plugin (`leo`, self-listed in marketplace `leos-agent`) installed through `claude plugin install`; the policy is no longer an import line in `CLAUDE.md` but a skill (`skills/using-leo/SKILL.md`) injected by a `SessionStart` hook, so it also survives `/clear` and compaction, which `@import` never did. `install.sh migrate` tears down the old symlinks and `@import` line — run it once per machine; it's a no-op on a fresh install. After migrating, updates flow through `claude plugin` and a `plugin.json` version bump instead of a live-editable symlink farm.
+
+## Version
+
+`3.1.0` is pinned in all four harness manifests at once — `.claude-plugin/plugin.json` (Claude), and the Codex/OpenCode/Cursor equivalents added by v3.1 — so a version string never drifts between harnesses on the same machine. Shipping a change: bump `3.1.0` in every manifest, then `./install.sh update` for Claude (re-syncs settings + machine-local wiring) and `./install.sh codex` again for Codex (re-copies the `leo-*` agent TOMLs). OpenCode and Cursor pick up new content on their next load — no separate update verb, since neither copies files.

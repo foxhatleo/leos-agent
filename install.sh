@@ -1,22 +1,32 @@
 #!/usr/bin/env bash
 # v3 is a Claude Code PLUGIN, installed via `claude plugin` — this script only
-# handles what a plugin manifest can't: v2 cleanup, personal settings, drift.
-# Anything mutated is first backed up to ~/.claude/backups/leos-agent-<ts>/.
+# handles what a plugin manifest can't: v2 cleanup, personal settings, drift,
+# plus staging/installing the Codex CLI equivalent of the same plugin.
+# Anything mutated is first backed up to ~/.claude/backups/leos-agent-<ts>/
+# (Codex-side files back up to ~/.codex/backups/leos-agent-<ts>/ instead).
 #   migrate [--install]  one-time v2->v3 cleanup, idempotent (default mode);
 #                         --install also registers+installs the plugin
 #   settings              merge install/personal-settings.json into
 #                          ~/.claude/settings.json (repo keys win)
 #   check                  report drift, change nothing (exit 1 if any)
 #   update                 pull the marketplace + update the plugin
+#   codex-build             stage a Codex local-marketplace tree under
+#                          $LEOS_AGENT_PATH/local/codex-marketplace/
+#   codex                   codex-build, then register+install the leo
+#                          plugin and agent files for the Codex CLI
 #   mcp                    deprecated no-op (MCP now ships in-plugin)
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
-BACKUP_DIR="$CLAUDE_DIR/backups/leos-agent-$(date +%Y%m%d-%H%M%S)"
+TS="$(date +%Y%m%d-%H%M%S)"
+BACKUP_DIR="$CLAUDE_DIR/backups/leos-agent-$TS"
+CODEX_BACKUP_DIR="$HOME/.codex/backups/leos-agent-$TS"
 MODE="${1:-migrate}"
 drift=0
 backup() { mkdir -p "$BACKUP_DIR"; mv "$1" "$BACKUP_DIR/"; echo "  moved existing $(basename "$1") -> $BACKUP_DIR/"; }
+codex_backup() { mkdir -p "$CODEX_BACKUP_DIR"; mv "$1" "$CODEX_BACKUP_DIR/"; echo "  moved existing $(basename "$1") -> $CODEX_BACKUP_DIR/"; }
+codex_stage_dir() { echo "${LEOS_AGENT_PATH:-$HOME/.leos-agent}/local/codex-marketplace"; }
 # v2 symlinked repo items (per-item, or old-old whole-dir) into a layout the
 # plugin doesn't use. Remove them; leave real files/foreign symlinks alone.
 scan_symlinks() {
@@ -99,6 +109,54 @@ PY
                echo "  DRIFT version drift: installed=$inst repo=$repo (pull + ./install.sh update)"; drift=1 ;;
     *)         echo "  skip  plugin version (unexpected output)" ;;
   esac
+}
+# codex plugin list --json mirrors the claude check above: same match-by-id-
+# or-name, same tolerance for a bare array vs {"plugins": [...]}.
+check_codex_plugin_version() {
+  local result
+  result=$(python3 - "$(codex plugin list --json 2>/dev/null || echo '[]')" "$REPO_DIR/.codex-plugin/plugin.json" <<'PY'
+import json, sys
+try:
+    installed = json.loads(sys.argv[1])
+    if isinstance(installed, dict):
+        installed = installed.get("plugins", [])
+    match = next(p for p in installed if isinstance(p, dict)
+                 and (p.get("id") or p.get("name")) in ("leo", "leo@leos-agent"))
+except StopIteration:
+    print("not-found"); sys.exit()
+except Exception:
+    print("skip"); sys.exit()
+v, repo_v = match.get("version", ""), json.load(open(sys.argv[2])).get("version", "")
+print(f"ok:{v}" if v == repo_v else f"drift:{v}:{repo_v}")
+PY
+  )
+  case "$result" in
+    skip)      echo "  skip  codex plugin version (could not parse codex plugin list --json)" ;;
+    not-found) echo "  DRIFT codex leo plugin not installed (./install.sh codex)"; drift=1 ;;
+    ok:*)      echo "  ok    codex plugin leo@${result#ok:}" ;;
+    drift:*)   IFS=: read -r _ inst repo <<<"$result"
+               echo "  DRIFT codex plugin version drift: installed=$inst repo=$repo (./install.sh codex)"; drift=1 ;;
+    *)         echo "  skip  codex plugin version (unexpected output)" ;;
+  esac
+}
+# The Codex tier mapping drops Fable (expert), so 6 of the 7 subagent roles
+# ship as install/codex/agents/leo-*.toml; check every one landed.
+CODEX_AGENT_NAMES=(leo-explore leo-investigator leo-planner leo-implementer leo-executor leo-reviewer)
+check_codex_agents() {
+  local dir="$HOME/.codex/agents" name missing=()
+  for name in "${CODEX_AGENT_NAMES[@]}"; do
+    [[ -e "$dir/$name.toml" ]] || missing+=("$name.toml")
+  done
+  if [[ ${#missing[@]} -eq 0 ]]; then
+    echo "  ok    codex agents (6/6 present in $dir)"
+  else
+    echo "  DRIFT codex agents missing from $dir: ${missing[*]} (./install.sh codex)"; drift=1
+  fi
+}
+check_codex() {
+  command -v codex >/dev/null || { echo "  skip  codex (codex CLI not found)"; return; }
+  check_codex_plugin_version
+  check_codex_agents
 }
 # settings.json is populated, not symlinked: repo keys are canonical, every
 # machine-local key survives. Also drops any PreToolUse entry mentioning
@@ -206,6 +264,7 @@ run_check() {
   scan_symlinks check
   claude_md check
   check_plugin_version
+  check_codex
   merge_settings check
   leos_agent_path_check
   exit "$drift"
@@ -214,6 +273,75 @@ run_update() {
   command -v claude >/dev/null || { echo "claude CLI not found on PATH — install it first, then re-run: ./install.sh update" >&2; exit 1; }
   claude plugin marketplace update leos-agent
   claude plugin update leo
+}
+# Codex has no repo-relative marketplace source (unlike `claude plugin
+# marketplace add $REPO_DIR`), so this stages a local-marketplace tree
+# instead: a marketplace.json pointing at a copy of the plugin bundle. The
+# stage dir is a build artifact — wipe and rebuild every time.
+run_codex_build() {
+  local stage; stage="$(codex_stage_dir)"
+  echo "leos-agent codex-build  (repo: $REPO_DIR, stage: $stage)"
+  rm -rf "$stage"
+  mkdir -p "$stage/.agents/plugins" "$stage/plugins/leo"
+  cat >"$stage/.agents/plugins/marketplace.json" <<'EOF'
+{
+  "name": "leos-agent",
+  "plugins": [
+    {
+      "name": "leo",
+      "source": { "source": "local", "path": "./plugins/leo" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Developer Tools"
+    }
+  ]
+}
+EOF
+  echo "  ok    .agents/plugins/marketplace.json"
+  local item
+  for item in .codex-plugin skills hooks scripts .mcp.json; do
+    cp -R "$REPO_DIR/$item" "$stage/plugins/leo/"
+    echo "  ok    plugins/leo/$item"
+  done
+  # Local dev leaves __pycache__ under hooks/ and scripts/; it's gitignored
+  # and has no business in a shipped plugin bundle.
+  find "$stage/plugins/leo" -name '__pycache__' -type d -exec rm -rf {} +
+  # Codex hooks use ${PLUGIN_ROOT}, not Claude Code's ${CLAUDE_PLUGIN_ROOT};
+  # it also fires SessionStart on thread resume, so the matcher needs
+  # "resume" alongside Claude's startup|clear|compact. Staged copy only —
+  # the repo's hooks/hooks.json (Claude's) is untouched.
+  python3 - "$stage/plugins/leo/hooks/hooks.json" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace("${CLAUDE_PLUGIN_ROOT}", "${PLUGIN_ROOT}")
+s = s.replace("startup|clear|compact", "startup|resume|clear|compact")
+open(p, "w").write(s)
+PY
+  echo "  fix   plugins/leo/hooks/hooks.json (\${PLUGIN_ROOT}, resume matcher)"
+  echo "  stage $stage"
+}
+run_codex() {
+  command -v codex >/dev/null || { echo "codex CLI not found on PATH — install it first, then re-run: ./install.sh codex" >&2; exit 1; }
+  run_codex_build
+  local stage; stage="$(codex_stage_dir)"
+  echo "  run   codex plugin marketplace add \"$stage\""; codex plugin marketplace add "$stage"
+  echo "  run   codex plugin add leo@leos-agent"; codex plugin add leo@leos-agent
+  local agents_dir="$HOME/.codex/agents" f base
+  mkdir -p "$agents_dir"
+  for f in "$REPO_DIR"/install/codex/agents/leo-*.toml; do
+    [[ -e "$f" ]] || continue
+    base="$(basename "$f")"
+    [[ -e "$agents_dir/$base" ]] && codex_backup "$agents_dir/$base"
+    cp "$f" "$agents_dir/$base"
+    echo "  ok    $base -> $agents_dir/"
+  done
+  cat <<'EOF'
+
+One-time follow-ups:
+  1. Codex will prompt to trust this plugin's hooks on first run — accept it.
+  2. export SLACK_MCP_TOKEN in your shell profile for the Slack MCP server.
+  3. Start a new Codex thread to pick up the leo plugin.
+EOF
 }
 run_mcp() {
   cat <<'EOF'
@@ -224,10 +352,12 @@ mcp: deprecated no-op — MCP servers now ship in the plugin's .mcp.json.
 EOF
 }
 case "$MODE" in
-  migrate)  run_migrate "${2:-}" ;;
-  settings) echo "leos-agent settings  (repo: $REPO_DIR, target: $CLAUDE_DIR)"; merge_settings write ;;
-  check)    run_check ;;
-  update)   run_update ;;
-  mcp)      run_mcp ;;
-  *) echo "usage: install.sh [migrate [--install]|settings|check|update|mcp]" >&2; exit 2 ;;
+  migrate)     run_migrate "${2:-}" ;;
+  settings)    echo "leos-agent settings  (repo: $REPO_DIR, target: $CLAUDE_DIR)"; merge_settings write ;;
+  check)       run_check ;;
+  update)      run_update ;;
+  codex-build) run_codex_build ;;
+  codex)       run_codex ;;
+  mcp)         run_mcp ;;
+  *) echo "usage: install.sh [migrate [--install]|settings|check|update|codex-build|codex|mcp]" >&2; exit 2 ;;
 esac

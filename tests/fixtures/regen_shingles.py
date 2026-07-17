@@ -13,6 +13,15 @@ construction. Writes the sorted, deduplicated set of hex digests to the
 fixture, one per line. Idempotent: re-running against an unchanged
 source tree reproduces byte-identical output.
 
+Also walks two additional roots for JS/script coverage, since Layer B
+now also scans our own .opencode/plugin/leo.js and hooks/ scripts:
+- SUPERPOWERS_PATH/.opencode/**/*.js
+- SUPERPOWERS_PATH/hooks/** (any file, any extension)
+Both are hashed with shingles(text, strip_markdown=False) — "strip
+nothing" mode — matching how our own leo.js and hooks/ scripts are
+scanned on the comparison side, so the two sides can ever actually
+overlap. The .md sources keep the default strip_markdown=True pass.
+
 Usage:
     python3 tests/fixtures/regen_shingles.py
     SUPERPOWERS_PATH=/path/to/superpowers python3 tests/fixtures/regen_shingles.py
@@ -30,6 +39,7 @@ FIXTURE_PATH = os.path.join(FIXTURE_DIR, "superpowers_shingles.txt")
 
 
 def _source_paths(superpowers_path):
+    """Markdown sources, hashed with the default strip_markdown=True pass."""
     paths = []
     skills_dir = os.path.join(superpowers_path, "skills")
     if os.path.isdir(skills_dir):
@@ -44,26 +54,51 @@ def _source_paths(superpowers_path):
     return sorted(paths)
 
 
+def _raw_source_paths(superpowers_path):
+    """Non-markdown sources (JS/scripts), hashed with strip_markdown=False
+    ("strip nothing") to match how our own leo.js and hooks/ scripts are
+    scanned."""
+    paths = []
+    opencode_dir = os.path.join(superpowers_path, ".opencode")
+    if os.path.isdir(opencode_dir):
+        for root, _dirs, files in os.walk(opencode_dir):
+            for f in files:
+                if f.endswith(".js"):
+                    paths.append(os.path.join(root, f))
+    hooks_dir = os.path.join(superpowers_path, "hooks")
+    if os.path.isdir(hooks_dir):
+        for root, _dirs, files in os.walk(hooks_dir):
+            for f in files:
+                paths.append(os.path.join(root, f))
+    return sorted(paths)
+
+
 def main():
     superpowers_path = os.environ.get(
         "SUPERPOWERS_PATH", os.path.expanduser("~/workspace/superpowers")
     )
-    paths = _source_paths(superpowers_path)
-    if not paths:
-        print(f"no source .md files found under {superpowers_path}", file=sys.stderr)
+    md_paths = _source_paths(superpowers_path)
+    raw_paths = _raw_source_paths(superpowers_path)
+    if not md_paths and not raw_paths:
+        print(f"no source files found under {superpowers_path}", file=sys.stderr)
         sys.exit(1)
 
     all_hashes = set()
-    for path in paths:
+    for path in md_paths:
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
         all_hashes |= shingles(text)
+    for path in raw_paths:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        all_hashes |= shingles(text, strip_markdown=False)
 
     with open(FIXTURE_PATH, "w", encoding="utf-8") as fh:
         for digest in sorted(all_hashes):
             fh.write(digest + "\n")
 
-    print(f"wrote {len(all_hashes)} shingle hashes from {len(paths)} files to {FIXTURE_PATH}")
+    total_files = len(md_paths) + len(raw_paths)
+    print(f"wrote {len(all_hashes)} shingle hashes from {total_files} files to {FIXTURE_PATH}")
 
 
 if __name__ == "__main__":

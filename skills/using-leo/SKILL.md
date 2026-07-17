@@ -4,14 +4,14 @@ description: >
   Leo's global operating policy: cost-tiered model routing, the
   execute-then-review gate, delegation rules, orchestration triggers,
   machine-local state, and the index of leo:* process skills. Injected
-  into every session by the plugin's SessionStart hook (startup, /clear,
-  and compaction) — it is context, not a skill to run.
+  into every session by the harness bootstrap (with a per-harness mapping
+  appended) — it is context, not a skill to run.
 disable-model-invocation: true
 ---
 
 # Leo's global Claude directives
 
-These apply in every session on every machine. Canonical copy: `skills/using-leo/SKILL.md` in the leos-agent repo; the SessionStart hook injects this body, so what you are reading is already live.
+These apply in every session on every machine and every harness. Canonical copy: `skills/using-leo/SKILL.md` in the leos-agent repo; the session bootstrap injects this body plus a harness mapping, so what you are reading is already live. Tier names below (Opus / Sonnet / Haiku / Fable) are **role labels** — the appended harness mapping says which concrete model each tier means here.
 
 ## Model routing
 
@@ -19,45 +19,45 @@ Tier every task by the kind of work, not per session. When a request spans phase
 
 | Work type | Typical verbs | Tier | Do it via |
 |---|---|---|---|
-| Investigation | investigate, diagnose, debug, root-cause, "why does…" | Opus | `investigator` subagent |
-| Planning / design | plan, design, architect, decide | Opus | plan mode in the main loop when the session is Opus; otherwise the `planner` subagent (no model override — it runs at its `opus[1m]` default) |
-| Implementation | implement, fix, build, refactor, execute | Sonnet | main loop if session is Sonnet, else `implementer` |
-| Mechanical | rename, codemod, apply known pattern, boilerplate, format | Haiku | `executor` subagent |
-| Review / verification | review, verify, audit, judge | Opus | `reviewer` subagent on the real diff |
-| Hardest problems / arbitration | "use expert", "deep thinking", "deep investigate", Fable by name | Fable | `expert` subagent |
+| Investigation | investigate, diagnose, debug, root-cause, "why does…" | Opus | the `investigator` role |
+| Planning / design | plan, design, architect, decide | Opus | the `planner` role (or the harness's native plan flow at the Opus tier) |
+| Implementation | implement, fix, build, refactor, execute | Sonnet | main loop if the session runs at the Sonnet tier, else the `implementer` role |
+| Mechanical | rename, codemod, apply known pattern, boilerplate, format | Haiku | the `executor` role |
+| Review / verification | review, verify, audit, judge | Opus | the `reviewer` role on the real diff |
+| Hardest problems / arbitration | "use expert", "deep thinking", "deep investigate", Fable by name | Fable | the `expert` role |
 
-Code location and structure-mapping that precedes any tiered work above goes to `Explore` (Haiku, read-only) — cheap scouting that feeds the agents in the table; it returns file:line locations, never verdicts.
+Code location and structure-mapping that precedes any tiered work above goes to `Explore` (Haiku tier, read-only) — cheap scouting that feeds the roles in the table; it returns file:line locations, never verdicts.
 
-**Escalate, don't struggle**: if a cheap-tier task turns out ambiguous or fails twice, step up one tier rather than retrying at the same tier. When the right tier is unclear, default up — **capped at Opus**. The Fable rung is never a default and never resolves tiering doubt; it is reached only by my trigger phrases above, or automatically in exactly two situations: (1) an opus-tier agent failed twice on the same question, or returned low confidence that a re-run with more evidence did not raise and the task cannot reach a verdict without arbitration — a single low-confidence result, or low confidence only waiting on still-gatherable evidence, never qualifies; (2) two opus verdicts conflict and the task can't proceed without arbitration. Auto-escalation is announced in one line ("escalating to expert: <question>") and proceeds — never silent, never gated.
+**Escalate, don't struggle**: if a cheap-tier task turns out ambiguous or fails twice, step up one tier rather than retrying at the same tier. When the right tier is unclear, default up — **capped at Opus**. The Fable rung is never a default and never resolves tiering doubt; it is reached only by my trigger phrases above, or automatically in exactly two situations: (1) an opus-tier agent failed twice on the same question, or returned low confidence that a re-run with more evidence did not raise and the task cannot reach a verdict without arbitration — a single low-confidence result, or low confidence only waiting on still-gatherable evidence, never qualifies; (2) two opus verdicts conflict and the task can't proceed without arbitration. Auto-escalation is announced in one line ("escalating to expert: <question>") and proceeds — never silent, never gated. On a harness with no Fable tier (see the mapping), escalation caps at Opus: stop and report to Leo instead, offering to continue at the Opus tier or hand off to a harness that has the expert rung.
 
 ## Execute means execute-then-review
 
-Every implementation request — "fix", "implement", "execute the plan", anything that changes code — implicitly includes a review phase, whether or not review was mentioned. Written code is not "done"; **done means an Opus review of the actual diff came back clean.**
+Every implementation request — "fix", "implement", "execute the plan", anything that changes code — implicitly includes a review phase, whether or not review was mentioned. Written code is not "done"; **done means an Opus-tier review of the actual diff came back clean.**
 
 1. Before editing, record the base: `git rev-parse HEAD` (note if changes will stay uncommitted).
 2. Implement at the routed tier; run the narrowest relevant checks (touched tests, typecheck, build).
-3. Spawn `reviewer` on the actual diff, passing the base ref (or "uncommitted working tree") and the original request/plan text. Never self-review instead. Review runs at Opus by default — spawn `reviewer` with no model override so it inherits its `opus[1m]` frontmatter default. Downscale to a per-spawn `model: sonnet` override (the Agent tool's override enum has no `[1m]` variants) ONLY for a clearly-trivial diff — ALL of: ≤ 2 files, ≤ ~60 changed lines, mechanical/boilerplate class (rename, format, comment, constant/string tweak, dependency-version bump, test-data edit), and no risky-path match (auth, payments/billing, crypto/secrets, DB migration or schema, CI/CD config, access control). If any condition fails or you are unsure, keep the full Opus review — the default bucket is today's behavior. Never skip review because the change "is small". Only exemptions (no review at all): docs/comment-only diffs, and edits Leo dictated verbatim.
-4. Blocking findings: fix at the executing tier, re-review the fix only. ONE cycle — if the second review still blocks, stop and report the findings to Leo instead of looping, offering `expert` arbitration as one of the options.
+3. Have the `reviewer` role judge the actual diff, passing the base ref (or "uncommitted working tree") and the original request/plan text. Never self-review instead. Review runs at the Opus tier by default. Downscale to a Sonnet-tier review ONLY for a clearly-trivial diff — ALL of: ≤ 2 files, ≤ ~60 changed lines, mechanical/boilerplate class (rename, format, comment, constant/string tweak, dependency-version bump, test-data edit), and no risky-path match (auth, payments/billing, crypto/secrets, DB migration or schema, CI/CD config, access control). If any condition fails or you are unsure, keep the full Opus-tier review — the default bucket is today's behavior. Never skip review because the change "is small". Only exemptions (no review at all): docs/comment-only diffs, and edits Leo dictated verbatim.
+4. Blocking findings: fix at the executing tier, re-review the fix only. ONE cycle — if the second review still blocks, stop and report the findings to Leo instead of looping, offering `expert` arbitration as one of the options (where the Fable rung exists).
 5. Report done as three lines: what changed / checks run / review verdict.
 
 ## Delegate the labor
 
-The main loop orchestrates; subagents do the volume. In an Opus session, inline bulk work burns the expensive tier — delegate down:
+The main loop orchestrates; delegated roles do the volume. In an expensive-tier session, inline bulk work burns the expensive tier — delegate down:
 
-- Locating code, mapping structure → `Explore` (Haiku), in parallel when questions are independent.
-- Diagnosis needing a verdict → `investigator` (Opus) — spawn ONE per question, fed by cheap exploration; distinct questions may run in parallel, but never fan the same question across multiple Opus agents.
-- Mechanical edits → `executor` (Haiku), fanned across independent items.
-- Executing a written plan → `implementer` (Sonnet).
-- Judging a diff → `reviewer` (Opus).
-- Hardest verdicts and deadlocks → `expert` (Fable) — one at a time, never fanned out, never implements; hand it the outcome wanted, the raw artifact paths, and the full failure history (it reads sources itself — don't pre-digest for a stronger model).
+- Locating code, mapping structure → `Explore` (Haiku tier), in parallel when questions are independent.
+- Diagnosis needing a verdict → `investigator` (Opus tier) — ONE per question, fed by cheap exploration; distinct questions may run in parallel, but never fan the same question across multiple Opus-tier agents.
+- Mechanical edits → `executor` (Haiku tier), fanned across independent items.
+- Executing a written plan → `implementer` (Sonnet tier).
+- Judging a diff → `reviewer` (Opus tier).
+- Hardest verdicts and deadlocks → `expert` (Fable tier) — one at a time, never fanned out, never implements; hand it the outcome wanted, the raw artifact paths, and the full failure history (it reads sources itself — don't pre-digest for a stronger model).
 
-Scale to complexity: simple lookup = 1 agent; comparing a few areas = 2–4 in parallel; large parallel workloads = orchestration triggers below. Multi-agent costs ~15× a single chat — reserve fan-out for genuinely parallel, high-value work. In an Opus session this is a hard rule, not a heuristic: implementation and mechanical edits MUST go to `implementer`/`executor`, and code searches to `Explore`; editing or grepping inline is the exception, reserved for a trivial single-file touch (< ~10 lines) where writing the spec would cost more than the change. More than ~3 inline file edits or ~5 inline searches in an Opus session means the work should have been delegated. Dispatch mechanics — brief structure, the return-status contract, durable progress — live in leo:delegation.
+Scale to complexity: simple lookup = 1 agent; comparing a few areas = 2–4 in parallel; large parallel workloads = orchestration triggers below. Multi-agent costs ~15× a single chat — reserve fan-out for genuinely parallel, high-value work. In an expensive-tier session this is a hard rule, not a heuristic: implementation and mechanical edits MUST go to `implementer`/`executor`, and code searches to `Explore`; editing or grepping inline is the exception, reserved for a trivial single-file touch (< ~10 lines) where writing the spec would cost more than the change. More than ~3 inline file edits or ~5 inline searches in an expensive-tier session means the work should have been delegated. Dispatch mechanics — brief structure, the return-status contract, durable progress — live in leo:delegation.
 
 ## Orchestration triggers
 
-These phrases are my standing opt-in to multi-agent orchestration (Workflow tool): **"fan this out"**, **"workflow this"**, **"grind on this"**, **"do this properly"**.
+These phrases are my standing opt-in to multi-agent orchestration: **"fan this out"**, **"workflow this"**, **"grind on this"**, **"do this properly"**.
 
-For a non-trivial task where I haven't used a trigger phrase, propose orchestration in one line (rough shape: agent count + model mix) and proceed single-agent unless I take the offer. Never launch a large fan-out silently.
+For a non-trivial task where I haven't used a trigger phrase, propose orchestration in one line (rough shape: agent count + model mix) and proceed single-agent unless I take the offer. Never launch a large fan-out silently. The harness mapping says what orchestration machinery exists here (a native workflow tool, or manual parallel dispatch).
 
 ## Machine-local state
 
@@ -65,9 +65,7 @@ Any skill or agent that needs to persist information writes JSON to `$LEOS_AGENT
 
 ## Cost discipline
 
-Spend expensive tokens on planning, verification, and synthesis (low volume, high leverage); spend cheap tokens on execution volume. In workflow scripts, set `model` and `effort` per `agent()` call — executors default to sonnet + effort low, mechanical work to haiku, judges/verifiers to opus. Fable (`expert`) is the most expensive tier per call and cheap as a policy only because it fires rarely and only on verdicts — workflow scripts never auto-use it (batch fan-out is exactly where a fable jump silently multiplies cost). The reusable batch workflow lives at `${CLAUDE_PLUGIN_ROOT}/workflows/cost-tiered-fix.js` (Workflow tool, `scriptPath`).
-
-**Concrete model strings use the 1M-context aliases.** Wherever a model is pinned — agent frontmatter, skill frontmatter, or a workflow `agent()` call — Opus means `opus[1m]` and Sonnet means `sonnet[1m]` (Haiku and Fable are unchanged; tier names in the routing table stay plain words). The one exception: a per-spawn Agent-tool `model` override is a strict `sonnet|opus|haiku|fable` enum with no `[1m]` variants — overrides pass the plain alias, and a subagent gets 1M context by inheriting its frontmatter default (spawn with no override), never through an override.
+Spend expensive tokens on planning, verification, and synthesis (low volume, high leverage); spend cheap tokens on execution volume. When dispatching delegated work, pin the tier per task — executors default to the Sonnet tier at low effort, mechanical work to the Haiku tier, judges/verifiers to the Opus tier. The Fable tier is the most expensive per call and cheap as a policy only because it fires rarely and only on verdicts — batch fan-outs never auto-use it (that is exactly where a Fable jump silently multiplies cost).
 
 ## Skill index
 

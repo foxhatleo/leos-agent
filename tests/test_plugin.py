@@ -29,7 +29,7 @@ class TestPluginJson(unittest.TestCase):
     def test_valid_and_fields(self):
         data = _load(PLUGIN_JSON)
         self.assertEqual(data.get("name"), "leo")
-        self.assertEqual(data.get("version"), "3.0.0")
+        self.assertEqual(data.get("version"), "3.1.0")
         self.assertTrue(data.get("description", "").strip())
         self.assertRegex(data["name"], KEBAB_CASE_RE, f"name {data['name']!r} is not kebab-case")
 
