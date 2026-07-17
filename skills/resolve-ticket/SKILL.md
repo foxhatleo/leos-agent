@@ -58,7 +58,7 @@ capability at runtime (a Linear issue-fetch tool; the Atlassian tools
 if the tools are deferred.
 
 Prefix → tracker mappings live in machine-local state (see CLAUDE.md ›
-Machine-local state): `STATE="python3 ${LEOS_AGENT_PATH:-$HOME/.leos-agent}/claude/scripts/state.py"`,
+Machine-local state): `STATE='python3 "${CLAUDE_PLUGIN_ROOT}/scripts/state.py"'`,
 file `resolve-ticket.json`, keyed by this repo's `owner/repo`, shaped
 `{"prefixes": {"ENG": "linear"}}`. A project CLAUDE.md may still declare its
 tracker outright — that wins without a lookup.
@@ -72,10 +72,9 @@ tracker outright — that wins without a lookup.
    for the same prefix under other repos — if found, present that tracker as
    the recommended option. Persist the confirmed mapping per repo:
    `state.py merge resolve-ticket <owner/repo> '{"prefixes": {"<PREFIX>": "<tracker>"}}'`.
-3. **No tracker reachable**: tell Leo which MCP is missing and the remedy
-   (`~/.leos-agent/install.sh mcp`, or
-   `claude mcp add --transport http linear-server https://mcp.linear.app/mcp`,
-   then `/mcp` to authenticate), and offer: paste the ticket text to continue,
+3. **No tracker reachable**: tell Leo which MCP is missing and the remedy —
+   the MCP servers ship in the plugin's `.mcp.json`: enable the leo plugin,
+   then `/mcp` once for OAuth — and offer: paste the ticket text to continue,
    or abort. Never guess ticket content.
 
 Normalize the result: `{id, url, title, body, acceptance criteria, recent

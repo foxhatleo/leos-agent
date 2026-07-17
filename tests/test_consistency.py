@@ -1,5 +1,6 @@
 """Config-consistency lint: invariants tying together agents/, skills/,
-CLAUDE.md, settings.json, and workflows/. Stdlib unittest only.
+the using-leo policy skill, personal-settings.json, and workflows/. Stdlib
+unittest only.
 
 Run: python3 -m unittest tests.test_consistency -v
 """
@@ -10,14 +11,17 @@ import re
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-AGENTS_DIR = os.path.join(REPO, "claude", "agents")
-SKILLS_DIR = os.path.join(REPO, "claude", "skills")
-WORKFLOWS_DIR = os.path.join(REPO, "claude", "workflows")
-CLAUDE_MD = os.path.join(REPO, "claude", "CLAUDE.md")
-SETTINGS_JSON = os.path.join(REPO, "claude", "settings.json")
-HOOKS_DIR = os.path.join(REPO, "claude", "hooks")
+AGENTS_DIR = os.path.join(REPO, "agents")
+SKILLS_DIR = os.path.join(REPO, "skills")
+WORKFLOWS_DIR = os.path.join(REPO, "workflows")
+HOOKS_DIR = os.path.join(REPO, "hooks")
+POLICY_FILE = os.path.join(SKILLS_DIR, "using-leo", "SKILL.md")
+PERSONAL_SETTINGS = os.path.join(REPO, "install", "personal-settings.json")
+HOOKS_JSON = os.path.join(HOOKS_DIR, "hooks.json")
 
-STATE_PREFIX = "${LEOS_AGENT_PATH:-$HOME/.leos-agent}/claude/scripts/"
+# state.py is invoked through the plugin-root variable, quoted, e.g.:
+#   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/state.py"
+STATE_PREFIX = "${CLAUDE_PLUGIN_ROOT}/scripts/"
 
 ALLOWED_MODELS = {"haiku", "sonnet[1m]", "opus[1m]", "fable", "inherit"}
 
@@ -36,12 +40,48 @@ EXPECTED_MODEL_BY_AGENT = {
     "expert": "fable",
 }
 
-ALLOWED_FRONTMATTER_KEYS = {"name", "description", "model", "effort", "tools", "color"}
+ALLOWED_FRONTMATTER_KEYS = {"name", "description", "model", "effort", "tools", "color", "skills"}
+
+ALLOWED_SKILL_FRONTMATTER_KEYS = {
+    "name", "description", "when_to_use", "disable-model-invocation", "model", "effort",
+    # Operational (user-invoked) skills carry the standard command keys.
+    "allowed-tools", "argument-hint",
+}
 
 EXECUTOR_TOOL_SET = {"Read", "Grep", "Glob", "Bash", "Write", "Edit"}
 
+# The 13 skill dirs the v3 plugin ships: the policy skill itself, the 9
+# process skills it indexes, and the 3 user-facing workflow skills.
+EXPECTED_SKILL_DIRS = {
+    "using-leo", "review-pr", "resolve-ticket", "watch-review",
+    "debugging", "verification", "test-first", "writing-plans",
+    "executing-plans", "brainstorming", "worktrees", "finishing-a-branch",
+    "delegation",
+}
+
+# The 9 process skills the policy's "## Skill index" table must reference.
+PROCESS_SKILLS = {
+    "debugging", "verification", "test-first", "writing-plans",
+    "executing-plans", "brainstorming", "worktrees", "finishing-a-branch",
+    "delegation",
+}
+
+# Per-skill token pins: substrings each skill's body must contain, so the
+# skill's load-bearing mechanics can't quietly drift away in a later edit.
+PER_SKILL_TOKENS = {
+    "debugging": {"Reproduce", "Localize", "Hypothesize", "Prove", "expert", "file:line", "two failures"},
+    "verification": {"what changed", "checks run", "review verdict", "fresh", "falsify"},
+    "test-first": {"Exemptions", "spike", "config", "failing test"},
+    "writing-plans": {"TBD", "placeholder", "git rev-parse HEAD", "base ref"},
+    "executing-plans": {"checkpoint", "one fix-then-re-review cycle"},
+    "brainstorming": {"proportional", "blast radius", "strawman"},
+    "worktrees": {"provenance", "never remove a worktree from inside", "check-ignore"},
+    "finishing-a-branch": {"typed confirmation", "review verdict"},
+    "delegation": {"needs-context", "blocked", "concerns", "cost-tiered-fix.js", "disjoint"},
+}
+
 # Canonical auto-escalation clause (whitespace-normalized), shared by
-# expert.md and CLAUDE.md.
+# expert.md and the using-leo policy skill.
 CANONICAL_CLAUSE = (
     "an opus-tier agent failed twice on the same question, or returned low "
     "confidence that a re-run with more evidence did not raise and the task "
@@ -59,7 +99,9 @@ def parse_frontmatter(path):
     """Tiny YAML-ish frontmatter parser: text between leading '---' fences.
 
     Parses column-0 `key:` lines; block scalars (`key: >` or `key: |`)
-    absorb indented continuation lines, joined with spaces.
+    absorb indented continuation lines, joined with spaces. List values
+    (`key:` followed by `- item` lines) are recorded with an empty string —
+    good enough for key-presence checks, not for reading list contents.
     Returns dict[str, str].
     """
     with open(path, encoding="utf-8") as fh:
@@ -93,12 +135,16 @@ def parse_frontmatter(path):
                 is_block = False
         elif key is not None and is_block and line.strip():
             result[key] = (result[key] + " " + line.strip()).strip()
-        # blank lines or non-continuation lines are ignored
+        # blank lines, list items, or other non-continuation lines are ignored
     return result
 
 
 def agent_files():
     return sorted(f for f in os.listdir(AGENTS_DIR) if f.endswith(".md"))
+
+
+def agent_paths():
+    return [os.path.join(AGENTS_DIR, f) for f in agent_files()]
 
 
 def skill_files():
@@ -108,6 +154,15 @@ def skill_files():
             if f == "SKILL.md":
                 paths.append(os.path.join(root, f))
     return sorted(paths)
+
+
+def skill_dirs():
+    if not os.path.isdir(SKILLS_DIR):
+        return set()
+    return {
+        d for d in os.listdir(SKILLS_DIR)
+        if os.path.isfile(os.path.join(SKILLS_DIR, d, "SKILL.md"))
+    }
 
 
 class TestAgentRoster(unittest.TestCase):
@@ -129,14 +184,22 @@ class TestFrontmatterNameMatchesFilename(unittest.TestCase):
 
 class TestRoutingTableAgentsResolve(unittest.TestCase):
     def test_backtick_agent_names_exist(self):
-        with open(CLAUDE_MD, encoding="utf-8") as fh:
+        with open(POLICY_FILE, encoding="utf-8") as fh:
             lines = fh.read().splitlines()
 
         candidates = set()
+        in_skill_index = False
         for line in lines:
+            if line.strip().startswith("## Skill index"):
+                in_skill_index = True
+            if in_skill_index:
+                # The Skill index section's rows point at leo:<skill> tokens,
+                # not agent names — never scan it for agent candidates.
+                continue
             if line.startswith("|") or "Code location and structure-mapping" in line:
                 for tok in re.findall(r"`([A-Za-z]+)`", line):
-                    candidates.add(tok)
+                    if ":" not in tok:
+                        candidates.add(tok)
 
         self.assertTrue(candidates, "expected to find at least one backtick agent name")
 
@@ -186,7 +249,7 @@ class TestModelValueAllowlist(unittest.TestCase):
 
 class TestNoBarePins(unittest.TestCase):
     def test_agents_and_skills_frontmatter(self):
-        paths = [os.path.join(AGENTS_DIR, f) for f in agent_files()] + skill_files()
+        paths = agent_paths() + skill_files()
         for path in paths:
             fm = parse_frontmatter(path)
             with self.subTest(file=os.path.relpath(path, REPO)):
@@ -215,12 +278,12 @@ class TestExpertClauseAlignment(unittest.TestCase):
     def test_clause_present_in_both(self):
         with open(os.path.join(AGENTS_DIR, "expert.md"), encoding="utf-8") as fh:
             expert_text = _norm_ws(fh.read())
-        with open(CLAUDE_MD, encoding="utf-8") as fh:
-            claude_text = _norm_ws(fh.read())
+        with open(POLICY_FILE, encoding="utf-8") as fh:
+            policy_text = _norm_ws(fh.read())
 
         clause = _norm_ws(CANONICAL_CLAUSE)
         self.assertIn(clause, expert_text)
-        self.assertIn(clause, claude_text)
+        self.assertIn(clause, policy_text)
 
 
 class TestExplicitToolsDeclared(unittest.TestCase):
@@ -250,9 +313,22 @@ class TestExecutorImplementerTools(unittest.TestCase):
                 )
 
 
+def _state_py_prefix_matches(line, idx):
+    """True if the STATE_PREFIX immediately precedes `state.py` at `idx`,
+    tolerating a leading double-quote right before the prefix (state.py is
+    now invoked as a quoted shell arg: `"${CLAUDE_PLUGIN_ROOT}/scripts/state.py"`)."""
+    plen = len(STATE_PREFIX)
+    if idx - plen >= 0 and line[idx - plen:idx] == STATE_PREFIX:
+        return True
+    if idx - plen - 1 >= 0 and line[idx - plen - 1:idx] == '"' + STATE_PREFIX:
+        return True
+    return False
+
+
 class TestStatePyReferencesPrefixed(unittest.TestCase):
-    """Invariant 11: state.py references must use the full LEOS_AGENT_PATH prefix,
-    except bare shorthand when an alias definition (STATE=...) exists in the same file."""
+    """Invariant 11: state.py references must use the full CLAUDE_PLUGIN_ROOT
+    prefix, except bare shorthand when an alias definition exists in the
+    same file."""
 
     def test_every_occurrence_prefixed(self):
         for root, dirs, files in os.walk(SKILLS_DIR):
@@ -264,9 +340,10 @@ class TestStatePyReferencesPrefixed(unittest.TestCase):
                 with open(path, encoding="utf-8") as fh:
                     lines = fh.readlines()
 
-                # Check if this file has an alias definition matching STATE="...state.py..."
+                # Check if this file has an alias definition matching
+                # STATE=...${CLAUDE_PLUGIN_ROOT}/scripts/state.py...
                 has_alias = any(
-                    re.search(r'=\s*"[^"]*\$\{LEOS_AGENT_PATH[^}]*\}/claude/scripts/state\.py', line)
+                    re.search(r'=[^=]*\$\{CLAUDE_PLUGIN_ROOT\}/scripts/state\.py', line)
                     for line in lines
                 )
 
@@ -275,10 +352,8 @@ class TestStatePyReferencesPrefixed(unittest.TestCase):
                         continue
                     for m in re.finditer(re.escape("state.py"), line):
                         idx = m.start()
-                        prefix_start = idx - len(STATE_PREFIX)
 
-                        # Check if this occurrence has the full prefix
-                        has_full_prefix = prefix_start >= 0 and line[prefix_start:idx] == STATE_PREFIX
+                        has_full_prefix = _state_py_prefix_matches(line, idx)
 
                         # Check if this is bare shorthand (not /state.py)
                         is_bare_shorthand = idx == 0 or line[idx - 1] != "/"
@@ -290,37 +365,132 @@ class TestStatePyReferencesPrefixed(unittest.TestCase):
                             self.assertTrue(
                                 passes,
                                 f"{os.path.relpath(path, REPO)}:{lineno} references "
-                                f"state.py without the full LEOS_AGENT_PATH prefix",
+                                f"state.py without the full CLAUDE_PLUGIN_ROOT prefix",
                             )
 
 
-class TestSettingsJson(unittest.TestCase):
-    def test_settings_and_hook(self):
-        with open(SETTINGS_JSON, encoding="utf-8") as fh:
+class TestPersonalSettings(unittest.TestCase):
+    def test_valid_json_with_expected_keys_and_no_hooks(self):
+        with open(PERSONAL_SETTINGS, encoding="utf-8") as fh:
             settings = json.load(fh)
 
-        pre_tool_use = settings.get("hooks", {}).get("PreToolUse", [])
-        self.assertTrue(pre_tool_use, "expected hooks.PreToolUse to be non-empty")
-
-        found_bash_guard = False
-        for entry in pre_tool_use:
-            self.assertEqual(entry.get("matcher"), "Bash")
-            for hook in entry.get("hooks", []):
-                self.assertIsInstance(hook.get("timeout"), int)
-                if "bash-guard.py" in hook.get("command", ""):
-                    found_bash_guard = True
-
-        self.assertTrue(found_bash_guard, "expected a hook command referencing bash-guard.py")
-        self.assertTrue(os.path.isfile(os.path.join(HOOKS_DIR, "bash-guard.py")))
+        expected_keys = {
+            "permissions", "tui", "theme", "skipWorkflowUsageWarning", "agentPushNotifEnabled",
+        }
+        self.assertEqual(set(settings.keys()), expected_keys)
+        self.assertNotIn("hooks", settings)
 
 
 class TestReviewerExemptions(unittest.TestCase):
     def test_reviewer_mentions_both_exemptions(self):
-        with open(os.path.join(AGENTS_DIR, "reviewer.md"), encoding="utf-8") as fh:
-            fm = parse_frontmatter(os.path.join(AGENTS_DIR, "reviewer.md"))
+        fm = parse_frontmatter(os.path.join(AGENTS_DIR, "reviewer.md"))
         description = fm.get("description", "")
         self.assertIn("docs", description)
         self.assertIn("dictated", description)
+
+
+class TestSkillFrontmatter(unittest.TestCase):
+    def test_every_skill_parses_with_expected_shape(self):
+        for path in skill_files():
+            with self.subTest(file=os.path.relpath(path, REPO)):
+                fm = parse_frontmatter(path)  # raises on malformed fence
+                parent_dir = os.path.basename(os.path.dirname(path))
+                self.assertIn("name", fm)
+                self.assertEqual(fm["name"], parent_dir)
+                self.assertIn("description", fm)
+                self.assertTrue(fm["description"].strip())
+                self.assertTrue(
+                    set(fm.keys()) <= ALLOWED_SKILL_FRONTMATTER_KEYS,
+                    f"unexpected keys: {set(fm.keys()) - ALLOWED_SKILL_FRONTMATTER_KEYS}",
+                )
+
+
+class TestSkillRoster(unittest.TestCase):
+    def test_skill_dir_set(self):
+        self.assertEqual(skill_dirs(), EXPECTED_SKILL_DIRS)
+
+
+class TestCrossReferences(unittest.TestCase):
+    def test_every_leo_token_resolves_to_a_skill_dir(self):
+        dirs = skill_dirs()
+        paths = agent_paths() + skill_files()
+        if os.path.isfile(POLICY_FILE) and POLICY_FILE not in paths:
+            paths.append(POLICY_FILE)
+
+        for path in paths:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+            for tok in re.findall(r"leo:[a-z-]+", text):
+                name = tok[len("leo:"):]
+                with self.subTest(file=os.path.relpath(path, REPO), token=tok):
+                    self.assertIn(name, dirs, f"{tok} in {path} does not resolve to a skill dir")
+
+
+class TestNoOrphanSkills(unittest.TestCase):
+    def test_every_process_skill_is_referenced_elsewhere(self):
+        search_paths = agent_paths() + skill_files()
+        if os.path.isfile(POLICY_FILE) and POLICY_FILE not in search_paths:
+            search_paths.append(POLICY_FILE)
+
+        contents = {}
+        for path in search_paths:
+            with open(path, encoding="utf-8") as fh:
+                contents[path] = fh.read()
+
+        own_skill_md = {name: os.path.join(SKILLS_DIR, name, "SKILL.md") for name in skill_dirs()}
+
+        # Only process skills form the cross-link DAG; operational skills
+        # (review-pr, resolve-ticket, watch-review) are user-invoked entry
+        # points and legitimately have no inbound leo: reference.
+        for name in sorted(PROCESS_SKILLS):
+            pattern = re.compile(r"leo:" + re.escape(name) + r"(?![a-z-])")
+            own_path = own_skill_md.get(name)
+            found = any(
+                pattern.search(text)
+                for path, text in contents.items()
+                if path != own_path
+            )
+            with self.subTest(skill=name):
+                self.assertTrue(found, f"leo:{name} is never referenced outside its own SKILL.md")
+
+
+class TestPolicySkillIndex(unittest.TestCase):
+    def test_skill_index_section_lists_process_skills(self):
+        with open(POLICY_FILE, encoding="utf-8") as fh:
+            text = fh.read()
+
+        self.assertIn("## Skill index", text)
+        for name in sorted(PROCESS_SKILLS):
+            with self.subTest(skill=name):
+                self.assertIn(f"leo:{name}", text)
+
+
+class TestPerSkillTokens(unittest.TestCase):
+    def test_token_pins(self):
+        for name, tokens in PER_SKILL_TOKENS.items():
+            path = os.path.join(SKILLS_DIR, name, "SKILL.md")
+            with self.subTest(skill=name):
+                with open(path, encoding="utf-8") as fh:
+                    text = fh.read()
+                for tok in tokens:
+                    with self.subTest(skill=name, token=tok):
+                        self.assertIn(tok, text)
+
+
+class TestReadmeRoster(unittest.TestCase):
+    def test_every_agent_and_skill_named_in_readme(self):
+        readme = os.path.join(REPO, "README.md")
+        with open(readme, encoding="utf-8") as fh:
+            text = fh.read()
+
+        for f in agent_files():
+            stem = os.path.splitext(f)[0]
+            with self.subTest(agent=stem):
+                self.assertIn(stem, text)
+
+        for name in skill_dirs():
+            with self.subTest(skill=name):
+                self.assertIn(name, text)
 
 
 if __name__ == "__main__":

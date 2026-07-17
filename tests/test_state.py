@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for claude/scripts/state.py."""
+"""Tests for scripts/state.py."""
 import importlib.util
 import json
 import os
@@ -10,7 +10,7 @@ import unittest
 from multiprocessing.pool import ThreadPool
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-STATE_PY = os.path.join(REPO, "claude", "scripts", "state.py")
+STATE_PY = os.path.join(REPO, "scripts", "state.py")
 
 spec = importlib.util.spec_from_file_location("state", STATE_PY)
 state = importlib.util.module_from_spec(spec)
@@ -118,11 +118,18 @@ class TestCli(unittest.TestCase):
         self.assertIn("corrupt", r.stderr)
 
     def test_self_locate_without_env_override(self):
-        env = dict(os.environ)
-        env.pop("LEOS_AGENT_PATH", None)
-        r = run_cli(["path", "foo"], env)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(r.stdout.strip(), os.path.join(REPO, "local", "foo.json"))
+        """With LEOS_AGENT_PATH unset, state.py falls back to ~/.leos-agent
+        (never to its own on-disk location, which may be a versioned plugin
+        cache) — and auto-creates the local/ dir it resolves to."""
+        with tempfile.TemporaryDirectory() as tmp_home:
+            env = dict(os.environ)
+            env.pop("LEOS_AGENT_PATH", None)
+            env["HOME"] = tmp_home
+            r = run_cli(["path", "foo"], env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            expected = os.path.join(tmp_home, ".leos-agent", "local", "foo.json")
+            self.assertEqual(r.stdout.strip(), expected)
+            self.assertTrue(os.path.isdir(os.path.join(tmp_home, ".leos-agent", "local")))
 
 
 class TestConcurrency(unittest.TestCase):

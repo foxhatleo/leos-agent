@@ -1,0 +1,10 @@
+{
+  "name": "leo",
+  "description": "Leo's portable Claude Code config: cost-tiered model routing, execute-then-review policy, subagents, process skills, and guards.",
+  "version": "3.0.0",
+  "author": { "name": "Leo Liang" },
+  "homepage": "https://github.com/foxhatleo/leos-agent",
+  "repository": "https://github.com/foxhatleo/leos-agent",
+  "license": "MIT",
+  "keywords": ["routing", "subagents", "review", "process", "guardrails"]
+}

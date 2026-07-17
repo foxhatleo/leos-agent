@@ -30,7 +30,7 @@ that way do not execute under /loop).
 - Repo: !`gh repo view --json nameWithOwner 2>&1`
 - Me: !`gh api user --jq .login 2>&1`
 - Directly-requested open PRs: !`gh pr list --state open --search "user-review-requested:@me" --json number,title,isDraft,reviewRequests 2>&1`
-- Watcher state (all repos): !`python3 ${LEOS_AGENT_PATH:-$HOME/.leos-agent}/claude/scripts/state.py get review-watcher 2>&1`
+- Watcher state (all repos): !`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/state.py" get review-watcher 2>&1`
 
 Not a repo, gh unauthenticated, or the PR listing errored → stop with a
 one-line diagnosis; touch nothing.
@@ -57,11 +57,11 @@ interval.
 
 For each remaining PR, in ascending number order, strictly sequentially:
 
-1. Invoke the Skill tool: skill `review-pr`, args `<number>`.
+1. Invoke the Skill tool: skill `leo:review-pr`, args `<number>`.
 2. **Only after /review-pr completes** (verdict delivered), record it:
 
    ```
-   python3 ${LEOS_AGENT_PATH:-$HOME/.leos-agent}/claude/scripts/state.py \
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/state.py" \
      merge review-watcher "<owner/repo>" '{"reviewed": [<number>]}'
    ```
 

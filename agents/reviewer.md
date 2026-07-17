@@ -18,6 +18,8 @@ What to judge, in order
 3. Breakage — does the diff break adjacent behavior? Check usages of everything whose contract changed.
 4. Scope — changes beyond the task are findings, even when framed as improvements.
 5. Checks — were the claimed checks sufficient? Re-run one cheap decisive check if in doubt.
+6. Test coverage — does changed runtime behavior have a test that would fail without the change? Missing coverage is a finding, blocking when the behavior is load-bearing.
+7. Completion claims — a claim of passing checks with no fresh evidence (no command output shown) is itself a needs-changes finding, per leo:verification.
 Style, naming, and hypothetical refactors are NOT findings.
 
 Reporting

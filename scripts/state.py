@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """state: machine-local JSON state for leos-agent skills and agents.
 
+CODE ships inside the plugin (possibly a versioned cache that a plugin update
+can wipe or relocate) — this file must never derive the data root from its own
+__file__ location. DATA always lives under
+${LEOS_AGENT_PATH:-~/.leos-agent}/local, independent of where this script
+itself happens to run from, so a plugin update can never lose state.
+
 State lives at $LEOS_AGENT_PATH/local/<name>.json (LEOS_AGENT_PATH is an
 optional override; unset, it defaults to ~/.leos-agent). local/ is gitignored:
 state never syncs between machines. Top-level keys are "owner/repo" (or an
@@ -27,17 +33,15 @@ import sys
 import tempfile
 
 
-def _repo_root():
-    # scripts/ is NOT symlinked; skills call this file by absolute path, so
-    # __file__ is always inside the real clone. claude/scripts/state.py -> repo root.
-    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+def _data_root():
+    return os.environ.get("LEOS_AGENT_PATH") or os.path.join(os.path.expanduser("~"), ".leos-agent")
 
 
 def state_file(name):
-    root = os.environ.get("LEOS_AGENT_PATH") or _repo_root()
-    if not os.path.isdir(root):
-        sys.exit(f"state: {root} does not exist — clone leos-agent there or set LEOS_AGENT_PATH")
-    return os.path.join(root, "local", f"{name}.json")
+    root = _data_root()
+    local_dir = os.path.join(root, "local")
+    os.makedirs(local_dir, exist_ok=True)
+    return os.path.join(local_dir, f"{name}.json")
 
 
 @contextlib.contextmanager

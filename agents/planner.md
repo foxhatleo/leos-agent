@@ -20,3 +20,5 @@ Output contract — your final message is consumed by an opus orchestrator and s
 4. **Open questions** — anything unresolved that needs Leo's decision before or during implementation.
 
 Never begin implementing. If the task actually needs diagnosis or a verdict rather than a plan, say so and return the evidence you gathered.
+
+When the approach itself is unsettled — more than one viable design, no clear winner from convention alone — the design gate (leo:brainstorming) comes first: do not plan an unchosen design. Before returning, the output must clear the leo:writing-plans bar (base ref recorded, literal steps, no placeholders); that skill is canonical, so don't restate it here.

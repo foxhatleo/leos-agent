@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for claude/hooks/bash-guard.py — the catastrophic-deletion tripwire.
+"""Tests for hooks/bash-guard.py — the catastrophic-deletion tripwire.
 
 Each case runs the real guard as a subprocess with a JSON payload on stdin and asserts the
 exit code (2 = block, 0 = allow). Run: python3 -m unittest tests.test_guard -v
@@ -12,7 +12,7 @@ import sys
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-GUARD = os.path.join(REPO, "claude", "hooks", "bash-guard.py")
+GUARD = os.path.join(REPO, "hooks", "bash-guard.py")
 HOME = os.path.realpath(os.path.expanduser("~"))
 
 # (command) -> should block

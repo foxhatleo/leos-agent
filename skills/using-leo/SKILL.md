@@ -1,6 +1,17 @@
+---
+name: using-leo
+description: >
+  Leo's global operating policy: cost-tiered model routing, the
+  execute-then-review gate, delegation rules, orchestration triggers,
+  machine-local state, and the index of leo:* process skills. Injected
+  into every session by the plugin's SessionStart hook (startup, /clear,
+  and compaction) — it is context, not a skill to run.
+disable-model-invocation: true
+---
+
 # Leo's global Claude directives
 
-These apply in every session on every machine. Canonical copy: `~/.leos-agent/claude/CLAUDE.md`.
+These apply in every session on every machine. Canonical copy: `skills/using-leo/SKILL.md` in the leos-agent repo; the SessionStart hook injects this body, so what you are reading is already live.
 
 ## Model routing
 
@@ -40,7 +51,7 @@ The main loop orchestrates; subagents do the volume. In an Opus session, inline 
 - Judging a diff → `reviewer` (Opus).
 - Hardest verdicts and deadlocks → `expert` (Fable) — one at a time, never fanned out, never implements; hand it the outcome wanted, the raw artifact paths, and the full failure history (it reads sources itself — don't pre-digest for a stronger model).
 
-Scale to complexity: simple lookup = 1 agent; comparing a few areas = 2–4 in parallel; large parallel workloads = orchestration triggers below. Multi-agent costs ~15× a single chat — reserve fan-out for genuinely parallel, high-value work. In an Opus session this is a hard rule, not a heuristic: implementation and mechanical edits MUST go to `implementer`/`executor`, and code searches to `Explore`; editing or grepping inline is the exception, reserved for a trivial single-file touch (< ~10 lines) where writing the spec would cost more than the change. More than ~3 inline file edits or ~5 inline searches in an Opus session means the work should have been delegated.
+Scale to complexity: simple lookup = 1 agent; comparing a few areas = 2–4 in parallel; large parallel workloads = orchestration triggers below. Multi-agent costs ~15× a single chat — reserve fan-out for genuinely parallel, high-value work. In an Opus session this is a hard rule, not a heuristic: implementation and mechanical edits MUST go to `implementer`/`executor`, and code searches to `Explore`; editing or grepping inline is the exception, reserved for a trivial single-file touch (< ~10 lines) where writing the spec would cost more than the change. More than ~3 inline file edits or ~5 inline searches in an Opus session means the work should have been delegated. Dispatch mechanics — brief structure, the return-status contract, durable progress — live in leo:delegation.
 
 ## Orchestration triggers
 
@@ -50,10 +61,26 @@ For a non-trivial task where I haven't used a trigger phrase, propose orchestrat
 
 ## Machine-local state
 
-Any skill or agent that needs to persist information writes JSON to `$LEOS_AGENT_PATH/local/<skill-or-agent-name>.json` — `LEOS_AGENT_PATH` is an optional override, unset it defaults to `~/.leos-agent` (in bash: `${LEOS_AGENT_PATH:-$HOME/.leos-agent}`). Top-level keys are `owner/repo` (or the absolute project path when there's no GitHub repo): **data always stays separate per repo/project**. Read and write through `$LEOS_AGENT_PATH/claude/scripts/state.py` (`get` / `merge` / `path`) instead of hand-rolling read-modify-write. `local/` is gitignored — this state is per-machine, never committed, never synced. Examples: `review-watcher.json` (PR numbers already auto-reviewed), `resolve-ticket.json` (ticket-prefix → tracker mappings).
+Any skill or agent that needs to persist information writes JSON to `$LEOS_AGENT_PATH/local/<skill-or-agent-name>.json` — `LEOS_AGENT_PATH` is an optional override, unset it defaults to `~/.leos-agent` (in bash: `${LEOS_AGENT_PATH:-$HOME/.leos-agent}`). Top-level keys are `owner/repo` (or the absolute project path when there's no GitHub repo): **data always stays separate per repo/project**. Read and write through `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/state.py"` (`get` / `merge` / `path`) instead of hand-rolling read-modify-write — the code ships with the plugin, the data stays under `${LEOS_AGENT_PATH:-$HOME/.leos-agent}/local/`, gitignored, per-machine, never synced, and survives plugin updates. Examples: `review-watcher.json` (PR numbers already auto-reviewed), `resolve-ticket.json` (ticket-prefix → tracker mappings).
 
 ## Cost discipline
 
-Spend expensive tokens on planning, verification, and synthesis (low volume, high leverage); spend cheap tokens on execution volume. In workflow scripts, set `model` and `effort` per `agent()` call — executors default to sonnet + effort low, mechanical work to haiku, judges/verifiers to opus. Fable (`expert`) is the most expensive tier per call and cheap as a policy only because it fires rarely and only on verdicts — workflow scripts never auto-use it (batch fan-out is exactly where a fable jump silently multiplies cost). Reusable workflow scripts live in `~/.leos-agent/claude/workflows/`.
+Spend expensive tokens on planning, verification, and synthesis (low volume, high leverage); spend cheap tokens on execution volume. In workflow scripts, set `model` and `effort` per `agent()` call — executors default to sonnet + effort low, mechanical work to haiku, judges/verifiers to opus. Fable (`expert`) is the most expensive tier per call and cheap as a policy only because it fires rarely and only on verdicts — workflow scripts never auto-use it (batch fan-out is exactly where a fable jump silently multiplies cost). The reusable batch workflow lives at `${CLAUDE_PLUGIN_ROOT}/workflows/cost-tiered-fix.js` (Workflow tool, `scriptPath`).
 
 **Concrete model strings use the 1M-context aliases.** Wherever a model is pinned — agent frontmatter, skill frontmatter, or a workflow `agent()` call — Opus means `opus[1m]` and Sonnet means `sonnet[1m]` (Haiku and Fable are unchanged; tier names in the routing table stay plain words). The one exception: a per-spawn Agent-tool `model` override is a strict `sonnet|opus|haiku|fable` enum with no `[1m]` variants — overrides pass the plain alias, and a subagent gets 1M context by inheriting its frontmatter default (spawn with no override), never through an override.
+
+## Skill index
+
+Reach for the matching skill at the decision point — each one encodes the mechanics these directives already assume, sized to the work, not extra ritual.
+
+| At this point | Consult |
+|---|---|
+| A bug or failing test, before any fix | leo:debugging |
+| An approach not yet settled, before non-trivial code | leo:brainstorming |
+| Turning a chosen approach into a plan | leo:writing-plans |
+| Carrying out a written plan | leo:executing-plans |
+| Adding or changing runtime behavior | leo:test-first |
+| Before claiming anything done / fixed / passing | leo:verification |
+| Dispatching subagents or a fan-out | leo:delegation |
+| Isolating branch work | leo:worktrees |
+| Landing or cleaning up a finished branch | leo:finishing-a-branch |

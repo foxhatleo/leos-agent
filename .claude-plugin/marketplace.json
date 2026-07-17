@@ -1,0 +1,8 @@
+{
+  "name": "leos-agent",
+  "description": "Leo's personal plugin marketplace (this repo).",
+  "owner": { "name": "Leo Liang" },
+  "plugins": [
+    { "name": "leo", "source": "./", "description": "Leo's portable Claude Code config." }
+  ]
+}
