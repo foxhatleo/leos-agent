@@ -1,6 +1,6 @@
 """Per-harness mapping appendix lint: skills/using-leo/references/*.md.
 Content pins per harness, plus an anti-leak check that Claude-only tokens
-never bleed into the other three, and a cross-reference check that every
+never bleed into the other harnesses, and a cross-reference check that every
 leo:<name> token resolves to a real skill dir. Stdlib unittest only.
 
 Run: python3 -m unittest tests.test_harness_mappings -v
@@ -11,26 +11,23 @@ import re
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-REFERENCES_DIR = os.path.join(REPO, "skills", "using-leo", "references")
-SKILLS_DIR = os.path.join(REPO, "skills")
+SKILLS_DIR = os.path.join(REPO, "plugins", "leo", "skills")
+REFERENCES_DIR = os.path.join(SKILLS_DIR, "using-leo", "references")
 
-HARNESSES = ("claude", "codex", "cursor", "opencode")
+HARNESSES = ("claude", "codex", "cursor", "hermes")
 
 REQUIRED_SUBSTRINGS = {
-    "claude": ("opus[1m]", "sonnet[1m]"),
+    "claude": ("${user_config.opus_model}", "${user_config.sonnet_model}"),
     "codex": (
         "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
-        "no Fable", "codex review", "spawn",
+        "reasoning_effort", "generic subagent",
     ),
-    "cursor": ("Claude Opus 4.8", "Grok 4.5", "Composer 2.5", "Claude Fable 5"),
-    "opencode": (
-        "openrouter/z-ai/glm-5.2", "openrouter/minimax/minimax-m3",
-        "openrouter/deepseek/deepseek-v4-pro", "no Fable", "LEO_MODEL",
-    ),
+    "cursor": ("GPT-5.6 Sol", "Grok 4.5", "Composer 2.5", "model: inherit"),
+    "hermes": ("openrouter", "moonshotai/kimi-k3", "z-ai/glm-5.2", "homogeneous"),
 }
 
-# Claude-only tokens that must never leak into the other three harnesses.
-LEAKED_TOKENS = ("opus[1m]", "sonnet[1m]", "CLAUDE_PLUGIN_ROOT")
+# Claude-only tokens that must never leak into the other harnesses.
+LEAKED_TOKENS = ("user_config.opus_model", "user_config.sonnet_model", "CLAUDE_PLUGIN_ROOT")
 
 NON_CLAUDE_HARNESSES = tuple(h for h in HARNESSES if h != "claude")
 

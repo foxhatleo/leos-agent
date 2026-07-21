@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check generated adapters
+        run: python3 plugins/leo/scripts/render_adapters.py --check
+      - name: Run tests
+        run: python3 -m unittest discover -s tests -v
+      - name: Validate Claude plugin
+        run: |
+          npm install --global @anthropic-ai/claude-code
+          claude plugin validate .
+      - name: Validate Codex plugin
+        run: |
+          python3 -m pip install PyYAML
+          curl -fsSL https://raw.githubusercontent.com/openai/codex/main/codex-rs/skills/src/assets/samples/plugin-creator/scripts/validate_plugin.py -o "$RUNNER_TEMP/validate_plugin.py"
+          python3 "$RUNNER_TEMP/validate_plugin.py" plugins/leo
+      - name: Validate Cursor plugin
+        run: curl -fsSL https://raw.githubusercontent.com/cursor/plugin-template/main/scripts/validate-template.mjs | node --input-type=module
+      - name: Verify tag and manifest versions
+        run: python3 tools/release.py --check-version "$GITHUB_REF_NAME"
+      - name: Build release archives
+        run: python3 tools/release.py --build dist
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.tar.gz --generate-notes --verify-tag

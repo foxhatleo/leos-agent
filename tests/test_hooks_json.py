@@ -9,7 +9,7 @@ import os
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-HOOKS_DIR = os.path.join(REPO, "hooks")
+HOOKS_DIR = os.path.join(REPO, "plugins", "leo", "hooks")
 HOOKS_JSON = os.path.join(HOOKS_DIR, "hooks.json")
 
 
@@ -31,7 +31,8 @@ class TestSessionStartHook(unittest.TestCase):
         self.assertTrue(hooks, "expected SessionStart[0].hooks to be non-empty")
         hook = hooks[0]
         command = hook.get("command", "")
-        self.assertIn("${CLAUDE_PLUGIN_ROOT}", command)
+        self.assertIn("${CLAUDE_PLUGIN_ROOT:-$PLUGIN_ROOT}", command)
+        self.assertIn("$PLUGIN_ROOT", command)
         self.assertIn("session-start.py", command)
         self.assertIs(hook.get("async"), False)
 
@@ -49,7 +50,8 @@ class TestPreToolUseHook(unittest.TestCase):
         self.assertTrue(hooks, "expected PreToolUse[0].hooks to be non-empty")
         hook = hooks[0]
         command = hook.get("command", "")
-        self.assertIn("${CLAUDE_PLUGIN_ROOT}", command)
+        self.assertIn("${CLAUDE_PLUGIN_ROOT:-$PLUGIN_ROOT}", command)
+        self.assertIn("$PLUGIN_ROOT", command)
         self.assertIn("bash-guard.py", command)
         self.assertIsInstance(hook.get("timeout"), int)
 

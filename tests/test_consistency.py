@@ -1,6 +1,4 @@
-"""Config-consistency lint: invariants tying together agents/, skills/,
-the using-leo policy skill, personal-settings.json, and workflows/. Stdlib
-unittest only.
+"""Config-consistency lint for the self-contained plugin payload.
 
 Run: python3 -m unittest tests.test_consistency -v
 """
@@ -11,10 +9,11 @@ import re
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-AGENTS_DIR = os.path.join(REPO, "agents")
-SKILLS_DIR = os.path.join(REPO, "skills")
-WORKFLOWS_DIR = os.path.join(REPO, "workflows")
-HOOKS_DIR = os.path.join(REPO, "hooks")
+PAYLOAD = os.path.join(REPO, "plugins", "leo")
+AGENTS_DIR = os.path.join(PAYLOAD, "roles")
+SKILLS_DIR = os.path.join(PAYLOAD, "skills")
+WORKFLOWS_DIR = os.path.join(PAYLOAD, "workflows")
+HOOKS_DIR = os.path.join(PAYLOAD, "hooks")
 POLICY_FILE = os.path.join(SKILLS_DIR, "using-leo", "SKILL.md")
 # The Claude-specific concretes ([1m] aliases, Agent-tool enum, Workflow-tool
 # paragraph) moved out of the harness-neutral POLICY_FILE and into this
@@ -22,7 +21,8 @@ POLICY_FILE = os.path.join(SKILLS_DIR, "using-leo", "SKILL.md")
 # sessions only. Any assertion that used to pin "[1m]" against POLICY_FILE
 # now pins it here instead.
 CLAUDE_MAPPING = os.path.join(SKILLS_DIR, "using-leo", "references", "claude-mapping.md")
-PERSONAL_SETTINGS = os.path.join(REPO, "install", "personal-settings.json")
+PERSONAL_SETTINGS = os.path.join(PAYLOAD, "settings.json")
+MODEL_CONFIG = os.path.join(PAYLOAD, "config", "models.json")
 HOOKS_JSON = os.path.join(HOOKS_DIR, "hooks.json")
 
 # state.py is invoked through the plugin-root variable, quoted, e.g.:
@@ -34,16 +34,6 @@ ALLOWED_MODELS = {"haiku", "sonnet[1m]", "opus[1m]", "fable", "inherit"}
 EXPECTED_AGENT_STEMS = {
     "explore", "executor", "implementer", "investigator", "reviewer",
     "expert", "planner",
-}
-
-EXPECTED_MODEL_BY_AGENT = {
-    "investigator": "opus[1m]",
-    "planner": "opus[1m]",
-    "reviewer": "opus[1m]",
-    "implementer": "sonnet[1m]",
-    "executor": "haiku",
-    "explore": "haiku",
-    "expert": "fable",
 }
 
 ALLOWED_FRONTMATTER_KEYS = {"name", "description", "model", "effort", "tools", "color", "skills"}
@@ -239,14 +229,17 @@ class TestRoutingTableAgentsResolve(unittest.TestCase):
 
 
 class TestModelPerAgent(unittest.TestCase):
-    def test_model_matches_tier(self):
+    def test_models_live_only_in_canonical_config(self):
+        with open(MODEL_CONFIG, encoding="utf-8") as fh:
+            config = json.load(fh)
+        self.assertEqual(set(config["roles"]), EXPECTED_AGENT_STEMS)
         for f in agent_files():
             stem = os.path.splitext(f)[0].lower()
-            if stem not in EXPECTED_MODEL_BY_AGENT:
-                continue
             fm = parse_frontmatter(os.path.join(AGENTS_DIR, f))
             with self.subTest(agent=stem):
-                self.assertEqual(fm.get("model"), EXPECTED_MODEL_BY_AGENT[stem])
+                self.assertIn(stem, config["roles"])
+                self.assertNotIn("model", fm)
+                self.assertNotIn("effort", fm)
 
 
 class TestAgentFrontmatterKeySubset(unittest.TestCase):
@@ -316,20 +309,17 @@ class TestExpertClauseAlignment(unittest.TestCase):
 
 
 class TestClaudeMapping(unittest.TestCase):
-    """The [1m]-alias rule used to live in POLICY_FILE; the neutral-core
-    split moved it out to the Claude-only harness mapping. Pin its
-    existence and content here so a future edit can't silently drop the
-    rule while trimming the (now harness-neutral) policy body."""
+    """Claude resolves model tiers through plugin user configuration."""
 
     def test_mapping_file_exists(self):
         self.assertTrue(os.path.isfile(CLAUDE_MAPPING), f"missing {CLAUDE_MAPPING}")
 
-    def test_mapping_states_the_1m_alias_rule(self):
+    def test_mapping_references_all_user_config_options(self):
         with open(CLAUDE_MAPPING, encoding="utf-8") as fh:
             text = fh.read()
-        self.assertIn("[1m]", text)
-        self.assertIn("opus[1m]", text)
-        self.assertIn("sonnet[1m]", text)
+        for tier in ("fable", "opus", "sonnet", "haiku"):
+            with self.subTest(tier=tier):
+                self.assertIn(f"${{user_config.{tier}_model}}", text)
 
     def test_policy_file_no_longer_pins_1m(self):
         # The body is harness-neutral now: no [1m] alias literal, no
@@ -372,7 +362,6 @@ class TestExecutorImplementerTools(unittest.TestCase):
 HARNESS_STATE_PREFIXES = (
     STATE_PREFIX,                 # ${CLAUDE_PLUGIN_ROOT}/scripts/
     "$PLUGIN_ROOT/scripts/",      # Codex
-    "<repo>/scripts/",            # OpenCode mapping prose
     "<plugin-root>/scripts/",     # Cursor mapping prose
 )
 

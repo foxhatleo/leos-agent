@@ -13,7 +13,8 @@ import tempfile
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SESSION_START_PY = os.path.join(REPO, "hooks", "session-start.py")
+PLUGIN = os.path.join(REPO, "plugins", "leo")
+SESSION_START_PY = os.path.join(PLUGIN, "hooks", "session-start.py")
 
 ROOT_ENV_VARS = ("CLAUDE_PLUGIN_ROOT", "CURSOR_PLUGIN_ROOT", "PLUGIN_ROOT")
 
@@ -34,7 +35,7 @@ def _run(env_overrides):
 
 class TestCursorShape(unittest.TestCase):
     def test_cursor_plugin_root_yields_top_level_additional_context(self):
-        result = _run({"CURSOR_PLUGIN_ROOT": REPO})
+        result = _run({"CURSOR_PLUGIN_ROOT": PLUGIN})
         self.assertEqual(result.returncode, 0, f"stderr={result.stderr}")
 
         payload = json.loads(result.stdout)
@@ -47,7 +48,7 @@ class TestCursorShape(unittest.TestCase):
 
 class TestCursorWinsWhenBothSet(unittest.TestCase):
     def test_cursor_shape_wins_over_claude(self):
-        result = _run({"CURSOR_PLUGIN_ROOT": REPO, "CLAUDE_PLUGIN_ROOT": REPO})
+        result = _run({"CURSOR_PLUGIN_ROOT": PLUGIN, "CLAUDE_PLUGIN_ROOT": PLUGIN})
         self.assertEqual(result.returncode, 0, f"stderr={result.stderr}")
 
         payload = json.loads(result.stdout)
@@ -60,7 +61,7 @@ class TestCursorWinsWhenBothSet(unittest.TestCase):
 
 class TestCodexShape(unittest.TestCase):
     def test_plugin_root_yields_nested_hook_specific_output(self):
-        result = _run({"PLUGIN_ROOT": REPO})
+        result = _run({"PLUGIN_ROOT": PLUGIN})
         self.assertEqual(result.returncode, 0, f"stderr={result.stderr}")
 
         payload = json.loads(result.stdout)

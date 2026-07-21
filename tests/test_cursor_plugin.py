@@ -10,9 +10,10 @@ import re
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CURSOR_PLUGIN_DIR = os.path.join(REPO, ".cursor-plugin")
+PAYLOAD = os.path.join(REPO, "plugins", "leo")
+CURSOR_PLUGIN_DIR = os.path.join(PAYLOAD, ".cursor-plugin")
 PLUGIN_JSON = os.path.join(CURSOR_PLUGIN_DIR, "plugin.json")
-HOOKS_DIR = os.path.join(REPO, "hooks")
+HOOKS_DIR = os.path.join(PAYLOAD, "hooks")
 HOOKS_CURSOR_JSON = os.path.join(HOOKS_DIR, "hooks-cursor.json")
 
 FORBIDDEN_ENTRY_KEYS = {"matcher", "type", "async"}
@@ -37,10 +38,10 @@ class TestCursorPluginJson(unittest.TestCase):
         data = _load_plugin()
         self.assertEqual(data.get("name"), "leo")
         self.assertEqual(data.get("displayName"), "leo")
-        self.assertEqual(data.get("version"), "3.1.0")
+        self.assertEqual(data.get("version"), "4.0.0")
         self.assertEqual(data.get("skills"), "./skills/")
         self.assertEqual(data.get("hooks"), "./hooks/hooks-cursor.json")
-        self.assertEqual(data.get("agents"), [])
+        self.assertEqual(data.get("agents"), "./adapters/cursor/agents/")
 
 
 class TestCursorPluginDirHasOnlyManifest(unittest.TestCase):

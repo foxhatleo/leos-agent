@@ -5,7 +5,7 @@ import os
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-GHREVIEW_PY = os.path.join(REPO, "skills", "review-pr", "scripts", "ghreview.py")
+GHREVIEW_PY = os.path.join(REPO, "plugins", "leo", "skills", "review-pr", "scripts", "ghreview.py")
 
 spec = importlib.util.spec_from_file_location("ghreview", GHREVIEW_PY)
 ghreview = importlib.util.module_from_spec(spec)

@@ -1,0 +1,12 @@
+{
+  "name": "leos-agent",
+  "owner": { "name": "Leo Liang" },
+  "metadata": { "description": "Leo's portable agent workflow plugins." },
+  "plugins": [
+    {
+      "name": "leo",
+      "source": "plugins/leo",
+      "description": "Cost-tiered routing, execute-then-review policy, process skills, and guards."
+    }
+  ]
+}

@@ -3,6 +3,6 @@
   "description": "Leo's personal plugin marketplace (this repo).",
   "owner": { "name": "Leo Liang" },
   "plugins": [
-    { "name": "leo", "source": "./", "description": "Leo's portable Claude Code config." }
+    { "name": "leo", "source": "./plugins/leo", "description": "Leo's portable Claude Code config." }
   ]
 }

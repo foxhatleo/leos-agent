@@ -1,0 +1,55 @@
+{
+  "name": "leo",
+  "description": "Leo's portable Claude Code config: cost-tiered model routing, execute-then-review policy, subagents, process skills, and guards.",
+  "version": "4.0.0",
+  "author": {
+    "name": "Leo Liang"
+  },
+  "homepage": "https://github.com/foxhatleo/leos-agent",
+  "repository": "https://github.com/foxhatleo/leos-agent",
+  "license": "MIT",
+  "keywords": [
+    "routing",
+    "subagents",
+    "review",
+    "process",
+    "guardrails"
+  ],
+  "agents": [
+    "./adapters/claude/agents/executor.md",
+    "./adapters/claude/agents/expert.md",
+    "./adapters/claude/agents/explore.md",
+    "./adapters/claude/agents/implementer.md",
+    "./adapters/claude/agents/investigator.md",
+    "./adapters/claude/agents/planner.md",
+    "./adapters/claude/agents/reviewer.md"
+  ],
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json",
+  "userConfig": {
+    "fable_model": {
+      "type": "string",
+      "title": "Fable-tier model",
+      "description": "Model used by Leo's expert role.",
+      "default": "fable"
+    },
+    "opus_model": {
+      "type": "string",
+      "title": "Opus-tier model",
+      "description": "Model used for planning, investigation, and review.",
+      "default": "opus[1m]"
+    },
+    "sonnet_model": {
+      "type": "string",
+      "title": "Sonnet-tier model",
+      "description": "Model used for implementation.",
+      "default": "sonnet[1m]"
+    },
+    "haiku_model": {
+      "type": "string",
+      "title": "Haiku-tier model",
+      "description": "Model used for exploration and mechanical work.",
+      "default": "haiku"
+    }
+  }
+}

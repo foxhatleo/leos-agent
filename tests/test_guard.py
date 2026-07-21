@@ -12,7 +12,7 @@ import sys
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-GUARD = os.path.join(REPO, "hooks", "bash-guard.py")
+GUARD = os.path.join(REPO, "plugins", "leo", "hooks", "bash-guard.py")
 HOME = os.path.realpath(os.path.expanduser("~"))
 
 # (command) -> should block

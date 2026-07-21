@@ -10,7 +10,7 @@ import unittest
 from multiprocessing.pool import ThreadPool
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-STATE_PY = os.path.join(REPO, "scripts", "state.py")
+STATE_PY = os.path.join(REPO, "plugins", "leo", "scripts", "state.py")
 
 spec = importlib.util.spec_from_file_location("state", STATE_PY)
 state = importlib.util.module_from_spec(spec)

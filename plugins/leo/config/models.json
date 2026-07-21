@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "roles": {
+    "expert": "fable",
+    "planner": "opus",
+    "investigator": "opus",
+    "reviewer": "opus",
+    "implementer": "sonnet",
+    "executor": "haiku",
+    "explore": "haiku"
+  },
+  "harnesses": {
+    "claude": {
+      "fable": { "model": "fable", "effort": "max" },
+      "opus": { "model": "opus[1m]" },
+      "sonnet": { "model": "sonnet[1m]" },
+      "haiku": { "model": "haiku" }
+    },
+    "cursor": {
+      "fable": { "model": "GPT-5.6 Sol" },
+      "opus": { "model": "Grok 4.5" },
+      "sonnet": { "model": "Grok 4.5" },
+      "haiku": { "model": "Composer 2.5" }
+    },
+    "codex": {
+      "fable": { "model": "gpt-5.6-sol", "effort": "max" },
+      "opus": { "model": "gpt-5.6-sol", "effort": "high" },
+      "sonnet": { "model": "gpt-5.6-terra", "effort": "medium" },
+      "haiku": { "model": "gpt-5.6-luna", "effort": "low" }
+    },
+    "hermes": {
+      "provider": "openrouter",
+      "fable": { "model": "moonshotai/kimi-k3" },
+      "opus": { "model": "moonshotai/kimi-k3" },
+      "sonnet": { "model": "z-ai/glm-5.2" },
+      "haiku": { "model": "z-ai/glm-5.2" }
+    }
+  }
+}

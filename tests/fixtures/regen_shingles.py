@@ -13,14 +13,10 @@ construction. Writes the sorted, deduplicated set of hex digests to the
 fixture, one per line. Idempotent: re-running against an unchanged
 source tree reproduces byte-identical output.
 
-Also walks two additional roots for JS/script coverage, since Layer B
-now also scans our own .opencode/plugin/leo.js and hooks/ scripts:
-- SUPERPOWERS_PATH/.opencode/**/*.js
-- SUPERPOWERS_PATH/hooks/** (any file, any extension)
-Both are hashed with shingles(text, strip_markdown=False) — "strip
-nothing" mode — matching how our own leo.js and hooks/ scripts are
-scanned on the comparison side, so the two sides can ever actually
-overlap. The .md sources keep the default strip_markdown=True pass.
+Also walks SUPERPOWERS_PATH/hooks/** for script coverage. Those files are
+hashed with shingles(text, strip_markdown=False) — "strip nothing" mode —
+matching how Leo's hook scripts are scanned on the comparison side. The .md
+sources keep the default strip_markdown=True pass.
 
 Usage:
     python3 tests/fixtures/regen_shingles.py
@@ -55,16 +51,8 @@ def _source_paths(superpowers_path):
 
 
 def _raw_source_paths(superpowers_path):
-    """Non-markdown sources (JS/scripts), hashed with strip_markdown=False
-    ("strip nothing") to match how our own leo.js and hooks/ scripts are
-    scanned."""
+    """Hook scripts hashed with strip_markdown=False ("strip nothing")."""
     paths = []
-    opencode_dir = os.path.join(superpowers_path, ".opencode")
-    if os.path.isdir(opencode_dir):
-        for root, _dirs, files in os.walk(opencode_dir):
-            for f in files:
-                if f.endswith(".js"):
-                    paths.append(os.path.join(root, f))
     hooks_dir = os.path.join(superpowers_path, "hooks")
     if os.path.isdir(hooks_dir):
         for root, _dirs, files in os.walk(hooks_dir):

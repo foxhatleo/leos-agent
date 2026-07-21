@@ -1,4 +1,4 @@
-"""Plugin packaging lint: .claude-plugin/ manifests and .mcp.json.
+"""Claude plugin packaging lint for the v4 marketplace and nested payload.
 Stdlib unittest only.
 
 Run: python3 -m unittest tests.test_plugin -v
@@ -12,10 +12,10 @@ import subprocess
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PLUGIN_DIR = os.path.join(REPO, ".claude-plugin")
+PLUGIN_DIR = os.path.join(REPO, "plugins", "leo", ".claude-plugin")
 PLUGIN_JSON = os.path.join(PLUGIN_DIR, "plugin.json")
-MARKETPLACE_JSON = os.path.join(PLUGIN_DIR, "marketplace.json")
-MCP_JSON = os.path.join(REPO, ".mcp.json")
+MARKETPLACE_DIR = os.path.join(REPO, ".claude-plugin")
+MARKETPLACE_JSON = os.path.join(MARKETPLACE_DIR, "marketplace.json")
 
 KEBAB_CASE_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 
@@ -29,7 +29,7 @@ class TestPluginJson(unittest.TestCase):
     def test_valid_and_fields(self):
         data = _load(PLUGIN_JSON)
         self.assertEqual(data.get("name"), "leo")
-        self.assertEqual(data.get("version"), "3.1.0")
+        self.assertEqual(data.get("version"), "4.0.0")
         self.assertTrue(data.get("description", "").strip())
         self.assertRegex(data["name"], KEBAB_CASE_RE, f"name {data['name']!r} is not kebab-case")
 
@@ -45,28 +45,13 @@ class TestMarketplaceJson(unittest.TestCase):
         self.assertTrue(plugins, "expected at least one entry in plugins")
         entry = plugins[0]
         self.assertEqual(entry.get("name"), "leo")
-        self.assertEqual(entry.get("source"), "./")
+        self.assertEqual(entry.get("source"), "./plugins/leo")
 
 
 class TestPluginDirHasOnlyManifests(unittest.TestCase):
     def test_no_nested_component_dirs(self):
-        entries = sorted(os.listdir(PLUGIN_DIR))
-        self.assertEqual(entries, ["marketplace.json", "plugin.json"])
-        for entry in entries:
-            self.assertTrue(os.path.isfile(os.path.join(PLUGIN_DIR, entry)))
-
-
-class TestMcpJson(unittest.TestCase):
-    def test_valid_and_servers(self):
-        data = _load(MCP_JSON)
-        servers = data.get("mcpServers", {})
-        for name in ("linear-server", "atlassian", "slack"):
-            with self.subTest(server=name):
-                self.assertIn(name, servers)
-
-        slack = servers.get("slack", {})
-        headers = slack.get("headers", {})
-        self.assertEqual(headers.get("Authorization"), "Bearer ${SLACK_MCP_TOKEN}")
+        self.assertEqual(sorted(os.listdir(PLUGIN_DIR)), ["plugin.json"])
+        self.assertEqual(sorted(os.listdir(MARKETPLACE_DIR)), ["marketplace.json"])
 
 
 class TestClaudePluginValidate(unittest.TestCase):

@@ -12,8 +12,9 @@ import sys
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-GUARD = os.path.join(REPO, "hooks", "cursor-guard.py")
-BASH_GUARD_PATH = os.path.join(REPO, "hooks", "bash-guard.py")
+HOOKS = os.path.join(REPO, "plugins", "leo", "hooks")
+GUARD = os.path.join(HOOKS, "cursor-guard.py")
+BASH_GUARD_PATH = os.path.join(HOOKS, "bash-guard.py")
 HOME = os.path.realpath(os.path.expanduser("~"))
 
 

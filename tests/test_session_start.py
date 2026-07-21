@@ -13,15 +13,16 @@ import tempfile
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SESSION_START_PY = os.path.join(REPO, "hooks", "session-start.py")
+PLUGIN = os.path.join(REPO, "plugins", "leo")
+SESSION_START_PY = os.path.join(PLUGIN, "hooks", "session-start.py")
 
 REQUIRED_SUBSTRINGS = (
     "<leo-policy>",
     "Model routing",
-    "[1m]",
+    "${user_config.opus_model}",
     "Skill index",
     "failed twice on the same question",
-    "Claude Code harness mapping",
+    "Claude Code mapping",
 )
 
 # Deliberate raise from 12000: the policy body is now harness-neutral (tier
@@ -32,9 +33,11 @@ REQUIRED_SUBSTRINGS = (
 MAX_ADDITIONAL_CONTEXT_LEN = 14000
 
 
-def _run(plugin_root):
+def _run(plugin_root, model_options=None):
     env = dict(os.environ)
     env["CLAUDE_PLUGIN_ROOT"] = plugin_root
+    for tier, model in (model_options or {}).items():
+        env[f"CLAUDE_PLUGIN_OPTION_{tier.upper()}_MODEL"] = model
     return subprocess.run(
         [sys.executable, SESSION_START_PY],
         env=env,
@@ -46,7 +49,7 @@ def _run(plugin_root):
 
 class TestSessionStartInjectsPolicy(unittest.TestCase):
     def test_payload_shape_and_content(self):
-        result = _run(REPO)
+        result = _run(PLUGIN)
         self.assertEqual(result.returncode, 0, f"stderr={result.stderr}")
 
         payload = json.loads(result.stdout)
@@ -62,6 +65,17 @@ class TestSessionStartInjectsPolicy(unittest.TestCase):
 
         self.assertNotIn("${CLAUDE_PLUGIN_ROOT}", additional_context)
         self.assertLess(len(additional_context), MAX_ADDITIONAL_CONTEXT_LEN)
+
+    def test_claude_model_options_are_substituted(self):
+        result = _run(PLUGIN, {"opus": "opus[1m]", "sonnet": "sonnet[1m]"})
+        self.assertEqual(result.returncode, 0, f"stderr={result.stderr}")
+
+        additional_context = json.loads(result.stdout)["hookSpecificOutput"][
+            "additionalContext"
+        ]
+        self.assertIn("opus[1m]", additional_context)
+        self.assertIn("sonnet[1m]", additional_context)
+        self.assertNotIn("${user_config.opus_model}", additional_context)
 
 
 class TestSessionStartDegradesGracefully(unittest.TestCase):

@@ -1,4 +1,4 @@
-"""Codex plugin packaging lint: .codex-plugin/plugin.json. Stdlib unittest only.
+"""Codex plugin packaging lint for the nested v4 payload.
 
 Run: python3 -m unittest tests.test_codex_plugin -v
 """
@@ -8,11 +8,11 @@ import os
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PLUGIN_JSON = os.path.join(REPO, ".codex-plugin", "plugin.json")
+PLUGIN_JSON = os.path.join(REPO, "plugins", "leo", ".codex-plugin", "plugin.json")
 
 ALLOWED_TOP_LEVEL_KEYS = {
     "id", "name", "version", "description", "skills", "apps", "mcpServers",
-    "interface", "hooks", "author", "homepage", "repository", "license", "keywords",
+    "interface", "author", "homepage", "repository", "license", "keywords",
 }
 
 REQUIRED_INTERFACE_KEYS = {
@@ -30,10 +30,10 @@ class TestCodexPluginJson(unittest.TestCase):
     def test_valid_and_core_fields(self):
         data = _load()
         self.assertEqual(data.get("name"), "leo")
-        self.assertEqual(data.get("version"), "3.1.0")
+        self.assertEqual(data.get("version"), "4.0.0")
         self.assertEqual(data.get("skills"), "./skills/")
-        self.assertEqual(data.get("hooks"), "./hooks/hooks.json")
-        self.assertEqual(data.get("mcpServers"), "./.mcp.json")
+        self.assertNotIn("hooks", data)
+        self.assertNotIn("mcpServers", data)
 
     def test_top_level_keys_subset(self):
         data = _load()

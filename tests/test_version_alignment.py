@@ -1,47 +1,44 @@
-"""Version-string alignment across all four harness manifests. Stdlib
-unittest only.
-
-Run: python3 -m unittest tests.test_version_alignment -v
-
-All four manifests were bumped to 3.1.0 in the harness rollout; this
-test is the tripwire that keeps future bumps atomic across them.
-"""
+"""Version-string alignment across all four harness manifests."""
 
 import json
 import os
+import re
 import unittest
 
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-EXPECTED_VERSION = "3.1.0"
+PAYLOAD = os.path.join(REPO, "plugins", "leo")
+EXPECTED_VERSION = "4.0.0"
 
 MANIFESTS = {
-    "claude": os.path.join(REPO, ".claude-plugin", "plugin.json"),
-    "codex": os.path.join(REPO, ".codex-plugin", "plugin.json"),
-    "cursor": os.path.join(REPO, ".cursor-plugin", "plugin.json"),
-    "opencode (package.json)": os.path.join(REPO, "package.json"),
+    "claude": os.path.join(PAYLOAD, ".claude-plugin", "plugin.json"),
+    "codex": os.path.join(PAYLOAD, ".codex-plugin", "plugin.json"),
+    "cursor": os.path.join(PAYLOAD, ".cursor-plugin", "plugin.json"),
 }
 
 
-def _version(path):
-    with open(path, encoding="utf-8") as fh:
-        return json.load(fh).get("version")
+def _versions():
+    versions = {}
+    for label, path in MANIFESTS.items():
+        with open(path, encoding="utf-8") as fh:
+            versions[label] = json.load(fh).get("version")
+    with open(os.path.join(REPO, "plugin.yaml"), encoding="utf-8") as fh:
+        match = re.search(r'^version:\s*["\']?([^"\'\s]+)', fh.read(), re.MULTILINE)
+    versions["hermes"] = match.group(1) if match else None
+    return versions
 
 
-class TestVersionsPinnedTo_3_1_0(unittest.TestCase):
-    def test_each_manifest_is_3_1_0(self):
-        for label, path in MANIFESTS.items():
+class TestVersionsPinnedToV4(unittest.TestCase):
+    def test_each_manifest_is_v4(self):
+        for label, version in _versions().items():
             with self.subTest(manifest=label):
-                self.assertEqual(_version(path), EXPECTED_VERSION, f"{path} version mismatch")
+                self.assertEqual(version, EXPECTED_VERSION)
 
 
 class TestVersionsAlignedAcrossManifests(unittest.TestCase):
     def test_all_versions_equal(self):
-        versions = {label: _version(path) for label, path in MANIFESTS.items()}
-        distinct = set(versions.values())
-        self.assertEqual(
-            len(distinct), 1,
-            f"version strings diverge across manifests: {versions}",
-        )
+        versions = _versions()
+        self.assertEqual(len(set(versions.values())), 1, f"version strings diverge: {versions}")
 
 
 if __name__ == "__main__":

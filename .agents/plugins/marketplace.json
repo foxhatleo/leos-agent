@@ -1,0 +1,12 @@
+{
+  "name": "leos-agent",
+  "interface": { "displayName": "Leo's Agent" },
+  "plugins": [
+    {
+      "name": "leo",
+      "source": { "source": "local", "path": "./plugins/leo" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Developer Tools"
+    }
+  ]
+}
