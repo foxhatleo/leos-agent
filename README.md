@@ -165,7 +165,8 @@ plugins/leo/                          self-contained cached plugin payload
   .cursor-plugin/plugin.json
   config/models.json                  canonical model matrix
   roles/                              canonical role prompts
-  adapters/                           generated harness agent definitions
+  agents/                             generated Claude agents (conventional path)
+  adapters/                           generated agent definitions for other harnesses
   skills/ hooks/ scripts/ workflows/
 tests/                                stdlib packaging and behavior tests
 ```

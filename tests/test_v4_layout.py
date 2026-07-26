@@ -75,6 +75,27 @@ class TestV4Layout(unittest.TestCase):
         codex = _load("plugins", "leo", ".codex-plugin", "plugin.json")
         self.assertNotIn("hooks", codex)
 
+    def test_claude_components_use_conventional_paths(self):
+        """Regression guard for the v4.0.0 load failures.
+
+        A manifest "agents" array of file paths passes `claude plugin
+        validate` but loads ZERO agents; the conventional agents/ directory
+        auto-loads all seven. Declaring "hooks": "./hooks/hooks.json" makes
+        the standard auto-loaded path load twice and fails the hook entirely.
+        Both keys must stay absent.
+        """
+        manifest = _load("plugins", "leo", ".claude-plugin", "plugin.json")
+        self.assertNotIn("agents", manifest)
+        self.assertNotIn("hooks", manifest)
+
+        agents_dir = os.path.join(PLUGIN, "agents")
+        self.assertTrue(os.path.isdir(agents_dir), f"missing {agents_dir}")
+        roles_dir = os.path.join(PLUGIN, "roles")
+        self.assertEqual(
+            sorted(n for n in os.listdir(agents_dir) if n.endswith(".md")),
+            sorted(n for n in os.listdir(roles_dir) if n.endswith(".md")),
+        )
+
     def test_removed_setup_surfaces_are_absent(self):
         for relative in ("install.sh", "install", ".opencode", "package.json", ".mcp.json"):
             with self.subTest(path=relative):

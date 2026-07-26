@@ -15,17 +15,7 @@
     "process",
     "guardrails"
   ],
-  "agents": [
-    "./adapters/claude/agents/executor.md",
-    "./adapters/claude/agents/expert.md",
-    "./adapters/claude/agents/explore.md",
-    "./adapters/claude/agents/implementer.md",
-    "./adapters/claude/agents/investigator.md",
-    "./adapters/claude/agents/planner.md",
-    "./adapters/claude/agents/reviewer.md"
-  ],
   "skills": "./skills/",
-  "hooks": "./hooks/hooks.json",
   "userConfig": {
     "fable_model": {
       "type": "string",

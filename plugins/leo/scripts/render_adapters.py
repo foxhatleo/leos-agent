@@ -113,7 +113,10 @@ def render(config):
     outputs = {}
     for role, tier in sorted(config["roles"].items()):
         claude, cursor = _agent_docs(role, tier, config)
-        outputs[ROOT / "adapters" / "claude" / "agents" / f"{role}.md"] = claude
+        # Claude Code agents MUST live at the conventional agents/ path: a
+        # manifest "agents" array of file paths validates but silently loads
+        # zero agents, and the conventional directory auto-loads.
+        outputs[ROOT / "agents" / f"{role}.md"] = claude
         outputs[ROOT / "adapters" / "cursor" / "agents" / f"{role}.md"] = cursor
     for harness, content in _mapping_docs(config).items():
         outputs[ROOT / "skills" / "using-leo" / "references" / f"{harness}-mapping.md"] = content

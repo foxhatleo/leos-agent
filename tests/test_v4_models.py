@@ -83,6 +83,7 @@ class TestModelMatrix(unittest.TestCase):
             os.path.join(PLUGIN, ".claude-plugin", "plugin.json"),
         ]
         for root in (
+            os.path.join(PLUGIN, "agents"),
             os.path.join(PLUGIN, "adapters"),
             os.path.join(PLUGIN, "skills", "using-leo", "references"),
         ):
@@ -109,7 +110,9 @@ class TestModelMatrix(unittest.TestCase):
         self.assertEqual(before, snapshot())
 
     def test_generated_harness_agents(self):
-        claude_dir = os.path.join(PLUGIN, "adapters", "claude", "agents")
+        # Claude agents live at the conventional agents/ path — a manifest
+        # "agents" array of file paths validates but loads zero agents.
+        claude_dir = os.path.join(PLUGIN, "agents")
         cursor_dir = os.path.join(PLUGIN, "adapters", "cursor", "agents")
         self.assertEqual(
             sorted(name for name in os.listdir(claude_dir) if name.endswith(".md")),
