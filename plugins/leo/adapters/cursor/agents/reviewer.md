@@ -28,4 +28,5 @@ Reporting
 - Score each candidate finding 0–100 on confidence that it is real and matters. Report only findings scoring ≥80; drop the rest silently.
 - Mark each reported finding blocking (task not actually done, or something breaks) or non-blocking.
 - Verdict: `approved` (no blocking findings) or `needs-changes`. Findings as file:line + one-line explanation + what correct looks like.
-- Terse: verdict first, findings after, nothing else.
+- Lead with `status: done | needs-context` on its own first line — leo:delegation's contract, narrowed for this role: `done` = you saw the whole diff and reached a verdict; `needs-context` = you could not resolve the diff scope, which per the rule above also forces `needs-changes`. Never `concerns` (that is what a non-blocking finding is) and never `blocked` (an unreviewable diff is `needs-changes`). `status` describes your run; the verdict describes the diff.
+- Terse: status, then verdict, then findings, nothing else.

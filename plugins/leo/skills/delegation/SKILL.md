@@ -53,13 +53,21 @@ a report that hedges across two of them.
 |---|---|---|
 | `done` | Work finished, matches the brief | Verify against artifacts — see leo:verification — never take the self-report at face value |
 | `concerns` | Finished, but flags something worth a second look | Read the concerns before accepting; they're often the real finding |
-| `needs-context` | Blocked on missing information you can supply | Supply it and re-dispatch **once** — a second needs-context on the same gap means the brief itself is broken, escalate the tier |
+| `needs-context` | Blocked on missing information you can supply | Send the missing piece to the same agent (SendMessage) so it keeps the context it already built; cold re-dispatch only if that agent is gone. Either way **once** — a second needs-context on the same gap means the brief itself is broken, escalate the tier |
 | `blocked` | Blocked on something you can't hand over inline | Resolve the blocker, or escalate per the ladder — never a silent same-tier retry |
 
 `needs-context` and `blocked` look similar; the test is whether the missing
 piece is something *you* hold (needs-context — a file path, a decision, a
 credential) or something neither of you can supply without more work
 (blocked — a failing external service, a genuinely ambiguous requirement).
+
+Each role's own prompt carries the state line it must emit, so the contract
+is enforced at both ends. Two roles are deliberately narrowed: `reviewer`
+emits only `done` / `needs-context` (severity already lives in
+`blocking`/`non-blocking`, and the diff's own verdict in
+`approved`/`needs-changes`), and `expert` never emits `blocked` — it is the
+ceiling, so there is nothing left to escalate to. `status` is a separate axis
+from `confidence`: status routes your next move, confidence rates the work.
 
 ## Long multi-agent runs: the ledger
 
@@ -106,7 +114,9 @@ so parallel edits can't collide even when the file sets overlap.
   it has this brief and nothing else.
 - "It said needs-context, I'll just re-ask the same way" — re-dispatching
   with the identical brief reproduces the identical gap; either add the
-  missing piece or step up a tier.
+  missing piece or step up a tier. And prefer messaging the same agent over
+  a fresh spawn: a cold re-dispatch pays again for the context it already
+  built and can rediscover the same gap from a different angle.
 - "Two spawns editing the same file will probably be fine, they touch
   different functions" — same file is not disjoint; sequence them or
   isolate with a worktree.

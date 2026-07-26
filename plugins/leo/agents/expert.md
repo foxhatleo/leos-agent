@@ -56,6 +56,13 @@ Commands are for inspection and reproduction only.
 **Output contract** — your final message is consumed by an opus orchestrator
 and sonnet implementers, so write the conclusion to spec quality:
 
+Lead with `status: done | concerns | needs-context` on its own line above
+item 1 — leo:delegation's contract, narrowed for the ceiling. `needs-context`
+is the one acceptable non-answer named above: critical evidence missing and
+unreachable, naming that evidence and what it would disambiguate. There is no
+`blocked` here — nothing remains to escalate to — so every other question
+gets a committed verdict plus item 3's confidence, never a hedge.
+
 1. **Verdict** — the root cause, design, or ruling, in two or three sentences.
 2. **Reasoning** — the evidence chain that forces it, with file:line cites.
 3. **Confidence** — high/medium/low plus the single observation that would

@@ -52,6 +52,10 @@ The main loop orchestrates; delegated roles do the volume. In an expensive-tier 
 
 Scale to complexity: simple lookup = 1 agent; comparing a few areas = 2–4 in parallel; large parallel workloads = orchestration triggers below. Multi-agent costs ~15× a single chat — reserve fan-out for genuinely parallel, high-value work. In an expensive-tier session this is a hard rule, not a heuristic: implementation and mechanical edits MUST go to `implementer`/`executor`, and code searches to `explore`; editing or grepping inline is the exception, reserved for a trivial single-file touch (< ~10 lines) where writing the spec would cost more than the change. More than ~3 inline file edits or ~5 inline searches in an expensive-tier session means the work should have been delegated. Dispatch mechanics — brief structure, the return-status contract, durable progress — live in leo:delegation.
 
+## Agent teams
+
+Where the harness offers persistent teammates rather than one-shot subagents, the topology changes but nothing above relaxes. Every rule in this policy binds a teammate exactly as it binds a dispatched role: execute-then-review still gates "done", one investigator per question still holds, `expert` is still never fanned out, and every teammate is still tier-pinned — an unpinned teammate inherits the session tier and quietly bills a judge's rate for an executor's work. Verdicts route through the main loop: peer messages coordinate, they never approve. Reach for a team only when a role must *accompany* the work — a reviewer watching an implementer's long run, an investigator unblocking it live. Batch-shaped work stays with fan-out or the workflow tool, which is cheaper and already has ledger-backed progress.
+
 ## Orchestration triggers
 
 These phrases are my standing opt-in to multi-agent orchestration: **"fan this out"**, **"workflow this"**, **"grind on this"**, **"do this properly"**.

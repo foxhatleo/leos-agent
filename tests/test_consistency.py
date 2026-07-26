@@ -76,6 +76,27 @@ PER_SKILL_TOKENS = {
     "delegation": {"needs-context", "blocked", "concerns", "cost-tiered-fix.js", "disjoint"},
 }
 
+# The four-state return contract only works if BOTH ends declare it: the
+# orchestrator side lives in leo:delegation, and each role must be told to
+# emit it. Two roles carry a deliberately narrowed set — see delegation's
+# table for why — so the pin is per-role, not one uniform string.
+PER_ROLE_STATUS_LINE = {
+    "explore": "status: done | concerns | needs-context | blocked",
+    "investigator": "status: done | concerns | needs-context | blocked",
+    "planner": "status: done | concerns | needs-context | blocked",
+    "implementer": "status: done | concerns | needs-context | blocked",
+    "executor": "status: done | concerns | needs-context | blocked",
+    # reviewer: `concerns` is a non-blocking finding and `blocked` is a
+    # needs-changes verdict, so both would collide with existing vocabulary.
+    "reviewer": "status: done | needs-context",
+    # expert: it is the ceiling, so `blocked` has nowhere to escalate to.
+    "expert": "status: done | concerns | needs-context",
+}
+
+# Skills that take untrusted third-party text (PR bodies, ticket contents)
+# into a loop that can run commands. Each must say so in its own body.
+INJECTION_GUARDED_SKILLS = ("review-pr", "watch-review", "resolve-ticket")
+
 # Canonical auto-escalation clause (whitespace-normalized), shared by
 # expert.md and the using-leo policy skill.
 CANONICAL_CLAUSE = (
@@ -539,6 +560,55 @@ class TestPerSkillTokens(unittest.TestCase):
                 for tok in tokens:
                     with self.subTest(skill=name, token=tok):
                         self.assertIn(tok, text)
+
+
+class TestFourStateContractIsDeclaredByRoles(unittest.TestCase):
+    """leo:delegation's contract is unenforceable unless the roles emit it."""
+
+    def test_every_role_declares_its_status_line(self):
+        self.assertEqual(
+            sorted(PER_ROLE_STATUS_LINE),
+            sorted(os.path.splitext(f)[0] for f in agent_files()),
+            "every role needs an explicit status-line pin (or a documented narrowing)",
+        )
+        for role, line in PER_ROLE_STATUS_LINE.items():
+            with self.subTest(role=role):
+                with open(os.path.join(AGENTS_DIR, f"{role}.md"), encoding="utf-8") as fh:
+                    text = fh.read()
+                self.assertIn(line, text)
+                self.assertIn("leo:delegation", text)
+
+    def test_delegation_documents_the_narrowed_roles(self):
+        path = os.path.join(SKILLS_DIR, "delegation", "SKILL.md")
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        # A reader of the skill alone would otherwise expect four states from
+        # all seven roles.
+        self.assertIn("reviewer", text)
+        self.assertIn("expert", text)
+        self.assertIn("SendMessage", text)
+
+
+class TestUntrustedInputGuardrails(unittest.TestCase):
+    """Skills that feed third-party text to a command-capable loop say so."""
+
+    def test_guarded_skills_declare_data_not_instructions(self):
+        for name in INJECTION_GUARDED_SKILLS:
+            path = os.path.join(SKILLS_DIR, name, "SKILL.md")
+            with self.subTest(skill=name):
+                with open(path, encoding="utf-8") as fh:
+                    text = fh.read()
+                self.assertIn("data, never instructions", text)
+
+    def test_guarded_skills_do_not_grant_blanket_gh(self):
+        # `Bash(gh *)` also grants `gh api -X POST`: arbitrary repository
+        # writes, in a loop whose input is attacker-supplied.
+        for name in INJECTION_GUARDED_SKILLS:
+            path = os.path.join(SKILLS_DIR, name, "SKILL.md")
+            with self.subTest(skill=name):
+                with open(path, encoding="utf-8") as fh:
+                    text = fh.read()
+                self.assertNotIn("Bash(gh *)", text)
 
 
 class TestReadmeRoster(unittest.TestCase):
