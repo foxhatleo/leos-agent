@@ -186,6 +186,6 @@ claude plugin validate .
 python3 ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py plugins/leo
 ```
 
-Version `4.1.0` is aligned across the three plugin manifests and Hermes manifest. A future `vX.Y.Z` tag triggers the release workflow, which verifies version alignment, runs the suite, builds the generic and Hermes archives, and publishes a GitHub release. Creating or pushing the tag remains a deliberate maintainer action.
+Version `5.0.0` is aligned across the three plugin manifests and Hermes manifest. A future `vX.Y.Z` tag triggers the release workflow, which verifies version alignment, runs the suite, builds the generic and Hermes archives, and publishes a GitHub release. Creating or pushing the tag remains a deliberate maintainer action.
 
 For local harness testing, point each harness's development-plugin facility at `plugins/leo/`; test Hermes from the repository root because its entrypoint wraps the nested payload.
