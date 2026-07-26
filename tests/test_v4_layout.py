@@ -2,7 +2,11 @@
 
 import json
 import os
+import sys
 import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from expected_version import EXPECTED_VERSION
 
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -70,7 +74,7 @@ class TestV4Layout(unittest.TestCase):
             data = _load("plugins", "leo", f".{harness}-plugin", "plugin.json")
             with self.subTest(harness=harness):
                 self.assertEqual(data["name"], "leo")
-                self.assertEqual(data["version"], "5.1.0")
+                self.assertEqual(data["version"], EXPECTED_VERSION)
                 self.assertNotIn("mcpServers", data)
         codex = _load("plugins", "leo", ".codex-plugin", "plugin.json")
         self.assertNotIn("hooks", codex)

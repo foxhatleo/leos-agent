@@ -4,12 +4,14 @@
 CODE ships inside the plugin (possibly a versioned cache that a plugin update
 can wipe or relocate) — this file must never derive the data root from its own
 __file__ location. DATA always lives under
-${LEOS_AGENT_PATH:-~/.leos-agent}/local, independent of where this script
-itself happens to run from, so a plugin update can never lose state.
+${LEOS_AGENT_LOCAL_PATH:-$HOME/.leos-agent-local}, independent of where this
+script itself happens to run from, so a plugin update can never lose state.
 
-State lives at $LEOS_AGENT_PATH/local/<name>.json (LEOS_AGENT_PATH is an
-optional override; unset, it defaults to ~/.leos-agent). local/ is gitignored:
-state never syncs between machines. Top-level keys are "owner/repo" (or an
+State lives at $LEOS_AGENT_LOCAL_PATH/<name>.json (LEOS_AGENT_LOCAL_PATH is an
+optional override; unset, it defaults to ~/.leos-agent-local). The base is a
+dedicated data directory rather than a repo root, so there is no nested
+local/ segment inside it: state never syncs between machines. Top-level
+keys are "owner/repo" (or an
 absolute project path when there is no GitHub repo) so data stays separate per
 repo/project.
 
@@ -34,16 +36,15 @@ import tempfile
 
 
 def _data_root():
-    return os.environ.get("LEOS_AGENT_PATH") or os.path.join(os.path.expanduser("~"), ".leos-agent")
+    return os.environ.get("LEOS_AGENT_LOCAL_PATH") or os.path.join(os.path.expanduser("~"), ".leos-agent-local")
 
 
 def state_file(name):
     if "/" in name or "\\" in name or ".." in name or os.path.isabs(name):
         sys.exit(f"state: {name!r} is not a valid state name (no slashes, no .., not absolute)")
     root = _data_root()
-    local_dir = os.path.join(root, "local")
-    os.makedirs(local_dir, exist_ok=True)
-    return os.path.join(local_dir, f"{name}.json")
+    os.makedirs(root, exist_ok=True)
+    return os.path.join(root, f"{name}.json")
 
 
 @contextlib.contextmanager

@@ -3,12 +3,15 @@
 import json
 import os
 import re
+import sys
 import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from expected_version import EXPECTED_VERSION
 
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PAYLOAD = os.path.join(REPO, "plugins", "leo")
-EXPECTED_VERSION = "5.1.0"
 
 MANIFESTS = {
     "claude": os.path.join(PAYLOAD, ".claude-plugin", "plugin.json"),

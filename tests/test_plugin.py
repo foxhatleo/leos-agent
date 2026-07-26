@@ -9,7 +9,11 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from expected_version import EXPECTED_VERSION
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLUGIN_DIR = os.path.join(REPO, "plugins", "leo", ".claude-plugin")
@@ -29,7 +33,7 @@ class TestPluginJson(unittest.TestCase):
     def test_valid_and_fields(self):
         data = _load(PLUGIN_JSON)
         self.assertEqual(data.get("name"), "leo")
-        self.assertEqual(data.get("version"), "5.1.0")
+        self.assertEqual(data.get("version"), EXPECTED_VERSION)
         self.assertTrue(data.get("description", "").strip())
         self.assertRegex(data["name"], KEBAB_CASE_RE, f"name {data['name']!r} is not kebab-case")
 

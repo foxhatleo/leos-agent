@@ -80,7 +80,7 @@ class TestCli(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.env = dict(os.environ)
-        self.env["LEOS_AGENT_PATH"] = self.tmp.name
+        self.env["LEOS_AGENT_LOCAL_PATH"] = self.tmp.name
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -106,10 +106,10 @@ class TestCli(unittest.TestCase):
     def test_path_prints_expected_location(self):
         r = run_cli(["path", "foo"], self.env)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(r.stdout.strip(), os.path.join(self.tmp.name, "local", "foo.json"))
+        self.assertEqual(r.stdout.strip(), os.path.join(self.tmp.name, "foo.json"))
 
     def test_corrupt_file_exits_nonzero_with_message(self):
-        local_dir = os.path.join(self.tmp.name, "local")
+        local_dir = self.tmp.name
         os.makedirs(local_dir, exist_ok=True)
         with open(os.path.join(local_dir, "bad.json"), "w") as fh:
             fh.write("not json{{{")
@@ -118,7 +118,7 @@ class TestCli(unittest.TestCase):
         self.assertIn("corrupt", r.stderr)
 
     def test_wrong_type_file_exits_nonzero_with_corrupt_message(self):
-        local_dir = os.path.join(self.tmp.name, "local")
+        local_dir = self.tmp.name
         os.makedirs(local_dir, exist_ok=True)
         with open(os.path.join(local_dir, "list.json"), "w") as fh:
             fh.write("[1, 2, 3]")
@@ -132,34 +132,52 @@ class TestCli(unittest.TestCase):
     def test_path_traversal_name_rejected(self):
         r = run_cli(["path", "../evil"], self.env)
         self.assertNotEqual(r.returncode, 0)
-        # nothing should have been created outside local/
+        # nothing should have been created outside the base dir
         self.assertFalse(os.path.exists(os.path.join(self.tmp.name, "..", "evil.json")))
-        local_dir = os.path.join(self.tmp.name, "local")
-        self.assertFalse(os.path.isdir(local_dir) and "evil.json" in os.listdir(local_dir))
+        self.assertNotIn("evil.json", os.listdir(self.tmp.name))
         parent = os.path.dirname(self.tmp.name)
         self.assertNotIn("evil.json", os.listdir(parent))
         self.assertNotIn("evil.json.lock", os.listdir(parent))
 
     def test_self_locate_without_env_override(self):
-        """With LEOS_AGENT_PATH unset, state.py falls back to ~/.leos-agent
-        (never to its own on-disk location, which may be a versioned plugin
-        cache) — and auto-creates the local/ dir it resolves to."""
+        """With LEOS_AGENT_LOCAL_PATH unset, state.py falls back to
+        ~/.leos-agent-local (never to its own on-disk location, which may be
+        a versioned plugin cache) — and auto-creates the dir it resolves to."""
         with tempfile.TemporaryDirectory() as tmp_home:
             env = dict(os.environ)
-            env.pop("LEOS_AGENT_PATH", None)
+            env.pop("LEOS_AGENT_LOCAL_PATH", None)
             env["HOME"] = tmp_home
             r = run_cli(["path", "foo"], env)
             self.assertEqual(r.returncode, 0, r.stderr)
-            expected = os.path.join(tmp_home, ".leos-agent", "local", "foo.json")
+            expected = os.path.join(tmp_home, ".leos-agent-local", "foo.json")
             self.assertEqual(r.stdout.strip(), expected)
-            self.assertTrue(os.path.isdir(os.path.join(tmp_home, ".leos-agent", "local")))
+            self.assertTrue(os.path.isdir(os.path.join(tmp_home, ".leos-agent-local")))
+
+    def test_pre_6_0_0_env_var_is_not_honoured(self):
+        """LEOS_AGENT_PATH was the pre-6.0.0 name and the rename was a clean
+        break. Without this test, reintroducing it as a fallback would pass the
+        whole suite. State silently relocating because a stale variable is
+        still honoured is exactly the failure this guards."""
+        with tempfile.TemporaryDirectory() as tmp_home:
+            with tempfile.TemporaryDirectory() as stale:
+                env = dict(os.environ)
+                env.pop("LEOS_AGENT_LOCAL_PATH", None)
+                env["LEOS_AGENT_PATH"] = stale
+                env["HOME"] = tmp_home
+                r = run_cli(["path", "foo"], env)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertEqual(
+                    r.stdout.strip(),
+                    os.path.join(tmp_home, ".leos-agent-local", "foo.json"),
+                )
+                self.assertEqual(os.listdir(stale), [])
 
 
 class TestConcurrency(unittest.TestCase):
     def test_concurrent_merges_no_lost_updates(self):
         with tempfile.TemporaryDirectory() as tmp:
             env = dict(os.environ)
-            env["LEOS_AGENT_PATH"] = tmp
+            env["LEOS_AGENT_LOCAL_PATH"] = tmp
 
             def do_merge(n):
                 return run_cli(["merge", "conc", "k", json.dumps({"ids": [n]})], env)

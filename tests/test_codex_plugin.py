@@ -5,7 +5,11 @@ Run: python3 -m unittest tests.test_codex_plugin -v
 
 import json
 import os
+import sys
 import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from expected_version import EXPECTED_VERSION
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLUGIN_JSON = os.path.join(REPO, "plugins", "leo", ".codex-plugin", "plugin.json")
@@ -30,7 +34,7 @@ class TestCodexPluginJson(unittest.TestCase):
     def test_valid_and_core_fields(self):
         data = _load()
         self.assertEqual(data.get("name"), "leo")
-        self.assertEqual(data.get("version"), "5.1.0")
+        self.assertEqual(data.get("version"), EXPECTED_VERSION)
         self.assertEqual(data.get("skills"), "./skills/")
         self.assertNotIn("hooks", data)
         self.assertNotIn("mcpServers", data)

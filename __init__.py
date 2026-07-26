@@ -19,8 +19,8 @@ _GUARD = None
 def _breadcrumb(exc):
     """Record why injection was skipped. Never raises: this is the fail path."""
     try:
-        base = os.environ.get("LEOS_AGENT_PATH") or str(Path.home() / ".leos-agent")
-        local = Path(base) / "local"
+        base = os.environ.get("LEOS_AGENT_LOCAL_PATH") or str(Path.home() / ".leos-agent-local")
+        local = Path(base)
         local.mkdir(parents=True, exist_ok=True)
         with (local / "hermes-policy.log").open("a", encoding="utf-8") as fh:
             fh.write(f"policy injection skipped: {type(exc).__name__}: {exc}\n")

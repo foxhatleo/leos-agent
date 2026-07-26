@@ -149,10 +149,12 @@ Leo does not bundle MCP servers. Install and authenticate Linear, Slack, Atlassi
 Skills that persist state write JSON under:
 
 ```text
-${LEOS_AGENT_PATH:-~/.leos-agent}/local/<skill-or-agent-name>.json
+${LEOS_AGENT_LOCAL_PATH:-$HOME/.leos-agent-local}/<skill-or-agent-name>.json
 ```
 
-`~/.leos-agent` is now a data location, not an installation clone. State is separated by repository or project, remains outside plugin caches, and survives plugin upgrades. `LEOS_AGENT_PATH` can redirect it.
+`~/.leos-agent-local` is a dedicated data directory, not an installation clone, so there's no nested `local/` segment inside it. State is separated by repository or project, remains outside plugin caches, and survives plugin upgrades. `LEOS_AGENT_LOCAL_PATH` can redirect it.
+
+**Upgrading to 6.0.0.** Before 6.0.0 this was `LEOS_AGENT_PATH`, and state lived one level deeper, under a nested `local/`. The old variable is no longer read: if it is still set it is ignored silently rather than erroring, so state at the old location becomes invisible instead of failing loudly. That is deliberate — a hard error here would break every session, including the hooks on the failure path — but it means the move is manual. Copy any `*.json` from the old `<old-path>/local/` into `${LEOS_AGENT_LOCAL_PATH:-$HOME/.leos-agent-local}/`, and rename the variable wherever you set it.
 
 ## Repository layout
 

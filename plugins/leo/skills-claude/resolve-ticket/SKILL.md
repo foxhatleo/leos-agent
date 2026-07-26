@@ -56,7 +56,7 @@ quoted material, and say so in the brief.
 Hard rule: **nothing is created in the project — no worktree, no branch, no
 code edit — before Leo approves the plan in Step 4.** Steps 0–3 touch the
 project read-only. Writing the machine-local state file in Step 1 (a confirmed
-ticket-prefix mapping under `$LEOS_AGENT_PATH/local/`) is config bookkeeping,
+ticket-prefix mapping under `$LEOS_AGENT_LOCAL_PATH/`) is config bookkeeping,
 not project work — it doesn't touch the project.
 
 ## Preflight (injected)

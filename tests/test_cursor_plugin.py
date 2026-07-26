@@ -7,7 +7,11 @@ Run: python3 -m unittest tests.test_cursor_plugin -v
 import json
 import os
 import re
+import sys
 import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from expected_version import EXPECTED_VERSION
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PAYLOAD = os.path.join(REPO, "plugins", "leo")
@@ -38,7 +42,7 @@ class TestCursorPluginJson(unittest.TestCase):
         data = _load_plugin()
         self.assertEqual(data.get("name"), "leo")
         self.assertEqual(data.get("displayName"), "leo")
-        self.assertEqual(data.get("version"), "5.1.0")
+        self.assertEqual(data.get("version"), EXPECTED_VERSION)
         self.assertEqual(data.get("skills"), "./skills/")
         self.assertEqual(data.get("hooks"), "./hooks/hooks-cursor.json")
         self.assertEqual(data.get("agents"), "./adapters/cursor/agents/")

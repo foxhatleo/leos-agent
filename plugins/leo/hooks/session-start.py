@@ -61,10 +61,10 @@ def _strip_frontmatter(text):
 def _breadcrumb(exc):
     """Record why injection failed. Never raises: this runs on the fail path."""
     try:
-        base = os.environ.get("LEOS_AGENT_PATH") or os.path.join(
-            os.path.expanduser("~"), ".leos-agent"
+        base = os.environ.get("LEOS_AGENT_LOCAL_PATH") or os.path.join(
+            os.path.expanduser("~"), ".leos-agent-local"
         )
-        local = os.path.join(base, "local")
+        local = base
         os.makedirs(local, exist_ok=True)
         with open(os.path.join(local, "session-start.log"), "a", encoding="utf-8") as fh:
             fh.write("policy injection skipped: {}: {}\n".format(type(exc).__name__, exc))
