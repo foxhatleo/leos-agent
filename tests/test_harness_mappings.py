@@ -12,6 +12,10 @@ import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKILLS_DIR = os.path.join(REPO, "plugins", "leo", "skills")
+# Claude-only skills live in their own root (see test_consistency) so the
+# directory-valued Cursor and Codex manifests cannot ship them.
+CLAUDE_SKILLS_DIR = os.path.join(REPO, "plugins", "leo", "skills-claude")
+SKILL_ROOTS = (SKILLS_DIR, CLAUDE_SKILLS_DIR)
 REFERENCES_DIR = os.path.join(SKILLS_DIR, "using-leo", "references")
 
 HARNESSES = ("claude", "codex", "cursor", "hermes")
@@ -42,12 +46,15 @@ def _read(harness):
 
 
 def _skill_dirs():
-    if not os.path.isdir(SKILLS_DIR):
-        return set()
-    return {
-        d for d in os.listdir(SKILLS_DIR)
-        if os.path.isfile(os.path.join(SKILLS_DIR, d, "SKILL.md"))
-    }
+    found = set()
+    for skill_root in SKILL_ROOTS:
+        if not os.path.isdir(skill_root):
+            continue
+        found |= {
+            d for d in os.listdir(skill_root)
+            if os.path.isfile(os.path.join(skill_root, d, "SKILL.md"))
+        }
+    return found
 
 
 class TestMappingFilesExist(unittest.TestCase):

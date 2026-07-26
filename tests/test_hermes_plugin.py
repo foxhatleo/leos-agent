@@ -1,6 +1,7 @@
 """Hermes native plugin registration and hook behavior."""
 
 import importlib.util
+import json
 import os
 import unittest
 
@@ -40,15 +41,25 @@ class TestHermesPlugin(unittest.TestCase):
         cls.ctx = FakeContext()
         cls.plugin.register(cls.ctx)
 
-    def test_registers_every_skill_and_required_hooks(self):
+    def test_registers_every_portable_skill_and_required_hooks(self):
         skill_root = os.path.join(REPO, "plugins", "leo", "skills")
+        with open(os.path.join(REPO, "plugins", "leo", "config", "models.json"), encoding="utf-8") as fh:
+            excluded = set(json.load(fh)["skills"]["exclude"]["hermes"])
         expected = sorted(
             name
             for name in os.listdir(skill_root)
             if os.path.isfile(os.path.join(skill_root, name, "SKILL.md"))
+            and name not in excluded
         )
         self.assertEqual(sorted(self.ctx.skills), expected)
         self.assertEqual(set(self.ctx.hooks), {"pre_llm_call", "pre_tool_call"})
+
+    def test_non_portable_skills_are_never_registered(self):
+        """Asserted by name, not derived — a derived expectation would
+        happily absorb a regression that re-registered all of them."""
+        for name in ("review-pr", "resolve-ticket", "watch-review", "using-leo"):
+            with self.subTest(skill=name):
+                self.assertNotIn(name, self.ctx.skills)
 
     def test_policy_context_is_bounded_and_contains_hermes_models(self):
         result = self.ctx.hooks["pre_llm_call"](user_message="hello")

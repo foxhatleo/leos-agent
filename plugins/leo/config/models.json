@@ -1,5 +1,20 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "skills": {
+    "claudeOnly": ["resolve-ticket", "review-pr", "watch-review"],
+    "exclude": {
+      "claude": [],
+      "cursor": [],
+      "codex": [],
+      "hermes": ["using-leo"]
+    },
+    "reasons": {
+      "resolve-ticket": "needs plugin-path placeholders, a pinned Claude model, and Claude-only subagent, worktree, and question tools",
+      "review-pr": "its whole mechanism is a script reached through a Claude-only skill-directory placeholder, plus a pinned Claude model",
+      "watch-review": "pinned Claude model, and it drives review-pr through Claude Code's own skill-invocation tool",
+      "using-leo": "already injected as policy context on every turn by the Hermes entrypoint, so registering it again would pay for it twice"
+    }
+  },
   "roles": {
     "expert": "fable",
     "planner": "opus",

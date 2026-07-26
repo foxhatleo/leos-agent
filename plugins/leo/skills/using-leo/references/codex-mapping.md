@@ -11,3 +11,11 @@
 Spawn a generic subagent with the canonical `roles/<role>.md` prompt and pass both `model` and `reasoning_effort` explicitly. A model override in the user's prompt or native `AGENTS.md` wins over these defaults.
 
 Tier collapse here: Fable≡Opus (`gpt-5.6-sol`) — routing between collapsed rungs buys role, not power. Fable is not a real rung: `expert` cannot break a deadlock a collapsed Opus already lost, so cap escalation at Opus and report.
+
+## Leo skills not available here
+
+- `leo:resolve-ticket` — needs plugin-path placeholders, a pinned Claude model, and Claude-only subagent, worktree, and question tools.
+- `leo:review-pr` — its whole mechanism is a script reached through a Claude-only skill-directory placeholder, plus a pinned Claude model.
+- `leo:watch-review` — pinned Claude model, and it drives review-pr through Claude Code's own skill-invocation tool.
+
+Every other skill in the policy's Skill index is registered here and behaves the same. Reviewing a pull request on this harness means running the canonical reviewer role prompt against the diff by hand.

@@ -20,7 +20,7 @@ class TestModelMatrix(unittest.TestCase):
             cls.data = json.load(fh)
 
     def test_exact_defaults(self):
-        self.assertEqual(self.data["schemaVersion"], 1)
+        self.assertEqual(self.data["schemaVersion"], 2)
         self.assertEqual(
             self.data["roles"],
             {

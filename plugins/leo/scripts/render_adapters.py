@@ -98,6 +98,34 @@ def _collapse_note(rows):
     return note.rstrip() + "\n"
 
 
+def _skill_notes(config, harness):
+    """Name the leo:* skills this harness does not get, and why.
+
+    Silence here is worse than the exclusion: a policy Skill index that lists
+    skills the harness never registered reads as "available" until someone
+    invokes one. Reason strings describe placeholders in prose on purpose —
+    tests/test_harness_mappings.py fails the build if the literal Claude
+    token appears in a non-Claude mapping.
+    """
+    skills = config.get("skills", {})
+    missing = set(skills.get("exclude", {}).get(harness, ()))
+    if harness != "claude":
+        missing |= set(skills.get("claudeOnly", ()))
+    if not missing:
+        return ""
+    reasons = skills.get("reasons", {})
+    lines = ["", "## Leo skills not available here", ""]
+    for name in sorted(missing):
+        lines.append(f"- `leo:{name}` — {reasons.get(name, 'not portable to this harness')}.")
+    lines.append("")
+    lines.append(
+        "Every other skill in the policy's Skill index is registered here and "
+        "behaves the same. Reviewing a pull request on this harness means "
+        "running the canonical reviewer role prompt against the diff by hand."
+    )
+    return "\n".join(lines) + "\n"
+
+
 def _mapping_docs(config):
     claude_rows = {
         tier: {
@@ -115,21 +143,24 @@ def _mapping_docs(config):
         + "# Claude Code mapping\n\n"
         + _table(claude_rows)
         + "\n\nSpawn the named native agent; its generated frontmatter selects the configured model.\n"
-        + _collapse_note(claude_rows),
+        + _collapse_note(claude_rows)
+        + _skill_notes(config, "claude"),
         "codex": GENERATED
         + "# Codex mapping\n\n"
         + _table(codex)
         + "\n\nSpawn a generic subagent with the canonical `roles/<role>.md` prompt and pass both "
         "`model` and `reasoning_effort` explicitly. A model override in the user's prompt or "
         "native `AGENTS.md` wins over these defaults.\n"
-        + _collapse_note(codex),
+        + _collapse_note(codex)
+        + _skill_notes(config, "codex"),
         "cursor": GENERATED
         + "# Cursor mapping\n\n"
         + _table(cursor)
         + "\n\nCursor plugin agents use `model: inherit`. Select the mapped model in Cursor before "
         "starting a homogeneous tier batch; the plugin does not claim to enforce arbitrary "
         "per-agent model names.\n"
-        + _collapse_note(cursor),
+        + _collapse_note(cursor)
+        + _skill_notes(config, "cursor"),
         "hermes": GENERATED
         + "# Hermes mapping\n\n"
         + f"Provider: `{hermes['provider']}`\n\n"
@@ -137,7 +168,8 @@ def _mapping_docs(config):
         + "\n\nHermes native `delegate_task` has one configured delegation model. Group work into "
         "homogeneous Kimi or GLM batches, switch the parent with `/model`, and set "
         "`delegation.provider: openrouter` plus the matching `delegation.model` before spawning.\n"
-        + _collapse_note(hermes_rows),
+        + _collapse_note(hermes_rows)
+        + _skill_notes(config, "hermes"),
     }
 
 

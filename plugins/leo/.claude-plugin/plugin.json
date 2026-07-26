@@ -15,7 +15,10 @@
     "process",
     "guardrails"
   ],
-  "skills": "./skills/",
+  "skills": [
+    "./skills/",
+    "./skills-claude/"
+  ],
   "userConfig": {
     "fable_model": {
       "type": "string",

@@ -11,3 +11,11 @@
 Cursor plugin agents use `model: inherit`. Select the mapped model in Cursor before starting a homogeneous tier batch; the plugin does not claim to enforce arbitrary per-agent model names.
 
 Tier collapse here: Opus≡Sonnet (`Grok 4.5`) — routing between collapsed rungs buys role, not power.
+
+## Leo skills not available here
+
+- `leo:resolve-ticket` — needs plugin-path placeholders, a pinned Claude model, and Claude-only subagent, worktree, and question tools.
+- `leo:review-pr` — its whole mechanism is a script reached through a Claude-only skill-directory placeholder, plus a pinned Claude model.
+- `leo:watch-review` — pinned Claude model, and it drives review-pr through Claude Code's own skill-invocation tool.
+
+Every other skill in the policy's Skill index is registered here and behaves the same. Reviewing a pull request on this harness means running the canonical reviewer role prompt against the diff by hand.

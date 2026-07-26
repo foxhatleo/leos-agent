@@ -1,6 +1,7 @@
 """Hermes entrypoint for the Leo plugin."""
 
 import importlib.util
+import json
 import os
 from pathlib import Path
 
@@ -110,8 +111,23 @@ def _on_pre_tool_call(tool_name="", args=None, **_):
     }
 
 
+def _excluded_skills(harness="hermes"):
+    """Skill dirs this harness must not register.
+
+    The Claude-only skills already live outside skills/, so the glob below
+    never sees them. This covers the rest: on Hermes, using-leo's body is
+    injected as context every turn, so registering it as a skill too would
+    pay for the same text twice.
+    """
+    config = json.loads((PAYLOAD / "config" / "models.json").read_text(encoding="utf-8"))
+    return set(config.get("skills", {}).get("exclude", {}).get(harness, ()))
+
+
 def register(ctx):
+    excluded = _excluded_skills("hermes")
     for skill_md in sorted((PAYLOAD / "skills").glob("*/SKILL.md")):
+        if skill_md.parent.name in excluded:
+            continue
         ctx.register_skill(skill_md.parent.name, skill_md)
     ctx.register_hook("pre_llm_call", _on_pre_llm_call)
     ctx.register_hook("pre_tool_call", _on_pre_tool_call)

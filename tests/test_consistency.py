@@ -12,6 +12,11 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PAYLOAD = os.path.join(REPO, "plugins", "leo")
 AGENTS_DIR = os.path.join(PAYLOAD, "roles")
 SKILLS_DIR = os.path.join(PAYLOAD, "skills")
+# Claude-only skills live in a second root so the Cursor and Codex
+# manifests, which can only name a directory, cannot ship skills those
+# harnesses are unable to run. Anything walking skills must walk both.
+CLAUDE_SKILLS_DIR = os.path.join(PAYLOAD, "skills-claude")
+SKILL_ROOTS = (SKILLS_DIR, CLAUDE_SKILLS_DIR)
 WORKFLOWS_DIR = os.path.join(PAYLOAD, "workflows")
 HOOKS_DIR = os.path.join(PAYLOAD, "hooks")
 POLICY_FILE = os.path.join(SKILLS_DIR, "using-leo", "SKILL.md")
@@ -46,14 +51,18 @@ ALLOWED_SKILL_FRONTMATTER_KEYS = {
 
 EXECUTOR_TOOL_SET = {"Read", "Grep", "Glob", "Bash", "Write", "Edit"}
 
-# The 13 skill dirs the v3 plugin ships: the policy skill itself, the 9
-# process skills it indexes, and the 3 user-facing workflow skills.
+# Skill dirs under plugins/leo/skills/ — portable to every harness: the
+# policy skill itself plus the 9 process skills it indexes.
 EXPECTED_SKILL_DIRS = {
-    "using-leo", "review-pr", "resolve-ticket", "watch-review",
+    "using-leo",
     "debugging", "verification", "test-first", "writing-plans",
     "executing-plans", "brainstorming", "worktrees", "finishing-a-branch",
     "delegation",
 }
+
+# Skill dirs under plugins/leo/skills-claude/ — the user-facing workflow
+# skills, which depend on Claude-only tools and path placeholders.
+EXPECTED_CLAUDE_SKILL_DIRS = {"review-pr", "resolve-ticket", "watch-review"}
 
 # The 9 process skills the policy's "## Skill index" table must reference.
 PROCESS_SKILLS = {
@@ -166,20 +175,33 @@ def agent_paths():
 
 def skill_files():
     paths = []
-    for root, _dirs, files in os.walk(SKILLS_DIR):
-        for f in files:
-            if f == "SKILL.md":
-                paths.append(os.path.join(root, f))
+    for skill_root in SKILL_ROOTS:
+        for root, _dirs, files in os.walk(skill_root):
+            for f in files:
+                if f == "SKILL.md":
+                    paths.append(os.path.join(root, f))
     return sorted(paths)
 
 
+def skill_path(name):
+    """Locate a skill by dir name across both roots."""
+    for skill_root in SKILL_ROOTS:
+        candidate = os.path.join(skill_root, name, "SKILL.md")
+        if os.path.isfile(candidate):
+            return candidate
+    raise AssertionError(f"no SKILL.md for {name} in {SKILL_ROOTS}")
+
+
 def skill_dirs():
-    if not os.path.isdir(SKILLS_DIR):
-        return set()
-    return {
-        d for d in os.listdir(SKILLS_DIR)
-        if os.path.isfile(os.path.join(SKILLS_DIR, d, "SKILL.md"))
-    }
+    found = set()
+    for skill_root in SKILL_ROOTS:
+        if not os.path.isdir(skill_root):
+            continue
+        found |= {
+            d for d in os.listdir(skill_root)
+            if os.path.isfile(os.path.join(skill_root, d, "SKILL.md"))
+        }
+    return found
 
 
 def reference_files():
@@ -188,12 +210,13 @@ def reference_files():
     them — they need their own explicit inclusion wherever a scan claims
     to cover "everything a leo: token could live in"."""
     paths = []
-    for root, _dirs, files in os.walk(SKILLS_DIR):
-        if os.path.basename(root) != "references":
-            continue
-        for f in files:
-            if f.endswith(".md"):
-                paths.append(os.path.join(root, f))
+    for skill_root in SKILL_ROOTS:
+        for root, _dirs, files in os.walk(skill_root):
+            if os.path.basename(root) != "references":
+                continue
+            for f in files:
+                if f.endswith(".md"):
+                    paths.append(os.path.join(root, f))
     return sorted(paths)
 
 
@@ -406,8 +429,12 @@ class TestStatePyReferencesPrefixed(unittest.TestCase):
     same file."""
 
     def test_every_occurrence_prefixed(self):
-        for root, dirs, files in os.walk(SKILLS_DIR):
-            dirs[:] = [d for d in dirs if d != "__pycache__"]
+        walked = []
+        for skill_root in SKILL_ROOTS:
+            for root, dirs, files in os.walk(skill_root):
+                dirs[:] = [d for d in dirs if d != "__pycache__"]
+                walked.append((root, files))
+        for root, files in walked:
             for fname in files:
                 if fname.endswith((".pyc", ".pyo")):
                     continue
@@ -489,7 +516,41 @@ class TestSkillFrontmatter(unittest.TestCase):
 
 class TestSkillRoster(unittest.TestCase):
     def test_skill_dir_set(self):
-        self.assertEqual(skill_dirs(), EXPECTED_SKILL_DIRS)
+        self.assertEqual(skill_dirs(), EXPECTED_SKILL_DIRS | EXPECTED_CLAUDE_SKILL_DIRS)
+
+    def test_portable_and_claude_only_roots_stay_separate(self):
+        """The split is what makes the exclusion real.
+
+        Cursor and Codex name a directory, not a list, so a Claude-only
+        skill left under skills/ ships to harnesses that cannot run it.
+        """
+        def dirs_in(root):
+            return {
+                d for d in os.listdir(root)
+                if os.path.isfile(os.path.join(root, d, "SKILL.md"))
+            }
+
+        self.assertEqual(dirs_in(SKILLS_DIR), EXPECTED_SKILL_DIRS)
+        self.assertEqual(dirs_in(CLAUDE_SKILLS_DIR), EXPECTED_CLAUDE_SKILL_DIRS)
+
+    def test_config_claude_only_list_matches_the_layout(self):
+        """config/models.json is the declarative source; keep it honest."""
+        with open(MODEL_CONFIG, encoding="utf-8") as fh:
+            config = json.load(fh)
+        self.assertEqual(
+            set(config["skills"]["claudeOnly"]),
+            EXPECTED_CLAUDE_SKILL_DIRS,
+        )
+        # Every excluded or Claude-only skill needs a reason, since the
+        # reasons are what the generated harness mappings show the reader.
+        reasons = config["skills"]["reasons"]
+        named = set(config["skills"]["claudeOnly"])
+        for harness_excludes in config["skills"]["exclude"].values():
+            named |= set(harness_excludes)
+        for name in sorted(named):
+            with self.subTest(skill=name):
+                self.assertIn(name, reasons)
+                self.assertTrue(reasons[name].strip())
 
 
 class TestCrossReferences(unittest.TestCase):
@@ -522,7 +583,7 @@ class TestNoOrphanSkills(unittest.TestCase):
             with open(path, encoding="utf-8") as fh:
                 contents[path] = fh.read()
 
-        own_skill_md = {name: os.path.join(SKILLS_DIR, name, "SKILL.md") for name in skill_dirs()}
+        own_skill_md = {name: skill_path(name) for name in skill_dirs()}
 
         # Only process skills form the cross-link DAG; operational skills
         # (review-pr, resolve-ticket, watch-review) are user-invoked entry
@@ -553,7 +614,7 @@ class TestPolicySkillIndex(unittest.TestCase):
 class TestPerSkillTokens(unittest.TestCase):
     def test_token_pins(self):
         for name, tokens in PER_SKILL_TOKENS.items():
-            path = os.path.join(SKILLS_DIR, name, "SKILL.md")
+            path = skill_path(name)
             with self.subTest(skill=name):
                 with open(path, encoding="utf-8") as fh:
                     text = fh.read()
@@ -579,7 +640,7 @@ class TestFourStateContractIsDeclaredByRoles(unittest.TestCase):
                 self.assertIn("leo:delegation", text)
 
     def test_delegation_documents_the_narrowed_roles(self):
-        path = os.path.join(SKILLS_DIR, "delegation", "SKILL.md")
+        path = skill_path("delegation")
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
         # A reader of the skill alone would otherwise expect four states from
@@ -594,7 +655,7 @@ class TestUntrustedInputGuardrails(unittest.TestCase):
 
     def test_guarded_skills_declare_data_not_instructions(self):
         for name in INJECTION_GUARDED_SKILLS:
-            path = os.path.join(SKILLS_DIR, name, "SKILL.md")
+            path = skill_path(name)
             with self.subTest(skill=name):
                 with open(path, encoding="utf-8") as fh:
                     text = fh.read()
@@ -604,7 +665,7 @@ class TestUntrustedInputGuardrails(unittest.TestCase):
         # `Bash(gh *)` also grants `gh api -X POST`: arbitrary repository
         # writes, in a loop whose input is attacker-supplied.
         for name in INJECTION_GUARDED_SKILLS:
-            path = os.path.join(SKILLS_DIR, name, "SKILL.md")
+            path = skill_path(name)
             with self.subTest(skill=name):
                 with open(path, encoding="utf-8") as fh:
                     text = fh.read()

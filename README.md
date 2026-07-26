@@ -132,7 +132,7 @@ Group delegated work into homogeneous Kimi or GLM batches and change this native
 - `using-leo`: the session policy for model routing, delegation, and execute-then-review.
 - Seven roles: expert, planner, investigator, reviewer, implementer, executor, and explore.
 - Process skills: `brainstorming`, `writing-plans`, `executing-plans`, `debugging`, `test-first`, `verification`, `delegation`, `worktrees`, and `finishing-a-branch`.
-- Operational skills: `resolve-ticket`, `review-pr`, and `watch-review`.
+- Operational skills: `resolve-ticket`, `review-pr`, and `watch-review` — Claude Code only. They depend on Claude-only tools and path placeholders, so they ship from a separate `skills-claude/` root that the Cursor, Codex, and Hermes manifests do not read. Each harness's mapping appendix names what it is missing and why.
 - Session bootstrap hooks for Claude Code, Codex, and Cursor, plus native policy injection for Hermes.
 - A shared bash guard that blocks a narrow class of accidental home/system-scale destructive commands.
 
@@ -167,7 +167,9 @@ plugins/leo/                          self-contained cached plugin payload
   roles/                              canonical role prompts
   agents/                             generated Claude agents (conventional path)
   adapters/                           generated agent definitions for other harnesses
-  skills/ hooks/ scripts/ workflows/
+  skills/                             portable skills (every harness)
+  skills-claude/                      Claude-only operational skills
+  hooks/ scripts/ workflows/
 tests/                                stdlib packaging and behavior tests
 ```
 
