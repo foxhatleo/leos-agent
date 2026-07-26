@@ -1,6 +1,6 @@
 ---
 name: investigator
-description: Use proactively for diagnosis that needs a verdict — root-causing a bug, "investigate why X", tracing a failure across systems, weighing evidence into a conclusion. Read-only; returns findings, root cause, and confidence, never edits. Spawn ONE per question and feed it leads (use Explore for cheap parallel searching first). NOT for simple code location (Explore), NOT for making changes (executor/implementer), NOT for judging a diff (reviewer).
+description: Use proactively for diagnosis that needs a verdict — root-causing a bug, "investigate why X", tracing a failure across systems, weighing evidence into a conclusion. Read-only; returns findings, root cause, and confidence, never edits. Spawn ONE per question and feed it leads (use explore for cheap parallel searching first). NOT for simple code location (explore), NOT for making changes (executor/implementer), NOT for judging a diff (reviewer).
 tools: Read, Grep, Glob, Bash, WebFetch, WebSearch
 ---
 

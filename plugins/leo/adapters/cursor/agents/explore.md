@@ -1,5 +1,5 @@
 ---
-name: Explore
+name: explore
 description: Fast, read-only codebase scouting — find files, locate definitions and usages, map structure, answer "where is X handled?". Use proactively, and in parallel, whenever code needs locating or summarizing before any decision. Returns file:line references. NOT for diagnosis or verdicts — that is investigator's job.
 model: inherit
 readonly: true

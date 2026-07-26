@@ -198,7 +198,7 @@ class TestRoutingTableAgentsResolve(unittest.TestCase):
     # table cell ("the `investigator` role", "the `planner` role (or ...)",
     # "the `executor` role", ...) rather than a bare backticked name. The
     # extraction below already tolerates that: it scans every "|"-prefixed
-    # line (any table row) plus the Explore special-case line for *any*
+    # line (any table row) plus the explore special-case line for *any*
     # backticked, colon-free token, so "the `investigator` role" still
     # yields the candidate "investigator". No change needed here beyond
     # this note — verified against the neutral SKILL.md body.

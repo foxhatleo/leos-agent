@@ -62,7 +62,7 @@ time rather than producing three cosmetic variants of the same idea:
    problem look different if you moved the complexity into the data shape,
    into how execution flows, or into where the interface/boundary sits?
 2. **Prior art in the repo** — grep for how this repo already solved a
-   similar problem (via Explore, not inline digging) and steal that pattern
+   similar problem (via explore, not inline digging) and steal that pattern
    before inventing a new one. Consistency with existing structure is a real
    trade-off, not a tie-breaker of last resort.
 3. **The 10x-simpler version** — what would this look like with one-tenth
@@ -106,4 +106,4 @@ up a tier; a genuine deadlock between two Opus-tier framings goes to
   executable plan.
 - investigator — for questions that need evidence before a design question
   can even be framed.
-- Explore — cheap prior-art search feeding the generation method above.
+- explore — cheap prior-art search feeding the generation method above.

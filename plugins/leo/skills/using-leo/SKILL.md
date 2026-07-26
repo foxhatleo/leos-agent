@@ -25,7 +25,7 @@ Tier every task by the kind of work, not per session. When a request spans phase
 | Review / verification | review, verify, audit, judge | Opus | the `reviewer` role on the real diff |
 | Hardest problems / arbitration | "use expert", "deep thinking", "deep investigate", Fable by name | Fable | the `expert` role |
 
-Code location and structure-mapping that precedes any tiered work above goes to `Explore` (Haiku tier, read-only) — cheap scouting that feeds the roles in the table; it returns file:line locations, never verdicts.
+Code location and structure-mapping that precedes any tiered work above goes to `explore` (Haiku tier, read-only) — cheap scouting that feeds the roles in the table; it returns file:line locations, never verdicts.
 
 **Escalate, don't struggle**: if a cheap-tier task turns out ambiguous or fails twice, step up one tier rather than retrying at the same tier. When the right tier is unclear, default up — **capped at Opus**. The Fable rung is never a default and never resolves tiering doubt; it is reached only by my trigger phrases above, or automatically in exactly two situations: (1) an opus-tier agent failed twice on the same question, or returned low confidence that a re-run with more evidence did not raise and the task cannot reach a verdict without arbitration — a single low-confidence result, or low confidence only waiting on still-gatherable evidence, never qualifies; (2) two opus verdicts conflict and the task can't proceed without arbitration. Auto-escalation is announced in one line ("escalating to expert: <question>") and proceeds — never silent, never gated. On a harness with no Fable tier (see the mapping), escalation caps at Opus: stop and report to Leo instead, offering to continue at the Opus tier or hand off to a harness that has the expert rung.
 
@@ -43,14 +43,14 @@ Every implementation request — "fix", "implement", "execute the plan", anythin
 
 The main loop orchestrates; delegated roles do the volume. In an expensive-tier session, inline bulk work burns the expensive tier — delegate down:
 
-- Locating code, mapping structure → `Explore` (Haiku tier), in parallel when questions are independent.
+- Locating code, mapping structure → `explore` (Haiku tier), in parallel when questions are independent.
 - Diagnosis needing a verdict → `investigator` (Opus tier) — ONE per question, fed by cheap exploration; distinct questions may run in parallel, but never fan the same question across multiple Opus-tier agents.
 - Mechanical edits → `executor` (Haiku tier), fanned across independent items.
 - Executing a written plan → `implementer` (Sonnet tier).
 - Judging a diff → `reviewer` (Opus tier).
 - Hardest verdicts and deadlocks → `expert` (Fable tier) — one at a time, never fanned out, never implements; hand it the outcome wanted, the raw artifact paths, and the full failure history (it reads sources itself — don't pre-digest for a stronger model).
 
-Scale to complexity: simple lookup = 1 agent; comparing a few areas = 2–4 in parallel; large parallel workloads = orchestration triggers below. Multi-agent costs ~15× a single chat — reserve fan-out for genuinely parallel, high-value work. In an expensive-tier session this is a hard rule, not a heuristic: implementation and mechanical edits MUST go to `implementer`/`executor`, and code searches to `Explore`; editing or grepping inline is the exception, reserved for a trivial single-file touch (< ~10 lines) where writing the spec would cost more than the change. More than ~3 inline file edits or ~5 inline searches in an expensive-tier session means the work should have been delegated. Dispatch mechanics — brief structure, the return-status contract, durable progress — live in leo:delegation.
+Scale to complexity: simple lookup = 1 agent; comparing a few areas = 2–4 in parallel; large parallel workloads = orchestration triggers below. Multi-agent costs ~15× a single chat — reserve fan-out for genuinely parallel, high-value work. In an expensive-tier session this is a hard rule, not a heuristic: implementation and mechanical edits MUST go to `implementer`/`executor`, and code searches to `explore`; editing or grepping inline is the exception, reserved for a trivial single-file touch (< ~10 lines) where writing the spec would cost more than the change. More than ~3 inline file edits or ~5 inline searches in an expensive-tier session means the work should have been delegated. Dispatch mechanics — brief structure, the return-status contract, durable progress — live in leo:delegation.
 
 ## Orchestration triggers
 

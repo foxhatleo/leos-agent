@@ -110,7 +110,7 @@ blast radius*: git archaeology, related PRs, callers/consumers of what will
 change, landmines named in ticket comments. Scale down to 1 when the ticket
 names the file and fix; up to 3 max for gnarly cross-cutting work — never
 more. Feed them the normalized ticket, resource summaries, and Leo's steering
-constraints; let cheap `Explore` scouts handle raw searching. Synthesize root
+constraints; let cheap `explore` scouts handle raw searching. Synthesize root
 cause and approach here. If the investigators return low confidence on the
 same core question, that is the standing auto-escalation condition: announce
 it in one line and put that question (not the whole investigation) to the

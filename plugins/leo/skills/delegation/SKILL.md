@@ -6,7 +6,7 @@ description: >
   Covers brief construction, model/effort pinning, the four-state return
   contract, and ledger-backed progress tracking for long multi-agent runs.
 when_to_use: >
-  Any time work is routed to a subagent (Explore, investigator, executor,
+  Any time work is routed to a subagent (explore, investigator, executor,
   implementer, reviewer, expert) rather than done inline — single dispatch or
   fan-out. NOT for deciding *which* tier a task belongs in (that's the
   routing table in the injected leo:using-leo policy); this skill covers what
