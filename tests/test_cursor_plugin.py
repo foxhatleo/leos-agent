@@ -38,7 +38,7 @@ class TestCursorPluginJson(unittest.TestCase):
         data = _load_plugin()
         self.assertEqual(data.get("name"), "leo")
         self.assertEqual(data.get("displayName"), "leo")
-        self.assertEqual(data.get("version"), "4.0.0")
+        self.assertEqual(data.get("version"), "4.1.0")
         self.assertEqual(data.get("skills"), "./skills/")
         self.assertEqual(data.get("hooks"), "./hooks/hooks-cursor.json")
         self.assertEqual(data.get("agents"), "./adapters/cursor/agents/")

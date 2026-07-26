@@ -1,12 +1,20 @@
 {
   "name": "leo",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "description": "Leo's portable agent config: cost-tiered model routing, execute-then-review policy, process skills, and guards.",
-  "author": { "name": "Leo Liang" },
+  "author": {
+    "name": "Leo Liang"
+  },
   "homepage": "https://github.com/foxhatleo/leos-agent",
   "repository": "https://github.com/foxhatleo/leos-agent",
   "license": "MIT",
-  "keywords": ["routing", "subagents", "review", "process", "guardrails"],
+  "keywords": [
+    "routing",
+    "subagents",
+    "review",
+    "process",
+    "guardrails"
+  ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Leo",
@@ -14,8 +22,15 @@
     "longDescription": "Leo's operating policy: tier work to models, gate every change behind a review, and reach for process skills (brainstorming, planning, test-first, debugging, verification) at the decision point.",
     "developerName": "Leo Liang",
     "category": "Developer Tools",
-    "capabilities": ["Interactive", "Read", "Write"],
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
     "websiteURL": "https://github.com/foxhatleo/leos-agent",
-    "defaultPrompt": ["Let's plan a change to this project.", "Review my working diff."]
+    "defaultPrompt": [
+      "Let's plan a change to this project.",
+      "Review my working diff."
+    ]
   }
 }

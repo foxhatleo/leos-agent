@@ -70,7 +70,7 @@ class TestV4Layout(unittest.TestCase):
             data = _load("plugins", "leo", f".{harness}-plugin", "plugin.json")
             with self.subTest(harness=harness):
                 self.assertEqual(data["name"], "leo")
-                self.assertEqual(data["version"], "4.0.0")
+                self.assertEqual(data["version"], "4.1.0")
                 self.assertNotIn("mcpServers", data)
         codex = _load("plugins", "leo", ".codex-plugin", "plugin.json")
         self.assertNotIn("hooks", codex)
