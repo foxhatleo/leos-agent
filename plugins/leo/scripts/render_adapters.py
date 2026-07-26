@@ -39,6 +39,13 @@ def _agent_docs(role, tier, config):
     # interpolate plugin options into agent frontmatter, so a placeholder here
     # reaches the model selector verbatim and every spawn dies with "issue
     # with the selected model". config/models.json stays the one source.
+    #
+    # And a *bare* alias, never an alias with a context suffix: the agent
+    # frontmatter `model` field documents exactly three accepted shapes — a
+    # bare alias, a full model id, or `inherit`. `opus[1m]` is valid for
+    # /model and for skill frontmatter, but it is not one of those three, so
+    # it is the same undocumented-assumption bet that the placeholder was.
+    # Skill frontmatter (skills-claude/*) keeps [1m]; agents do not.
     claude_frontmatter.append(f"model: {config['harnesses']['claude'][tier]['model']}")
     effort = config["harnesses"]["claude"][tier].get("effort")
     if effort:
@@ -149,6 +156,10 @@ def _mapping_docs(config):
         + "\n\nSpawn a generic subagent with the canonical `roles/<role>.md` prompt and pass both "
         "`model` and `reasoning_effort` explicitly. A model override in the user's prompt or "
         "native `AGENTS.md` wins over these defaults.\n"
+        "\nRead-only is prompt-enforced here, not harness-enforced: the judge roles "
+        "(planner, investigator, reviewer, explore) are pasted prompts, so nothing stops a "
+        "subagent that ignores them from editing. Treat their read-only contract as a "
+        "convention, and never route work here that depends on it being a guarantee.\n"
         + _collapse_note(codex)
         + _skill_notes(config, "codex"),
         "cursor": GENERATED
@@ -166,6 +177,11 @@ def _mapping_docs(config):
         + "\n\nHermes native `delegate_task` has one configured delegation model. Group work into "
         "homogeneous Kimi or GLM batches, switch the parent with `/model`, and set "
         "`delegation.provider: openrouter` plus the matching `delegation.model` before spawning.\n"
+        "\nThis policy is NOT injected automatically here. Hermes accepts a `pre_llm_call` "
+        "hook but its runtime never invokes one, so the plugin registers `leo:using-leo` as "
+        "an ordinary skill instead — read it at the start of a session to load the policy. "
+        "Read-only is prompt-enforced only: the judge roles are pasted prompts, so their "
+        "read-only contract is a convention here, not a guarantee.\n"
         + _collapse_note(hermes_rows)
         + _skill_notes(config, "hermes"),
     }
@@ -204,6 +220,25 @@ def main():
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(expected, encoding="utf-8")
+
+    # Stale generated files are drift too. Comparing only what render() would
+    # produce is blind to a file that exists and *shouldn't* — a role dropped
+    # from models.json, a harness renamed — so the orphan survives every
+    # --check and ships. Sweep the generated trees and flag anything unclaimed.
+    for pattern in (
+        "agents/*.md",
+        "adapters/cursor/agents/*.md",
+        "skills/using-leo/references/*-mapping.md",
+    ):
+        for path in sorted(ROOT.glob(pattern)):
+            if path in outputs:
+                continue
+            rel = path.relative_to(ROOT).as_posix()
+            if args.check:
+                drift.append(f"{rel} (stale: nothing in config/models.json generates it)")
+            else:
+                path.unlink()
+                print(f"removed stale generated file: {rel}", file=sys.stderr)
     if drift:
         print("generated adapter drift: " + ", ".join(drift), file=sys.stderr)
         return 1

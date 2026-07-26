@@ -59,6 +59,10 @@ def _tar_filter(info):
     info.uname = ""
     info.gname = ""
     info.mtime = 0
+    # Normalize permission bits too: a locally `chmod +x`'d file (or one
+    # checked out with different umask) would otherwise produce a
+    # byte-different archive than the same tree built in CI.
+    info.mode = 0o755 if info.mode & 0o111 else 0o644
     return info
 
 

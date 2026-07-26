@@ -57,9 +57,27 @@ class TestHermesPlugin(unittest.TestCase):
     def test_non_portable_skills_are_never_registered(self):
         """Asserted by name, not derived — a derived expectation would
         happily absorb a regression that re-registered all of them."""
-        for name in ("review-pr", "resolve-ticket", "watch-review", "using-leo"):
+        for name in ("review-pr", "resolve-ticket", "watch-review"):
             with self.subTest(skill=name):
                 self.assertNotIn(name, self.ctx.skills)
+
+    def test_policy_reaches_hermes_as_a_skill(self):
+        """Hermes accepts a pre_llm_call hook and never invokes it (upstream
+        #2817, closed as not planned), so the policy has to arrive some other
+        way or it never arrives at all. Registering using-leo as an ordinary
+        skill is that other way; excluding it on the assumption the hook fires
+        left Hermes with no policy whatsoever."""
+        self.assertIn("using-leo", self.ctx.skills)
+
+    def test_policy_context_has_growth_headroom(self):
+        """Trip in CI on policy growth, not in production. The ceiling is a
+        hard failure mode; this fails while there is still room to react."""
+        context = self.plugin._render_policy()
+        self.assertLess(
+            len(context),
+            int(self.plugin.POLICY_LIMIT * 0.9),
+            f"policy at {len(context)} of {self.plugin.POLICY_LIMIT} — under 10% headroom",
+        )
 
     def test_policy_context_is_bounded_and_contains_hermes_models(self):
         result = self.ctx.hooks["pre_llm_call"](user_message="hello")

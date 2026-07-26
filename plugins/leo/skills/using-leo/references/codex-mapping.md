@@ -10,6 +10,8 @@
 
 Spawn a generic subagent with the canonical `roles/<role>.md` prompt and pass both `model` and `reasoning_effort` explicitly. A model override in the user's prompt or native `AGENTS.md` wins over these defaults.
 
+Read-only is prompt-enforced here, not harness-enforced: the judge roles (planner, investigator, reviewer, explore) are pasted prompts, so nothing stops a subagent that ignores them from editing. Treat their read-only contract as a convention, and never route work here that depends on it being a guarantee.
+
 Tier collapse here: Fable≡Opus (`gpt-5.6-sol`) — routing between collapsed rungs buys role, not power. Fable is not a real rung: `expert` cannot break a deadlock a collapsed Opus already lost, so cap escalation at Opus and report.
 
 ## Leo skills not available here

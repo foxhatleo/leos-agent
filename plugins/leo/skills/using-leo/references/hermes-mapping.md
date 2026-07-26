@@ -12,13 +12,14 @@ Provider: `openrouter`
 
 Hermes native `delegate_task` has one configured delegation model. Group work into homogeneous Kimi or GLM batches, switch the parent with `/model`, and set `delegation.provider: openrouter` plus the matching `delegation.model` before spawning.
 
+This policy is NOT injected automatically here. Hermes accepts a `pre_llm_call` hook but its runtime never invokes one, so the plugin registers `leo:using-leo` as an ordinary skill instead — read it at the start of a session to load the policy. Read-only is prompt-enforced only: the judge roles are pasted prompts, so their read-only contract is a convention here, not a guarantee.
+
 Tier collapse here: Fable≡Opus (`moonshotai/kimi-k3`), Sonnet≡Haiku (`z-ai/glm-5.2`) — routing between collapsed rungs buys role, not power. Fable is not a real rung: `expert` cannot break a deadlock a collapsed Opus already lost, so cap escalation at Opus and report.
 
 ## Leo skills not available here
 
 - `leo:resolve-ticket` — needs plugin-path placeholders, a pinned Claude model, and Claude-only subagent, worktree, and question tools.
 - `leo:review-pr` — its whole mechanism is a script reached through a Claude-only skill-directory placeholder, plus a pinned Claude model.
-- `leo:using-leo` — already injected as policy context on every turn by the Hermes entrypoint, so registering it again would pay for it twice.
 - `leo:watch-review` — pinned Claude model, and it drives review-pr through Claude Code's own skill-invocation tool.
 
 Every other skill in the policy's Skill index is registered here and behaves the same. Reviewing a pull request on this harness means running the canonical reviewer role prompt against the diff by hand.

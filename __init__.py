@@ -115,15 +115,22 @@ def _excluded_skills(harness="hermes"):
     """Skill dirs this harness must not register.
 
     The Claude-only skills already live outside skills/, so the glob below
-    never sees them. This covers the rest: on Hermes, using-leo's body is
-    injected as context every turn, so registering it as a skill too would
-    pay for the same text twice.
+    never sees them. Nothing else is excluded on Hermes today: using-leo used
+    to be, on the assumption its body arrived as context every turn — see the
+    register() note for why that assumption was wrong and costly.
     """
     config = json.loads((PAYLOAD / "config" / "models.json").read_text(encoding="utf-8"))
     return set(config.get("skills", {}).get("exclude", {}).get(harness, ()))
 
 
 def register(ctx):
+    # Hermes accepts pre_llm_call in register_hook() and lists it in VALID_HOOKS,
+    # but its runtime never calls invoke_hook() with it (upstream issue #2817,
+    # closed as not planned). So _on_pre_llm_call below has never run, and the
+    # policy has never reached a Hermes turn — silently, because a hook that is
+    # never invoked cannot even leave a breadcrumb. Registering using-leo as a
+    # normal skill is the part that actually works today; the hook stays
+    # registered so injection starts working the day upstream wires it up.
     excluded = _excluded_skills("hermes")
     for skill_md in sorted((PAYLOAD / "skills").glob("*/SKILL.md")):
         if skill_md.parent.name in excluded:

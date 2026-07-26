@@ -32,9 +32,13 @@ REQUIRED_SUBSTRINGS = (
 MAX_ADDITIONAL_CONTEXT_LEN = 14000
 
 
-def _run(plugin_root):
+def _run(plugin_root, extra_env=None):
     env = dict(os.environ)
     env["CLAUDE_PLUGIN_ROOT"] = plugin_root
+    for var in [k for k in env if k.startswith("CODEX_")] + ["PLUGIN_ROOT", "CURSOR_PLUGIN_ROOT"]:
+        env.pop(var, None)
+    if extra_env:
+        env.update(extra_env)
     return subprocess.run(
         [sys.executable, SESSION_START_PY],
         env=env,
@@ -79,6 +83,25 @@ class TestSessionStartInjectsPolicy(unittest.TestCase):
         for tier, item in claude.items():
             with self.subTest(tier=tier):
                 self.assertIn(item["model"], additional_context)
+
+
+class TestSessionStartLocaleIndependent(unittest.TestCase):
+    """The policy is full of em-dashes and arrows. Under a non-UTF-8 locale the
+    platform default decoder raises, injection fails open, and the session runs
+    with no policy at all — invisibly. LC_ALL=C is routine in cron, CI,
+    containers, and plain ssh, so this is a real environment, not a synthetic one.
+    """
+
+    def test_c_locale_still_injects_policy(self):
+        result = _run(PLUGIN, {"LC_ALL": "C", "LANG": "C", "PYTHONUTF8": "0"})
+        self.assertEqual(result.returncode, 0, f"stderr={result.stderr}")
+        payload = json.loads(result.stdout)
+        additional_context = payload.get("hookSpecificOutput", {}).get("additionalContext", "")
+        self.assertTrue(
+            additional_context,
+            "policy vanished under LC_ALL=C — an open() is missing encoding='utf-8'",
+        )
+        self.assertIn("<leo-policy>", additional_context)
 
 
 class TestSessionStartDegradesGracefully(unittest.TestCase):

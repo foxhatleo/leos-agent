@@ -3,9 +3,9 @@ export const meta = {
   description: 'Fix a batch of independent tasks with tiered models: Opus plans and verifies, Haiku/Sonnet execute, low-confidence items escalate to Opus',
   whenToUse: 'A list of independent, well-scoped fixes (many tickets, many files) — NOT one large stateful change, which belongs in a normal session with subagents',
   phases: [
-    { title: 'Plan', detail: 'decompose the goal into tiered work items', model: 'opus[1m]' },
+    { title: 'Plan', detail: 'decompose the goal into tiered work items', model: 'opus' },
     { title: 'Execute', detail: 'cheap executors, one isolated worktree per item' },
-    { title: 'Verify', detail: 'Opus reviews each branch diff', model: 'opus[1m]' },
+    { title: 'Verify', detail: 'Opus reviews each branch diff', model: 'opus' },
   ],
 }
 
@@ -19,7 +19,7 @@ export const meta = {
 // Merging approved branches is left to the main session.
 //
 // args.tiers optionally remaps the three rungs, e.g.
-//   { tiers: { cheap: 'haiku', normal: 'sonnet[1m]', judge: 'opus[1m]' } }
+//   { tiers: { cheap: 'haiku', normal: 'sonnet', judge: 'opus' } }
 // Workflow scripts have no filesystem access, so the canonical matrix in
 // config/models.json cannot be read here — the caller passes it through when
 // this machine's mapping differs from the defaults below.
@@ -30,10 +30,15 @@ if (!args || (!args.goal && !Array.isArray(args.tasks))) {
 
 const BRANCH_PREFIX = args.runId ? `leos/fix-${args.runId}` : 'leos/fix'
 
+// Bare model aliases only — this is the documented subagent `model:` shape.
+// The 1m-extended-context suffix (square-bracket /model syntax) is a
+// /model-command / SKILL-frontmatter thing, not a valid subagent model
+// value; passing it here reaches the model selector verbatim and kills the
+// spawn (see the outage this repo just had). Do not add that suffix back.
 const TIERS = {
   cheap: 'haiku',
-  normal: 'sonnet[1m]',
-  judge: 'opus[1m]',
+  normal: 'sonnet',
+  judge: 'opus',
   ...(args.tiers || {}),
 }
 
@@ -91,14 +96,33 @@ function nextTier(tier) {
   return TIERS.judge
 }
 
+// Escalation must buy more than a model swap: the normal rung gets a wider
+// reasoning budget than the cheap rung it is replacing, or a cheap->normal
+// escalation would spend more money for the same effort that already failed.
 function effortFor(tier) {
-  return tier === TIERS.judge ? 'high' : 'low'
+  return tier === TIERS.judge ? 'high' : tier === TIERS.normal ? 'medium' : 'low'
+}
+
+// Caller-supplied args.tasks bypasses the planning agent (and PLAN_SCHEMA's
+// validation with it), so entries need their own gate here: a bad `tier`
+// would flow straight into `model:` below, and a non-object/non-string entry
+// (e.g. null) would silently produce `task: undefined` fed to execPrompt.
+const ALLOWED_TIERS = new Set([TIERS.cheap, TIERS.normal])
+function validateTask(t, i) {
+  if (typeof t === 'string') return { task: t, tier: TIERS.normal }
+  if (t && typeof t === 'object' && typeof t.task === 'string') {
+    if (t.tier !== undefined && !ALLOWED_TIERS.has(t.tier)) {
+      throw new Error(`cost-tiered-fix: args.tasks[${i}].tier must be one of ${[...ALLOWED_TIERS].join(', ')}, got ${JSON.stringify(t.tier)}`)
+    }
+    return { tier: TIERS.normal, ...t }
+  }
+  throw new Error(`cost-tiered-fix: args.tasks[${i}] must be a string or an object with a string "task", got ${JSON.stringify(t)}`)
 }
 
 phase('Plan')
 let items
 if (Array.isArray(args.tasks)) {
-  items = args.tasks.map(t => (typeof t === 'string' ? { task: t, tier: TIERS.normal } : { tier: TIERS.normal, ...t }))
+  items = args.tasks.map(validateTask)
   log(`Using ${items.length} caller-provided tasks (planning skipped)`)
 } else {
   const plan = await agent(
@@ -122,7 +146,7 @@ if (items.length > 10) {
 const results = await pipeline(
   items,
 
-  // Stage 1 — execute cheap (haiku/sonnet[1m], effort low: the cost levers)
+  // Stage 1 — execute cheap (haiku/sonnet, effort low: the cost levers)
   (item, _orig, i) =>
     agent(execPrompt(item.task, `${BRANCH_PREFIX}-${i}`), {
       label: `exec-${i}:${item.tier}`,
@@ -135,7 +159,7 @@ const results = await pipeline(
 
   // Stage 2 — escalation ladder:
   //   - confident result (non-null, confidence !== 'low') -> return as-is, no escalation.
-  //   - null result -> ONE retry at the same tier (haiku retries at sonnet[1m], since
+  //   - null result -> ONE retry at the same tier (haiku retries at sonnet, since
   //     haiku already failed cheap); if that retry is also null/low, ONE escalation to
   //     the next tier up.
   //   - low-confidence result -> ONE escalation exactly one rung up.
@@ -190,9 +214,10 @@ const results = await pipeline(
     return { ...result, supersededBranches, escalated }
   },
 
-  // Stage 3 — Opus verifies the actual diff, not the executor's self-report
+  // Stage 3 — Opus verifies the actual diff, not the executor's self-report.
+  // Stage 2 always returns an object (never null — see its final `return`s
+  // above), so `run` here is never null; no null-guard needed.
   async (run, item, i) => {
-    if (!run) return null
     if (!run.branch) {
       return { task: item.task, ...run, verdict: { approved: false, issues: ['executor reported no branch — nothing to review'] } }
     }
@@ -216,14 +241,19 @@ const approved = done.filter(r => r.verdict && r.verdict.approved)
 const rejected = done.filter(r => !r.verdict || !r.verdict.approved)
 log(`${approved.length} approved, ${rejected.length} rejected, ${items.length - done.length} failed to run`)
 
-// Orphan tracking: every branch that got created (including superseded retries
-// and rejected attempts) but wasn't kept as an approved fix is safe to delete.
-const created = [...new Set(done.flatMap(r => [r.branch, ...(r.supersededBranches || [])].filter(Boolean)))]
+// Orphan tracking: only superseded retries (an earlier attempt's branch that
+// got superseded by a later, kept attempt on the SAME item) are safe to
+// delete — that work is duplicated by the branch that replaced it. A
+// rejected branch is different: it may be the only copy of that item's
+// work, just judged not good enough yet, so it is reported separately and
+// never described as safe to delete — deleting it on the note's say-so
+// would destroy the only copy.
+const orphans = [...new Set(done.flatMap(r => r.supersededBranches || []).filter(Boolean))]
 const kept = approved.map(r => r.branch).filter(Boolean)
-const orphans = created.filter(b => !kept.includes(b))
 
 return {
   approved: approved.map(r => ({ task: r.task, branch: r.branch, escalated: !!r.escalated })),
   rejected: rejected.map(r => ({ task: r.task, branch: r.branch || null, issues: r.verdict ? r.verdict.issues : ['agent failed, no verdict'] })),
-  note: `Approved (merge these from the main session): ${kept.join(', ') || 'none'}. Orphaned (superseded retries or rejected attempts — safe to delete): ${orphans.join(', ') || 'none'}. To clean up an orphan: \`git worktree list\` to find its path, then \`git worktree remove <path>\` (prune does not remove live worktrees).`,
+  orphans,
+  note: `Approved (merge these from the main session): ${kept.join(', ') || 'none'}. Orphaned (superseded retries — safe to delete): ${orphans.join(', ') || 'none'}. Rejected branches hold work that failed review but may still be worth salvaging — do NOT delete them without reviewing first: ${rejected.map(r => r.branch).filter(Boolean).join(', ') || 'none'}. To clean up an orphan: \`git worktree list\` to find its path, then \`git worktree remove <path>\` (prune does not remove live worktrees).`,
 }

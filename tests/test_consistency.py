@@ -34,7 +34,17 @@ HOOKS_JSON = os.path.join(HOOKS_DIR, "hooks.json")
 #   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/state.py"
 STATE_PREFIX = "${CLAUDE_PLUGIN_ROOT}/scripts/"
 
-ALLOWED_MODELS = {"haiku", "sonnet[1m]", "opus[1m]", "fable", "inherit"}
+# Two allowlists, because the two frontmatters accept different shapes.
+#
+# Agent frontmatter `model` documents exactly three forms: a bare alias, a full
+# model id, or `inherit`. `opus[1m]` is NOT one of them — it is /model syntax.
+# Shipping it here would be the same undocumented-assumption bet that
+# "${user_config.opus_model}" was, and that one broke every spawn for two
+# releases. Checked against code.claude.com/docs/en/sub-agents on 2026-07-26.
+ALLOWED_AGENT_MODELS = {"haiku", "sonnet", "opus", "fable", "inherit"}
+# Skill frontmatter `model` accepts the same values as /model, where the
+# extended-context suffix IS valid. Same doc date.
+ALLOWED_SKILL_MODELS = ALLOWED_AGENT_MODELS | {"sonnet[1m]", "opus[1m]"}
 
 EXPECTED_AGENT_STEMS = {
     "explore", "executor", "implementer", "investigator", "reviewer",
@@ -303,26 +313,64 @@ class TestModelValueAllowlist(unittest.TestCase):
             fm = parse_frontmatter(os.path.join(AGENTS_DIR, f))
             with self.subTest(file=f):
                 if "model" in fm:
-                    self.assertIn(fm["model"], ALLOWED_MODELS)
+                    self.assertIn(fm["model"], ALLOWED_AGENT_MODELS)
 
     def test_skill_model_values(self):
         for path in skill_files():
             fm = parse_frontmatter(path)
             with self.subTest(file=os.path.relpath(path, REPO)):
                 if "model" in fm:
-                    self.assertIn(fm["model"], ALLOWED_MODELS)
+                    self.assertIn(fm["model"], ALLOWED_SKILL_MODELS)
+
+
+class TestGeneratedAgentModelShape(unittest.TestCase):
+    """The rendered Claude agents are the file the model selector actually reads.
+
+    Two properties, both violated by the 4.0-5.0.0 outage: no unresolved
+    placeholder of any kind, and exactly one model line per file. An allowlist
+    alone would not have caught a second, conflicting `model:` line.
+    """
+
+    def test_rendered_agents_carry_one_documented_model(self):
+        agents_dir = os.path.join(PAYLOAD, "agents")
+        files = sorted(f for f in os.listdir(agents_dir) if f.endswith(".md"))
+        self.assertEqual({os.path.splitext(f)[0] for f in files}, EXPECTED_AGENT_STEMS)
+        for f in files:
+            with open(os.path.join(agents_dir, f), encoding="utf-8") as fh:
+                text = fh.read()
+            fm = parse_frontmatter(os.path.join(agents_dir, f))
+            with self.subTest(file=f):
+                self.assertNotIn("${", text, "unresolved placeholder in a generated agent")
+                self.assertEqual(
+                    len([ln for ln in text.splitlines() if ln.startswith("model:")]), 1
+                )
+                self.assertIn(fm["model"], ALLOWED_AGENT_MODELS)
 
 
 class TestNoBarePins(unittest.TestCase):
-    def test_agents_and_skills_frontmatter(self):
-        paths = agent_paths() + skill_files()
-        for path in paths:
+    def test_skill_frontmatter_keeps_extended_context(self):
+        """Skills may use [1m] and the Claude-only ones should: they run long
+        review and ticket loops in the main turn. Agents deliberately may not —
+        see ALLOWED_AGENT_MODELS."""
+        for path in skill_files():
             fm = parse_frontmatter(path)
+            if "model" not in fm or fm["model"] in {"haiku", "fable", "inherit"}:
+                continue
             with self.subTest(file=os.path.relpath(path, REPO)):
-                if "model" in fm:
-                    self.assertNotIn(fm["model"], {"opus", "sonnet"})
+                self.assertIn(fm["model"], {"sonnet[1m]", "opus[1m]"})
 
-    def test_workflows_no_bare_literals(self):
+    def test_workflow_models_are_bare_aliases(self):
+        """Inverted deliberately. This assertion used to REQUIRE the [1m] suffix
+        on workflow model literals, which made the test the thing standing
+        between the repo and the safe form.
+
+        A workflow's model values are spawn-a-subagent values, same as agent
+        frontmatter, and the documented shapes there are a bare alias, a full
+        model id, or `inherit`. `[1m]` is /model syntax; it is valid in skill
+        frontmatter and nowhere else. Betting on an undocumented model string
+        already cost this repo two releases of dead agent spawns — don't re-add
+        the suffix here to "restore" the larger context window.
+        """
         if not os.path.isdir(WORKFLOWS_DIR):
             return
         for f in sorted(os.listdir(WORKFLOWS_DIR)):
@@ -332,12 +380,10 @@ class TestNoBarePins(unittest.TestCase):
             with open(path, encoding="utf-8") as fh:
                 text = fh.read()
             with self.subTest(file=f):
-                if "// [1m]-fallback" in text:
-                    continue
-                self.assertNotRegex(text, r"model:\s*'opus'")
-                self.assertNotRegex(text, r"model:\s*'sonnet'")
-                self.assertNotRegex(text, r"(?<![\w-])'opus'(?!\[1m\])")
-                self.assertNotRegex(text, r"(?<![\w-])'sonnet'(?!\[1m\])")
+                self.assertNotIn("[1m]", text)
+                for literal in re.findall(r"model:\s*'([^']+)'", text):
+                    with self.subTest(model=literal):
+                        self.assertIn(literal, ALLOWED_AGENT_MODELS)
 
 
 class TestExpertClauseAlignment(unittest.TestCase):
@@ -484,16 +530,25 @@ class TestStatePyReferencesPrefixed(unittest.TestCase):
                 for lineno, line in enumerate(lines, start=1):
                     if "state.py" not in line:
                         continue
+                    # An allowed-tools permission pattern is a glob, not a path to
+                    # run: `Bash(python3 */state.py *)` is exactly how the grant
+                    # gets narrowed from arbitrary code execution down to this one
+                    # script, so requiring a plugin-root prefix here would forbid
+                    # the narrowing this suite wants.
+                    if "Bash(" in line:
+                        continue
                     for m in re.finditer(re.escape("state.py"), line):
                         idx = m.start()
 
                         has_full_prefix = _state_py_prefix_matches(line, idx, allowed)
 
-                        # Check if this is bare shorthand (not /state.py)
+                        # A bare mention (no leading slash) is prose naming the
+                        # script, not an invocation — an invocation needs a path,
+                        # and it is the path that has to resolve. Prose can't
+                        # silently fail at runtime, so it needs no prefix.
                         is_bare_shorthand = idx == 0 or line[idx - 1] != "/"
 
-                        # Pass if: full prefix OR (has alias definition AND bare shorthand)
-                        passes = has_full_prefix or (has_alias and is_bare_shorthand)
+                        passes = has_full_prefix or is_bare_shorthand
 
                         with self.subTest(file=os.path.relpath(path, REPO), line=lineno):
                             self.assertTrue(
@@ -580,7 +635,10 @@ class TestSkillRoster(unittest.TestCase):
 
 class TestCrossReferences(unittest.TestCase):
     def test_every_leo_token_resolves_to_a_skill_dir(self):
-        dirs = skill_dirs()
+        # The leo: namespace covers both skills and agents — a skill that pins a
+        # spawned subagent's type writes `leo:explore` exactly as it writes
+        # `leo:delegation`, and both have to resolve or the reference is dead.
+        dirs = skill_dirs() | EXPECTED_AGENT_STEMS
         # Per-harness mapping docs (e.g. claude-mapping.md) are sources too:
         # a mapping can introduce leo:<name> tokens of its own, and those
         # must resolve exactly like a token in the policy body or a skill.

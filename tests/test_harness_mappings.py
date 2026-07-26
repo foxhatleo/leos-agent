@@ -21,7 +21,7 @@ REFERENCES_DIR = os.path.join(SKILLS_DIR, "using-leo", "references")
 HARNESSES = ("claude", "codex", "cursor", "hermes")
 
 REQUIRED_SUBSTRINGS = {
-    "claude": ("opus[1m]", "sonnet[1m]", "fable", "haiku"),
+    "claude": ("opus", "sonnet", "fable", "haiku"),
     "codex": (
         "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
         "reasoning_effort", "generic subagent",
@@ -32,6 +32,8 @@ REQUIRED_SUBSTRINGS = {
 
 # Claude-only tokens that must never leak into the other harnesses.
 LEAKED_TOKENS = ("opus[1m]", "sonnet[1m]", "CLAUDE_PLUGIN_ROOT")
+# [1m] is /model syntax, not an agent-frontmatter model shape, so it must
+# not appear in ANY mapping now — including Claude's.
 
 NON_CLAUDE_HARNESSES = tuple(h for h in HARNESSES if h != "claude")
 

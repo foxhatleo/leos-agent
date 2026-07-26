@@ -87,8 +87,8 @@ Tier names describe work, not a universal provider model. The canonical defaults
 | Tier | Typical work | Claude Code | Cursor | Codex | Hermes via OpenRouter |
 |---|---|---|---|---|---|
 | Fable | Expert arbitration | `fable` | GPT-5.6 Sol | `gpt-5.6-sol`, max | `moonshotai/kimi-k3` |
-| Opus | Planning, investigation, review | `opus[1m]` | Grok 4.5 | `gpt-5.6-sol`, high | `moonshotai/kimi-k3` |
-| Sonnet | Implementation | `sonnet[1m]` | Grok 4.5 | `gpt-5.6-terra`, medium | `z-ai/glm-5.2` |
+| Opus | Planning, investigation, review | `opus` | Grok 4.5 | `gpt-5.6-sol`, high | `moonshotai/kimi-k3` |
+| Sonnet | Implementation | `sonnet` | Grok 4.5 | `gpt-5.6-terra`, medium | `z-ai/glm-5.2` |
 | Haiku | Exploration and mechanical work | `haiku` | Composer 2.5 | `gpt-5.6-luna`, low | `z-ai/glm-5.2` |
 
 The role mapping is expert → Fable; planner, investigator, and reviewer → Opus; implementer → Sonnet; executor and explore → Haiku.
@@ -97,6 +97,8 @@ The role mapping is expert → Fable; planner, investigator, and reviewer → Op
 
 - Maintainers edit only `plugins/leo/config/models.json`, then run `python3 plugins/leo/scripts/render_adapters.py`. CI runs the same command with `--check` to reject generated-file drift.
 - Claude tiers are not configurable per install. Claude Code does not interpolate plugin options into agent frontmatter, so the models are baked into the generated agents: retier by editing `plugins/leo/config/models.json`, re-running the renderer, bumping the plugin version, and running `claude plugin update leo@leos-agent`. The version bump matters — the plugin cache keys on it, so an unbumped edit never reaches an installed plugin.
+- Claude agent models are bare aliases, never `opus[1m]`. Agent frontmatter accepts an alias, a full model id, or `inherit`; the extended-context suffix is `/model` syntax and belongs only in *skill* frontmatter, which is why the Claude-only skills still carry it. On plans where Opus already runs with the larger context window, the suffix bought nothing in agents anyway.
+- `plugins/leo/settings.json` is a reference copy of Leo's own Claude Code settings, not a plugin component — no harness loads it. Apply those values by hand if you want them.
 - Codex users can override a model for one request in the prompt, or persist a Leo tier override in native `AGENTS.md`. Explicit user instructions take precedence over bundled defaults.
 - Cursor users select the mapped model in the native model picker before starting a homogeneous tier batch. Generated Cursor agents use `model: inherit`.
 - Hermes users switch the parent with `/model` and configure one delegation model for all native children. A delegation batch cannot mix Kimi and GLM.

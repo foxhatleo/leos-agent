@@ -21,8 +21,13 @@ import pwd
 import re
 import shlex
 import sys
+import tempfile
 
 HOME = os.path.realpath(os.path.expanduser("~"))
+# Always resolvable (falls back to tempfile's default), unlike $PWD/cd-context which can be
+# genuinely unknown — so $TMPDIR gets the same always-expand treatment as $HOME, not the
+# conservative UNKNOWN_PATH fallback reserved for shell state the guard can't observe.
+TMPDIR = os.path.realpath(os.environ.get("TMPDIR") or tempfile.gettempdir())
 
 
 def _fs_case_insensitive(path):
@@ -53,6 +58,11 @@ WRAPPERS = {"sudo", "command", "env", "nice", "nohup", "time", "doas", "exec"}
 CONTROL_PREFIXES = {"if", "then", "elif", "else", "while", "until", "for", "select", "do", "case"}
 RECURSIVE_SHORT = re.compile(r"^-[a-zA-Z]*[rR]")
 FORCEABLE = re.compile(r"^-[a-zA-Z]*f")
+# `sh -c '...'` / `bash -c "..."` is a normal invocation form, not obfuscation (unlike eval,
+# which the module docstring explicitly scopes out) — the string argument after -c is a real
+# command that deserves the same scrutiny as anything typed directly.
+SHELLS = {"sh", "bash", "zsh", "dash"}
+MAX_SHELL_DEPTH = 3
 
 CRITICAL_DIRS = {
     "/", "/Users", "/home", "/root", "/dev", "/bin", "/boot", "/etc", "/lib",
@@ -63,7 +73,7 @@ CRITICAL_DIRS = {
 HOME_TOPLEVEL = {os.path.join(HOME, d) for d in
                  ("Desktop", "Documents", "Downloads", "Library", "Pictures", "Movies", "Music")}
 HOME_REF = re.compile(r"(~([A-Za-z_][\w-]*)?(/|[\s*]|$)|\$\{?HOME\}?)")
-WATCHED = {"rm", "dd", "chmod", "xargs", "cd", "find"}
+WATCHED = {"rm", "dd", "chmod", "xargs", "cd", "find", "git"} | SHELLS
 ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 UNKNOWN_DIR = "<unknown>"
 UNKNOWN_PATH = "<unexpanded-shell-path>"
@@ -162,6 +172,7 @@ def expand(target, cwd, cd_context):
     else:
         workdir = cd_context or cwd
     t = _subst_var(target, "HOME", HOME)
+    t = _subst_var(t, "TMPDIR", TMPDIR)
     if workdir:
         t = _subst_var(t, "PWD", workdir)
     elif "$PWD" in t or "${PWD}" in t:
@@ -197,7 +208,15 @@ def brace_variants(path):
 
 
 def is_critical(path):
-    """Is path a critical dir, inside a critical subtree, or a glob over one's contents?"""
+    """Is path a critical dir, inside a critical subtree, or a glob over one's contents?
+
+    Policy: only the root-level `/*`/`/.*` content-glob is modelled (below). Other shell
+    globs (`~/Doc*`, `/U*ers`, etc.) are NOT expanded or matched here — that would require
+    reimplementing glob semantics against the real filesystem, which is out of scope for an
+    accidental-command tripwire and starts to look like the obfuscation-defeating machinery
+    the module docstring disclaims. This is a deliberate scope decision, not an oversight:
+    such globs currently pass the guard.
+    """
     if not path:
         return False
     starred = path.endswith(("/*", "/.*")) or path in ("/*", "*")
@@ -322,6 +341,40 @@ def check_find(tokens, cwd, cd_context, statement):
     return None
 
 
+def check_git_clean(tokens, cwd, cd_context):
+    """`git clean -f` (or any bundled short flag containing 'f', e.g. -xdff) irreversibly
+    deletes every untracked file under the target — squarely the guard's threat class, same
+    as recursive rm. Block only when a force flag is present AND the resolved target (an
+    explicit path argument, or the cwd/cd-context when none is given) is critical; reuses
+    is_critical/expand rather than new path logic."""
+    if len(tokens) < 2 or tokens[1] != "clean":
+        return None
+    force = False
+    targets = []
+    for t in tokens[2:]:
+        if t in ("-f", "--force"):
+            force = True
+        elif t.startswith("--"):
+            continue
+        elif t.startswith("-"):
+            if FORCEABLE.match(t):
+                force = True
+        else:
+            targets.append(t)
+    if not force:
+        return None
+    if targets:
+        for raw in targets:
+            for candidate in brace_variants(expand(raw, cwd, cd_context)):
+                if candidate == UNKNOWN_PATH or is_critical(candidate):
+                    return f"git clean with a force flag targeting '{raw}'"
+        return None
+    base = cd_context or cwd
+    if base and base not in (UNKNOWN_DIR, UNKNOWN_PATH) and is_critical(base):
+        return "git clean with a force flag in a critical working directory"
+    return None
+
+
 def handle_cd(tokens, cwd, cd_context):
     """Model cd: bare cd -> HOME; `cd -` -> unknown; skip flags/--."""
     args = [t for t in tokens[1:] if not (t.startswith("-") and t != "-")]
@@ -333,7 +386,7 @@ def handle_cd(tokens, cwd, cd_context):
     return UNKNOWN_DIR if result == UNKNOWN_PATH else result
 
 
-def check_statement(statement, cwd, cd_context):
+def check_statement(statement, cwd, cd_context, depth=0):
     """Check one statement (possibly a pipeline). Returns (reason|None, new_cd_context)."""
     stmt_home_ref = bool(HOME_REF.search(statement))
 
@@ -346,6 +399,47 @@ def check_statement(statement, cwd, cd_context):
         if cmd == "cd":
             cd_context = handle_cd(tokens, cwd, cd_context)
             continue
+        if cmd in SHELLS:
+            # `sh -c '<command>'` / `bash -c "<command>"` etc: the string argument after -c
+            # is a real command, not obfuscation, so recurse the same check() into it. shlex
+            # has already stripped the quoting, so the token after the option cluster is the
+            # literal script text. Depth-capped (not `eval`-style unbounded unwrapping) to
+            # bound self-nesting.
+            #
+            # Covered here: `-c` alone, and `c` bundled into any leading short-option cluster
+            # in any position (`-ec`, `-ce`, `-lc`, separate tokens like `-e -c`), stopping at
+            # a `--` terminator or the first non-option token. A cluster with no `c` (e.g.
+            # `sh -e script.sh`) is treated as a file argument and is NOT recursed into.
+            # Deliberately NOT covered (same scope as `eval`, per the module docstring):
+            # long-option spellings of script mode, and anything beyond MAX_SHELL_DEPTH of
+            # self-nesting — those are adversarial-evasion concerns, not accidental commands.
+            idx = 1
+            found_c = False
+            while idx < len(tokens):
+                t = tokens[idx]
+                if t == "--":
+                    idx += 1
+                    break
+                if t.startswith("--"):
+                    idx += 1
+                    continue
+                if t.startswith("-") and len(t) > 1:
+                    if "c" in t[1:]:
+                        found_c = True
+                        idx += 1
+                        break
+                    idx += 1
+                    continue
+                break
+            if found_c and idx < len(tokens) and depth < MAX_SHELL_DEPTH:
+                reason = check(tokens[idx], cwd, depth + 1)
+                if reason:
+                    return reason, cd_context
+            continue
+        if cmd == "git":
+            reason = check_git_clean(tokens, cwd, cd_context)
+            if reason:
+                return reason, cd_context
         if cmd == "rm":
             reason = check_rm(tokens, cwd, cd_context)
             if reason:
@@ -397,11 +491,11 @@ def _normalize_ifs(command):
     return _IFS_RE.sub(" ", command)
 
 
-def check(command, cwd):
+def check(command, cwd, depth=0):
     command = _normalize_ifs(command)
     cd_context = None
     for statement in split_statements(command):
-        reason, cd_context = check_statement(statement, cwd, cd_context)
+        reason, cd_context = check_statement(statement, cwd, cd_context, depth)
         if reason:
             return reason
     return None

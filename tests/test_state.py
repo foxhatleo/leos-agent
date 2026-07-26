@@ -117,6 +117,29 @@ class TestCli(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("corrupt", r.stderr)
 
+    def test_wrong_type_file_exits_nonzero_with_corrupt_message(self):
+        local_dir = os.path.join(self.tmp.name, "local")
+        os.makedirs(local_dir, exist_ok=True)
+        with open(os.path.join(local_dir, "list.json"), "w") as fh:
+            fh.write("[1, 2, 3]")
+        r = run_cli(["get", "list", "x"], self.env)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("corrupt", r.stderr)
+        r = run_cli(["merge", "list", "k", "{}"], self.env)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("corrupt", r.stderr)
+
+    def test_path_traversal_name_rejected(self):
+        r = run_cli(["path", "../evil"], self.env)
+        self.assertNotEqual(r.returncode, 0)
+        # nothing should have been created outside local/
+        self.assertFalse(os.path.exists(os.path.join(self.tmp.name, "..", "evil.json")))
+        local_dir = os.path.join(self.tmp.name, "local")
+        self.assertFalse(os.path.isdir(local_dir) and "evil.json" in os.listdir(local_dir))
+        parent = os.path.dirname(self.tmp.name)
+        self.assertNotIn("evil.json", os.listdir(parent))
+        self.assertNotIn("evil.json.lock", os.listdir(parent))
+
     def test_self_locate_without_env_override(self):
         """With LEOS_AGENT_PATH unset, state.py falls back to ~/.leos-agent
         (never to its own on-disk location, which may be a versioned plugin

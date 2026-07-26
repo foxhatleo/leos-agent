@@ -35,7 +35,7 @@ Every implementation request — "fix", "implement", "execute the plan", anythin
 
 1. Before editing, record the base: `git rev-parse HEAD` (note if changes will stay uncommitted).
 2. Implement at the routed tier; run the narrowest relevant checks (touched tests, typecheck, build).
-3. Have the `reviewer` role judge the actual diff, passing the base ref (or "uncommitted working tree") and the original request/plan text. Never self-review instead. Review runs at the Opus tier by default. Downscale to a Sonnet-tier review ONLY for a clearly-trivial diff — ALL of: ≤ 2 files, ≤ ~60 changed lines, mechanical/boilerplate class (rename, format, comment, constant/string tweak, dependency-version bump, test-data edit), and no risky-path match (auth, payments/billing, crypto/secrets, DB migration or schema, CI/CD config, access control). If any condition fails or you are unsure, keep the full Opus-tier review — the default bucket is today's behavior. Never skip review because the change "is small". Only exemptions (no review at all): docs/comment-only diffs, and edits Leo dictated verbatim.
+3. Have the `reviewer` role judge the actual diff, passing the base ref (or "uncommitted working tree") and the original request/plan text. Never self-review instead. Review runs at the Opus tier by default. Downscale to a Sonnet-tier review ONLY for a clearly-trivial diff — ALL of: ≤ 2 files, ≤ ~60 changed lines, mechanical/boilerplate class (rename, format, comment, constant/string tweak, dependency-version bump, test-data edit), and no risky-path match (auth, payments/billing, crypto/secrets, DB migration or schema, CI/CD config, access control). If any condition fails or you are unsure, keep the full Opus-tier review — the default bucket is today's behavior. Never skip review because the change "is small". Only exemptions (no review at all): docs/comment-only diffs, and edits Leo dictated verbatim — and "verbatim" means I gave you the literal text or the literal command, so claiming this exemption requires quoting what I said back in the done report. A paraphrase, an interpretation, or "this is what he meant" is not dictation and gets the normal review.
 4. Blocking findings: fix at the executing tier, re-review the fix only. ONE cycle — if the second review still blocks, stop and report the findings to Leo instead of looping, offering `expert` arbitration as one of the options (where the Fable rung exists).
 5. Report done as three lines: what changed / checks run / review verdict.
 
@@ -50,7 +50,7 @@ The main loop orchestrates; delegated roles do the volume. In an expensive-tier 
 - Judging a diff → `reviewer` (Opus tier).
 - Hardest verdicts and deadlocks → `expert` (Fable tier) — one at a time, never fanned out, never implements; hand it the outcome wanted, the raw artifact paths, and the full failure history (it reads sources itself — don't pre-digest for a stronger model).
 
-Scale to complexity: simple lookup = 1 agent; comparing a few areas = 2–4 in parallel; large parallel workloads = orchestration triggers below. Multi-agent costs ~15× a single chat — reserve fan-out for genuinely parallel, high-value work. In an expensive-tier session this is a hard rule, not a heuristic: implementation and mechanical edits MUST go to `implementer`/`executor`, and code searches to `explore`; editing or grepping inline is the exception, reserved for a trivial single-file touch (< ~10 lines) where writing the spec would cost more than the change. More than ~3 inline file edits or ~5 inline searches in an expensive-tier session means the work should have been delegated. Dispatch mechanics — brief structure, the return-status contract, durable progress — live in leo:delegation.
+Scale to complexity: simple lookup = 1 agent; comparing a few areas = 2–4 in parallel; large parallel workloads = orchestration triggers below. A fan-out costs roughly an order of magnitude more than a single chat — reserve it for genuinely parallel, high-value work. In an expensive-tier session this is a hard rule, not a heuristic: implementation and mechanical edits MUST go to `implementer`/`executor`, and code searches to `explore`; editing or grepping inline is the exception, reserved for a trivial single-file touch (< ~10 lines) where writing the spec would cost more than the change. More than ~3 inline file edits or ~5 inline searches in an expensive-tier session means the work should have been delegated. Dispatch mechanics — brief structure, the return-status contract, durable progress — live in leo:delegation.
 
 ## Agent teams
 
@@ -68,7 +68,7 @@ Any skill or agent that needs to persist information writes JSON to `$LEOS_AGENT
 
 ## Cost discipline
 
-Spend expensive tokens on planning, verification, and synthesis (low volume, high leverage); spend cheap tokens on execution volume. When dispatching delegated work, pin the tier per task — executors default to the Sonnet tier at low effort, mechanical work to the Haiku tier, judges/verifiers to the Opus tier. The Fable tier is the most expensive per call and cheap as a policy only because it fires rarely and only on verdicts — batch fan-outs never auto-use it (that is exactly where a Fable jump silently multiplies cost).
+Spend expensive tokens on planning, verification, and synthesis (low volume, high leverage); spend cheap tokens on execution volume. When dispatching delegated work, pin the tier per task — the `executor` role runs at the Haiku tier for mechanical and boilerplate work and at the Sonnet tier at low effort for ordinary implementation, judges/verifiers at the Opus tier. The Fable tier is the most expensive per call and cheap as a policy only because it fires rarely and only on verdicts — batch fan-outs never auto-use it (that is exactly where a Fable jump silently multiplies cost).
 
 ## Skill index
 
@@ -85,3 +85,5 @@ Reach for the matching skill at the decision point — each one encodes the mech
 | Dispatching subagents or a fan-out | leo:delegation |
 | Isolating branch work | leo:worktrees |
 | Landing or cleaning up a finished branch | leo:finishing-a-branch |
+
+Three operational skills — `leo:resolve-ticket`, `leo:review-pr`, `leo:watch-review` — are Claude Code only and are deliberately absent from the table above; they are invoked by name, and on any other harness they are not registered at all (the harness mapping appended below says so explicitly).

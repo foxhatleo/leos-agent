@@ -16,7 +16,7 @@ WORKFLOW = os.path.join(REPO, ".github", "workflows", "release.yml")
 class TestRelease(unittest.TestCase):
     def test_version_gate_accepts_v4(self):
         result = subprocess.run(
-            [sys.executable, SCRIPT, "--check-version", "v5.0.1"],
+            [sys.executable, SCRIPT, "--check-version", "v5.1.0"],
             cwd=REPO,
             capture_output=True,
             text=True,
@@ -46,7 +46,7 @@ class TestRelease(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(
                 sorted(os.listdir(output)),
-                ["leo-5.0.1-hermes.tar.gz", "leo-5.0.1-plugin.tar.gz"],
+                ["leo-5.1.0-hermes.tar.gz", "leo-5.1.0-plugin.tar.gz"],
             )
             for name in os.listdir(output):
                 with self.subTest(archive=name):
@@ -55,6 +55,8 @@ class TestRelease(unittest.TestCase):
                     self.assertTrue(members)
                     self.assertTrue(all(member == "leo" or member.startswith("leo/") for member in members))
                     self.assertFalse(any("__pycache__" in member or member.endswith(".pyc") for member in members))
+                    self.assertFalse(any(member.endswith(".DS_Store") for member in members))
+                    self.assertTrue(any("skills-claude/" in member for member in members))
 
     def test_archive_builder_is_reproducible(self):
         with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
@@ -67,7 +69,7 @@ class TestRelease(unittest.TestCase):
                     timeout=30,
                 )
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            for name in ("leo-5.0.1-hermes.tar.gz", "leo-5.0.1-plugin.tar.gz"):
+            for name in ("leo-5.1.0-hermes.tar.gz", "leo-5.1.0-plugin.tar.gz"):
                 with self.subTest(archive=name):
                     with open(os.path.join(first, name), "rb") as lhs:
                         first_bytes = lhs.read()

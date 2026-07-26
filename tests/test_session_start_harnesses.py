@@ -23,6 +23,9 @@ def _run(env_overrides):
     env = dict(os.environ)
     for var in ROOT_ENV_VARS:
         env.pop(var, None)
+    # A Codex-launched test run would otherwise leak CODEX_* into every case.
+    for var in [k for k in env if k.startswith("CODEX_")]:
+        env.pop(var, None)
     env.update(env_overrides)
     return subprocess.run(
         [sys.executable, SESSION_START_PY],
@@ -60,8 +63,13 @@ class TestCursorWinsWhenBothSet(unittest.TestCase):
 
 
 class TestCodexShape(unittest.TestCase):
-    def test_plugin_root_yields_nested_hook_specific_output(self):
-        result = _run({"PLUGIN_ROOT": PLUGIN})
+    """Codex sets BOTH PLUGIN_ROOT and CLAUDE_PLUGIN_ROOT — the latter on purpose,
+    for compatibility with existing plugin hooks. Testing PLUGIN_ROOT alone is an
+    environment Codex never produces, and asserting against it is what let Codex
+    silently receive the Claude mapping in every real session."""
+
+    def test_real_codex_env_yields_codex_mapping(self):
+        result = _run({"PLUGIN_ROOT": PLUGIN, "CLAUDE_PLUGIN_ROOT": PLUGIN})
         self.assertEqual(result.returncode, 0, f"stderr={result.stderr}")
 
         payload = json.loads(result.stdout)
@@ -70,7 +78,27 @@ class TestCodexShape(unittest.TestCase):
         additional_context = hook_output.get("additionalContext", "")
         self.assertTrue(additional_context, "expected non-empty nested additionalContext")
         self.assertIn("<leo-policy>", additional_context)
+        self.assertIn("# Codex mapping", additional_context)
         self.assertIn("gpt-5.6-sol", additional_context)
+        self.assertNotIn("# Claude Code mapping", additional_context)
+
+    def test_plugin_root_alone_still_detected_as_codex(self):
+        result = _run({"PLUGIN_ROOT": PLUGIN})
+        self.assertEqual(result.returncode, 0, f"stderr={result.stderr}")
+        additional_context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("# Codex mapping", additional_context)
+
+
+class TestClaudeStillGetsClaudeMapping(unittest.TestCase):
+    """The Codex fix keys on PLUGIN_ROOT; Claude Code sets only its own prefixed
+    variable, so this is the assertion that keeps the fix from stealing Claude."""
+
+    def test_claude_only_env_yields_claude_mapping(self):
+        result = _run({"CLAUDE_PLUGIN_ROOT": PLUGIN})
+        self.assertEqual(result.returncode, 0, f"stderr={result.stderr}")
+        additional_context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("# Claude Code mapping", additional_context)
+        self.assertNotIn("# Codex mapping", additional_context)
 
 
 class TestEmptyRootDegradesGracefully(unittest.TestCase):

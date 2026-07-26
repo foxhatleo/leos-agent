@@ -1,7 +1,7 @@
 name: leo
-version: "5.0.1"
+version: "5.1.0"
 description: "Leo's cost-tiered routing, execute-then-review policy, process skills, and accidental-command guard for Hermes."
 author: "Leo Liang"
-hooks:
-  - pre_llm_call
-  - pre_tool_call
+# No hooks key: Hermes reads name/version/description/requires_env here and
+# registers hooks only through ctx.register_hook() in __init__.py, so listing
+# them here declared nothing and implied a wiring that does not exist.

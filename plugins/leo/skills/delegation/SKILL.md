@@ -88,6 +88,12 @@ Update it after every dispatch resolves, not in a batch at the end: a crash
 between "agent finished" and "ledger written" is exactly the gap this
 exists to close.
 
+`${CLAUDE_PLUGIN_ROOT}` above is the Claude Code spelling of the plugin root,
+and it is substituted into this text only there. On another harness, read the
+plugin-root form from that harness's appendix in the injected policy (Codex
+uses a real `$PLUGIN_ROOT` env var, Cursor `$CURSOR_PLUGIN_ROOT`) — the path
+after the root is identical everywhere.
+
 For a batch of independent, well-scoped fixes, don't hand-roll this loop —
 the reusable workflow at `${CLAUDE_PLUGIN_ROOT}/workflows/cost-tiered-fix.js`
 (Workflow tool, `scriptPath`) already implements plan → tiered execute →
@@ -95,6 +101,9 @@ opus verify with escalation built in, including its own progress tracking.
 Reach for it before writing a bespoke fan-out loop; write the ledger
 approach above only when the run doesn't fit that workflow's shape (e.g. one
 dispatch at a time inside a larger interactive flow, not a clean batch).
+That workflow needs Claude Code's Workflow tool; on every other harness the
+ledger above is the whole mechanism, so use it directly rather than looking
+for a runner that isn't there.
 
 ## Parallel dispatch: own your files
 

@@ -38,8 +38,8 @@ class TestModelMatrix(unittest.TestCase):
             harnesses["claude"],
             {
                 "fable": {"model": "fable", "effort": "max"},
-                "opus": {"model": "opus[1m]"},
-                "sonnet": {"model": "sonnet[1m]"},
+                "opus": {"model": "opus"},
+                "sonnet": {"model": "sonnet"},
                 "haiku": {"model": "haiku"},
             },
         )

@@ -30,7 +30,7 @@ class TestCodexPluginJson(unittest.TestCase):
     def test_valid_and_core_fields(self):
         data = _load()
         self.assertEqual(data.get("name"), "leo")
-        self.assertEqual(data.get("version"), "5.0.1")
+        self.assertEqual(data.get("version"), "5.1.0")
         self.assertEqual(data.get("skills"), "./skills/")
         self.assertNotIn("hooks", data)
         self.assertNotIn("mcpServers", data)

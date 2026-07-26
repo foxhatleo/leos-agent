@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """Tests for skills-claude/review-pr/scripts/ghreview.py."""
+import contextlib
+import io
 import importlib.util
+import json
 import os
+import subprocess
+import types
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -78,6 +83,82 @@ class TestGraphqlArgs(unittest.TestCase):
         self.assertIn("-F", args)
         self.assertIn("flag=false", args)
         self.assertNotIn("flag=False", args)
+
+
+class TestParsePatch(unittest.TestCase):
+    """parse_patch is the actual unified-diff parser — every other test in
+    this file exercises snap_line/validate_comments against a hand-built
+    diffmap via make_diffmap, so an off-by-one in parse_patch itself would
+    silently attach review comments to the wrong line without any test
+    noticing. These feed it literal GitHub-style `patch` strings."""
+
+    def test_added_lines_addressable_on_right_only(self):
+        patch = (
+            "@@ -1,2 +1,3 @@\n"
+            " context one\n"
+            "+added line\n"
+            " context two\n"
+        )
+        result = ghreview.parse_patch(patch)
+        self.assertEqual(result["right"], {1, 2, 3})
+        self.assertEqual(result["left"], set())
+        self.assertEqual(result["hunks"], [{"r": (1, 3), "l": (1, 2)}])
+
+    def test_deleted_lines_addressable_on_left_only(self):
+        patch = (
+            "@@ -1,3 +1,2 @@\n"
+            " context one\n"
+            "-removed line\n"
+            " context two\n"
+        )
+        result = ghreview.parse_patch(patch)
+        # Only the deleted line itself lands in `left` — context lines only
+        # ever populate `right` (matching the GitHub review UI, which never
+        # accepts LEFT-side comments on unchanged lines).
+        self.assertEqual(result["left"], {2})
+        self.assertEqual(result["right"], {1, 2})
+        self.assertEqual(result["hunks"], [{"r": (1, 2), "l": (1, 3)}])
+
+    def test_context_lines_addressable_on_right(self):
+        patch = "@@ -5,3 +5,3 @@\n context a\n context b\n context c\n"
+        result = ghreview.parse_patch(patch)
+        self.assertEqual(result["right"], {5, 6, 7})
+        self.assertEqual(result["left"], set())
+        self.assertEqual(result["hunks"], [{"r": (5, 7), "l": (5, 7)}])
+
+    def test_two_hunks_produce_two_independent_ranges(self):
+        patch = (
+            "@@ -1,2 +1,2 @@\n"
+            " ctx1\n"
+            "+add1\n"
+            "@@ -50,2 +51,3 @@\n"
+            " ctx2\n"
+            "-del1\n"
+            "-del2\n"
+            "+add2\n"
+        )
+        result = ghreview.parse_patch(patch)
+        self.assertEqual(result["hunks"], [
+            {"r": (1, 2), "l": (1, 1)},
+            {"r": (51, 52), "l": (50, 52)},
+        ])
+        self.assertEqual(result["right"], {1, 2, 51, 52})
+        self.assertEqual(result["left"], {51, 52})
+
+    def test_deletion_only_hunk_yields_inverted_right_range(self):
+        # A hunk that only deletes lines (no context, no additions) never
+        # advances new_ln past its starting value, so close_hunk() records
+        # "r": (start, start - 1) — an inverted (empty-but-backwards) range.
+        # This is today's actual behavior, not a spec; documenting it here
+        # (rather than "fixing" it) so a future change to parse_patch has to
+        # touch this test deliberately. Downstream, ranges()/snap_line() only
+        # ever iterate the addressable-line sets, so the inverted tuple is
+        # harmless in practice — but it is out of scope to change here.
+        patch = "@@ -10,2 +10,0 @@\n-removed one\n-removed two\n"
+        result = ghreview.parse_patch(patch)
+        self.assertEqual(result["hunks"], [{"r": (10, 9), "l": (10, 11)}])
+        self.assertEqual(result["left"], {10, 11})
+        self.assertEqual(result["right"], set())
 
 
 class TestSnapLine(unittest.TestCase):
@@ -226,6 +307,79 @@ class TestClearPendingGuard(unittest.TestCase):
         self.assertIsNone(refusal)
         self.assertEqual(result, {"deleted": 1, "forced": True})
         self.assertEqual(len(self.delete_calls), 1)
+
+    def test_whitespace_only_unmarked_body_does_not_crash(self):
+        # Regression for the IndexError: "   ".strip().splitlines() == [], so
+        # indexing [0] used to raise instead of refusing cleanly.
+        review = {"id": 1, "node_id": "n1"}
+        comments = [{"body": "   "}]
+        self._stub(review, comments)
+        result, refusal = ghreview.clear_pending_guarded("o/r", 1, False)
+        self.assertIsNone(result)
+        self.assertTrue(refusal["refused"])
+        self.assertEqual(refusal["samples"], [""])
+
+
+class TestStageRetryRevalidation(unittest.TestCase):
+    """Regression for the bogus-retry-report bug: on retry, cmd_stage used to
+    revalidate the already-snapped `staged` entries instead of the original
+    `comments`, so the reported "from" was the first pass's output line
+    rather than the true original line — a fictitious second hop."""
+
+    def setUp(self):
+        self._orig = {
+            name: getattr(ghreview, name)
+            for name in ("fetch_files", "build_maps", "post_review", "gh")
+        }
+
+    def tearDown(self):
+        for name, fn in self._orig.items():
+            setattr(ghreview, name, fn)
+
+    def test_retry_report_reflects_original_comment_line(self):
+        # First pass: line 22 is off-diff and snaps to 20.
+        map1 = {"a.py": make_diffmap([(10, 20, 10, 20)])}
+        # Second pass (as if the head moved under us): only line 18 is
+        # addressable now.
+        map2 = {"a.py": make_sparse_diffmap((10, 20, 10, 20), [18])}
+        maps_calls = [map1, map2]
+
+        ghreview.fetch_files = lambda repo, pr: []
+        ghreview.build_maps = lambda files: maps_calls.pop(0)
+        ghreview.gh = lambda args, payload=None: "deadbeef"
+
+        post_review_calls = {"n": 0}
+
+        def fake_post_review(repo, pr, commit, staged):
+            post_review_calls["n"] += 1
+            if post_review_calls["n"] == 1:
+                raise subprocess.CalledProcessError(1, ["gh"], "", "head moved")
+            return {"id": 99, "state": "PENDING"}
+
+        ghreview.post_review = fake_post_review
+
+        comments = [{"path": "a.py", "line": 22, "side": "RIGHT", "body": "hi"}]
+        args = types.SimpleNamespace(
+            repo="o/r", pr=1, commit="orig-sha", input=None,
+            dry_run=False, replace_pending=False, force=False,
+        )
+
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+            json.dump({"comments": comments}, fh)
+            args.input = fh.name
+        try:
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+                ghreview.cmd_stage(args)
+        finally:
+            os.unlink(args.input)
+
+        report = json.loads(buf.getvalue())
+        self.assertEqual(post_review_calls["n"], 2)
+        # The retry's snap must be reported against the ORIGINAL line (22),
+        # not against the first pass's already-snapped output (20).
+        self.assertEqual(report["snapped"][-1], {"path": "a.py", "from": 22, "to": 18})
 
 
 if __name__ == "__main__":

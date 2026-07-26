@@ -4,8 +4,8 @@
 | Tier | Model | Effort |
 |---|---|---|
 | Fable | `fable` | max |
-| Opus | `opus[1m]` | native default |
-| Sonnet | `sonnet[1m]` | native default |
+| Opus | `opus` | native default |
+| Sonnet | `sonnet` | native default |
 | Haiku | `haiku` | native default |
 
 Spawn the named native agent; its generated frontmatter selects the configured model.

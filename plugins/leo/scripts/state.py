@@ -38,6 +38,8 @@ def _data_root():
 
 
 def state_file(name):
+    if "/" in name or "\\" in name or ".." in name or os.path.isabs(name):
+        sys.exit(f"state: {name!r} is not a valid state name (no slashes, no .., not absolute)")
     root = _data_root()
     local_dir = os.path.join(root, "local")
     os.makedirs(local_dir, exist_ok=True)
@@ -59,11 +61,14 @@ def _locked(path):
 def load(path):
     try:
         with open(path) as fh:
-            return json.load(fh)
+            data = json.load(fh)
     except FileNotFoundError:
         return {}
     except json.JSONDecodeError as e:
         sys.exit(f"state: {path} is corrupt ({e}) — fix or delete it")
+    if not isinstance(data, dict):
+        sys.exit(f"state: {path} is corrupt (top level is {type(data).__name__}, expected object) — fix or delete it")
+    return data
 
 
 def deep_merge(base, patch):

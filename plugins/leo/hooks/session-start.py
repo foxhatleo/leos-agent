@@ -35,7 +35,15 @@ def _detect_harness():
     # so the cursor check must come first.
     if os.environ.get("CURSOR_PLUGIN_ROOT") or os.environ.get("CURSOR_VERSION"):
         return "cursor"
-    if os.environ.get("PLUGIN_ROOT") and not os.environ.get("CLAUDE_PLUGIN_ROOT"):
+    # Codex sets PLUGIN_ROOT *and* CLAUDE_PLUGIN_ROOT — the latter deliberately,
+    # "for compatibility with existing plugin hooks". So absence of
+    # CLAUDE_PLUGIN_ROOT is NOT a Codex signal; testing for it shipped Codex the
+    # Claude mapping (models Codex cannot run) for every session. Presence of the
+    # unprefixed PLUGIN_ROOT is the real signal: Claude Code sets only its own
+    # prefixed variable. Deliberately no CODEX_* sniffing on top — an unrelated
+    # CODEX_* var exported in a Claude shell would then hijack a Claude session,
+    # and PLUGIN_ROOT alone already resolves Codex correctly.
+    if os.environ.get("PLUGIN_ROOT"):
         return "codex"
     return "claude"
 
@@ -58,7 +66,7 @@ def _breadcrumb(exc):
         )
         local = os.path.join(base, "local")
         os.makedirs(local, exist_ok=True)
-        with open(os.path.join(local, "session-start.log"), "a") as fh:
+        with open(os.path.join(local, "session-start.log"), "a", encoding="utf-8") as fh:
             fh.write("policy injection skipped: {}: {}\n".format(type(exc).__name__, exc))
     except Exception:
         pass
@@ -70,14 +78,18 @@ def main():
         harness = _detect_harness()
 
         skill_path = os.path.join(root, "skills", "using-leo", "SKILL.md")
-        with open(skill_path) as fh:
+        # encoding is explicit on every read: the policy is full of em-dashes and
+        # arrows, so under a non-UTF-8 locale (LC_ALL=C — routine in cron, CI,
+        # containers, plain ssh) the platform default decoder raises and the
+        # whole policy silently vanishes. Failing open makes that invisible.
+        with open(skill_path, encoding="utf-8") as fh:
             raw = fh.read()
         body = _strip_frontmatter(raw)
 
         mapping_path = os.path.join(
             root, "skills", "using-leo", "references", harness + "-mapping.md"
         )
-        with open(mapping_path) as fh:
+        with open(mapping_path, encoding="utf-8") as fh:
             mapping = fh.read()
         body = body.rstrip("\n") + "\n\n" + mapping.rstrip("\n") + "\n"
         # Substitute AFTER the append so placeholders inside the mapping

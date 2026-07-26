@@ -252,7 +252,7 @@ def clear_pending_guarded(repo, pr, force):
             "reason": "pending review contains comments not staged by review-pr",
             "unmarked_count": len(unmarked),
             "total_count": len(comments),
-            "samples": [(c.get("body") or "").strip().splitlines()[0][:120] for c in unmarked[:5]],
+            "samples": [((c.get("body") or "").strip().splitlines() or [""])[0][:120] for c in unmarked[:5]],
         }
     gh(["api", f"repos/{repo}/pulls/{pr}/reviews/{review['id']}", "--method", "DELETE"])
     return {"deleted": review["id"], "forced": bool(unmarked)}, None
@@ -479,7 +479,10 @@ def cmd_stage(a):
         print(f"first attempt failed, revalidating against current head: {e.stderr.strip()}", file=sys.stderr)
         head = gh(["api", f"repos/{a.repo}/pulls/{a.pr}", "-q", ".head.sha"]).strip()
         files = fetch_files(a.repo, a.pr)
-        staged, snapped2, dropped2 = validate_comments(staged, build_maps(files))
+        # Revalidate the ORIGINAL comments (not `staged`, which already
+        # reflects the first pass's snapped output) so the reported snap is
+        # the real one-hop mapping, not a fictitious second hop.
+        staged, snapped2, dropped2 = validate_comments(comments, build_maps(files))
         report["snapped"] += snapped2
         report["dropped"] += dropped2
         if not staged:

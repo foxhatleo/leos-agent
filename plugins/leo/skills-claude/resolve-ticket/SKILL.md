@@ -27,6 +27,14 @@ allowed-tools:
   - WebFetch
 ---
 
+<!--
+Tracker and doc reads (Linear, Jira, Confluence, Slack) go through MCP tools
+that deliberately are NOT listed above: they vary per machine, and naming a
+server that is not connected would be worse than prompting. Expect a
+permission prompt on the first tracker call of a run; that is the design, not
+a misconfiguration.
+-->
+
 # /resolve-ticket — ticket to draft PR
 
 Tier map: this main loop (opus) triages, plans, gates, and synthesizes;
@@ -160,9 +168,12 @@ items).
 Per plan step:
 
 - Mechanical, fully specified → `executor` as-is (haiku).
-- Normal implementation → `executor` with `model: sonnet` override — the plan
-  already contains exact specs, so the executor contract (do exactly this,
-  stop on ambiguity) is right.
+- Normal implementation → `executor` with `model: sonnet` override. This is a
+  deliberate override of the policy's "executing a written plan → implementer"
+  routing, not an oversight: the Step 5 plan already carries exact per-step
+  specs, so the executor contract (do exactly this, stop on ambiguity) fits
+  better than implementer's wider latitude. Anywhere the plan is thinner than
+  that, use `implementer` as the policy says.
 - Steps touching disjoint files run as parallel spawns; dependent steps
   sequential. Executors commit as they go.
 - This loop implements directly only for trivial diffs (< ~10 lines) where

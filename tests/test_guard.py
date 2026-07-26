@@ -87,6 +87,13 @@ BLOCK = [
     "rm -rf${IFS}~",
     # --- backslash-newline line continuation (bash joins; guard must not split) ---
     "rm -rf \\\n/",                    # noqa: E501  — `rm -rf \\\n/` is one statement in bash
+    # --- shell-invocation bypass: `sh -c '...'`/`bash -c "..."` is a normal invocation form,
+    # not obfuscation, so the guard must recurse into the -c argument ---
+    "sh -c 'rm -rf /'",
+    'bash -c "rm -rf ~"',
+    # --- bundled short-option cluster containing `c` (`-ec`/`-ce`/...) is still script mode ---
+    'sh -ec "rm -rf /"',
+    'bash -ce "rm -rf ~"',
 ]
 
 ALLOW = [
@@ -123,6 +130,13 @@ ALLOW = [
     r'find src -name "*.pyc" -exec rm {} +',
     "find ~/project -name '*.tmp' -delete",  # own home subtree (exempt like rm -rf ~/project/...)
     "find $HOME/project/build -delete",
+    "rm -rf $TMPDIR/x",                # $TMPDIR is a legitimate target, same as $HOME/$PWD
+    "git clean -n",                    # dry run: no force flag, never deletes anything
+    "git clean -fd",                   # force, but cwd (HOME/project) is not a critical path
+    # --- shell -c invocation with a harmless script, plus a flag cluster with no `c` ---
+    "sh -c 'ls'",                      # normal invocation form, script itself is harmless
+    "bash -lc 'npm test'",             # `c` bundled with `l`, script itself is harmless
+    "sh -e script.sh",                 # `-e` has no `c`: script.sh is a file arg, not recursed into
 ]
 
 
@@ -167,6 +181,18 @@ class TestCaseInsensitiveFs(unittest.TestCase):
         for cmd in ("rm -rf /users", "rm -rf /USERS", "rm -rf /users/someoneelse/stuff"):
             with self.subTest(cmd=cmd):
                 self.assertEqual(run(cmd, cwd), expected)
+
+
+class TestGitCleanCriticalCwd(unittest.TestCase):
+    """git clean -f{orce} with no explicit path targets the cwd — block only when that
+    resolved target is critical (here cwd=$HOME itself), distinct from the shared BLOCK/ALLOW
+    tables above which run with cwd=$HOME/project (the caller's own, non-critical, subtree)."""
+
+    def test_git_clean_force_at_home_is_blocked(self):
+        self.assertEqual(run("git clean -xdff", cwd=HOME), 2)
+
+    def test_git_clean_force_at_project_dir_is_allowed(self):
+        self.assertEqual(run("git clean -xdff", cwd=os.path.join(HOME, "project")), 0)
 
 
 class TestPayloadEdges(unittest.TestCase):
