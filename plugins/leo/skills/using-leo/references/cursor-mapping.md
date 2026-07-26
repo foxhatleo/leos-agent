@@ -9,3 +9,5 @@
 | Haiku | `Composer 2.5` | native default |
 
 Cursor plugin agents use `model: inherit`. Select the mapped model in Cursor before starting a homogeneous tier batch; the plugin does not claim to enforce arbitrary per-agent model names.
+
+Tier collapse here: Opus≡Sonnet (`Grok 4.5`) — routing between collapsed rungs buys role, not power.

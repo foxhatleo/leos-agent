@@ -19,7 +19,6 @@ SESSION_START_PY = os.path.join(PLUGIN, "hooks", "session-start.py")
 REQUIRED_SUBSTRINGS = (
     "<leo-policy>",
     "Model routing",
-    "${user_config.opus_model}",
     "Skill index",
     "failed twice on the same question",
     "Claude Code mapping",
@@ -65,6 +64,23 @@ class TestSessionStartInjectsPolicy(unittest.TestCase):
 
         self.assertNotIn("${CLAUDE_PLUGIN_ROOT}", additional_context)
         self.assertLess(len(additional_context), MAX_ADDITIONAL_CONTEXT_LEN)
+
+    def test_unset_model_options_fall_back_to_config_defaults(self):
+        """No option set is the common case (the manifest supplies defaults).
+
+        Leaving a literal ${user_config.*} in the injected policy would hand
+        the model a placeholder where a model name belongs.
+        """
+        result = _run(PLUGIN)
+        additional_context = json.loads(result.stdout)["hookSpecificOutput"][
+            "additionalContext"
+        ]
+        with open(os.path.join(PLUGIN, "config", "models.json"), encoding="utf-8") as fh:
+            claude = json.load(fh)["harnesses"]["claude"]
+        self.assertNotIn("${user_config.", additional_context)
+        for tier, item in claude.items():
+            with self.subTest(tier=tier):
+                self.assertIn(item["model"], additional_context)
 
     def test_claude_model_options_are_substituted(self):
         result = _run(PLUGIN, {"opus": "opus[1m]", "sonnet": "sonnet[1m]"})

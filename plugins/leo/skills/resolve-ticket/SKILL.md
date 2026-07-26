@@ -27,9 +27,9 @@ allowed-tools:
 # /resolve-ticket — ticket to draft PR
 
 Tier map: this main loop (opus) triages, plans, gates, and synthesizes;
-`investigator` (its `opus[1m]` frontmatter default) diagnoses; `executor`
+`investigator` (its Opus-tier frontmatter default) diagnoses; `executor`
 implements (haiku for mechanical steps, `model: sonnet` override for normal
-ones); `reviewer` (its `opus[1m]` frontmatter default) judges the diff before
+ones); `reviewer` (its Opus-tier frontmatter default) judges the diff before
 anything is pushed.
 
 Hard rule: **nothing is created in the project — no worktree, no branch, no
@@ -104,7 +104,7 @@ gate — Leo sees exactly what wasn't read before approving.
 ## Step 3 — Investigate (opus)
 
 Spawn `investigator` subagents with no model override (they inherit their
-`opus[1m]` frontmatter default) — default **2 in parallel**: (a) *code path*: where the change lives, exact
+Opus-tier frontmatter default) — default **2 in parallel**: (a) *code path*: where the change lives, exact
 files/lines, reproduction reasoning, current test coverage; (b) *history &
 blast radius*: git archaeology, related PRs, callers/consumers of what will
 change, landmines named in ticket comments. Scale down to 1 when the ticket
@@ -165,13 +165,16 @@ Step 7 gate as a known failure, never silently.
 ## Step 7 — Mandatory opus review
 
 Spawn a **fresh** `reviewer` subagent with no model override (it inherits its
-`opus[1m]` frontmatter default) — never self-review, this loop wrote the
+Opus-tier frontmatter default) — never self-review, this loop wrote the
 plan and is biased toward believing it worked. Give it: the normalized
 ticket, the approved plan, and the diff scope
 `git diff $(git merge-base origin/<default> HEAD)...HEAD`.
 
 - Blocking findings → each becomes a sonnet executor fix task → re-review the
-  delta (reviewer gets prior findings + new diff). **Max 2 rounds.**
+  delta (reviewer gets prior findings + new diff). **Max 2 rounds** —
+  deliberately one more than the policy's global ONE-cycle rule, because that
+  rule exists to stop open-ended looping and this flow instead ends at the
+  hard user gate below. Two rounds is the ceiling here, not a new default.
 - Still blocking after round 2 → AskUserQuestion: **Expert arbitration**
   (the `expert` agent rules on the disputed findings from the raw diff and
   both review rounds; a "findings stand" ruling routes back to fix-and-push,

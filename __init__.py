@@ -1,13 +1,30 @@
 """Hermes entrypoint for the Leo plugin."""
 
 import importlib.util
+import os
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent
 PAYLOAD = ROOT / "plugins" / "leo"
-POLICY_LIMIT = 10_000
+# Self-imposed context budget, not a documented Hermes API cap: it exists so
+# the policy can't grow without someone noticing. 14000 matches the Claude
+# SessionStart budget in tests/test_session_start.py, so both bootstraps are
+# held to one number. Overflow degrades to no injection (see _policy_context).
+POLICY_LIMIT = 14_000
 _GUARD = None
+
+
+def _breadcrumb(exc):
+    """Record why injection was skipped. Never raises: this is the fail path."""
+    try:
+        base = os.environ.get("LEOS_AGENT_PATH") or str(Path.home() / ".leos-agent")
+        local = Path(base) / "local"
+        local.mkdir(parents=True, exist_ok=True)
+        with (local / "hermes-policy.log").open("a", encoding="utf-8") as fh:
+            fh.write(f"policy injection skipped: {type(exc).__name__}: {exc}\n")
+    except Exception:
+        pass
 
 
 def _strip_frontmatter(text):
@@ -20,17 +37,36 @@ def _strip_frontmatter(text):
     return text
 
 
-def _policy_context():
+def _render_policy():
+    """Build the policy context. Raises if it exceeds the Hermes limit."""
     policy = _strip_frontmatter(
         (PAYLOAD / "skills" / "using-leo" / "SKILL.md").read_text(encoding="utf-8")
-    ).replace("${CLAUDE_PLUGIN_ROOT}", str(PAYLOAD)).rstrip()
+    ).rstrip()
     mapping = (PAYLOAD / "skills" / "using-leo" / "references" / "hermes-mapping.md").read_text(
         encoding="utf-8"
     ).rstrip()
-    context = f"<leo-policy>\n{policy}\n\n{mapping}\n</leo-policy>"
+    # Substitute AFTER the append so placeholders inside the mapping resolve
+    # too — same ordering as hooks/session-start.py.
+    body = f"{policy}\n\n{mapping}".replace("${CLAUDE_PLUGIN_ROOT}", str(PAYLOAD))
+    context = f"<leo-policy>\n{body}\n</leo-policy>"
     if len(context) > POLICY_LIMIT:
         raise ValueError(f"Leo policy exceeds Hermes context limit: {len(context)}")
     return context
+
+
+def _policy_context():
+    """Fail open: a policy that outgrew the budget must not break every turn.
+
+    This runs inside pre_llm_call, so raising here would take down the whole
+    session for a context-injection convenience — the same trade
+    hooks/session-start.py already refuses to make. Degrade to no policy and
+    leave a breadcrumb instead.
+    """
+    try:
+        return _render_policy()
+    except Exception as exc:
+        _breadcrumb(exc)
+        return None
 
 
 def _load_guard():
@@ -45,7 +81,10 @@ def _load_guard():
 
 
 def _on_pre_llm_call(**_):
-    return {"context": _policy_context()}
+    context = _policy_context()
+    if context is None:
+        return None
+    return {"context": context}
 
 
 def _on_pre_tool_call(tool_name="", args=None, **_):

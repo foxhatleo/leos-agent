@@ -9,11 +9,12 @@ what makes the tier-labeled policy body concretely actionable on that
 harness, so appending it is load-bearing, not decorative.
 
 A hook failure here would otherwise break every session start (startup,
-/clear, /compact) for a policy-injection convenience — that trade is never
-worth it. Every failure path below (missing root, missing SKILL.md, missing
-mapping file, bad frontmatter, any other exception) degrades to printing
-"{}" and exiting 0: no additionalContext, no stderr noise, session starts
-clean either way, on any of the three harnesses.
+resume, /clear, /compact) for a policy-injection convenience — that trade is
+never worth it. Every failure path below (missing root, missing SKILL.md,
+missing mapping file, bad frontmatter, any other exception) degrades to
+printing "{}" and exiting 0: no additionalContext, no stderr noise, session
+starts clean either way, on any of the three harnesses. The reason is
+appended to local/session-start.log so a dead policy is still diagnosable.
 """
 import json
 import os
@@ -49,13 +50,43 @@ def _strip_frontmatter(text):
     return text
 
 
-def _apply_claude_model_options(text):
+def _config_defaults(root):
+    """Tier -> model defaults from the canonical matrix, or {} if unreadable."""
+    try:
+        with open(os.path.join(root, "config", "models.json")) as fh:
+            claude = json.load(fh)["harnesses"]["claude"]
+        return {tier: item["model"] for tier, item in claude.items()}
+    except Exception:
+        return {}
+
+
+def _apply_claude_model_options(text, root):
+    # An unset option must still resolve: leaving a literal
+    # "${user_config.opus_model}" in the injected policy would hand the model
+    # a placeholder where a model name belongs. Fall back to the same default
+    # the plugin manifest declares, which comes from config/models.json.
+    defaults = _config_defaults(root)
     for tier in ("fable", "opus", "sonnet", "haiku"):
         placeholder = "${user_config." + tier + "_model}"
         option = os.environ.get("CLAUDE_PLUGIN_OPTION_" + tier.upper() + "_MODEL")
-        if option:
-            text = text.replace(placeholder, option)
+        value = option or defaults.get(tier)
+        if value:
+            text = text.replace(placeholder, value)
     return text
+
+
+def _breadcrumb(exc):
+    """Record why injection failed. Never raises: this runs on the fail path."""
+    try:
+        base = os.environ.get("LEOS_AGENT_PATH") or os.path.join(
+            os.path.expanduser("~"), ".leos-agent"
+        )
+        local = os.path.join(base, "local")
+        os.makedirs(local, exist_ok=True)
+        with open(os.path.join(local, "session-start.log"), "a") as fh:
+            fh.write("policy injection skipped: {}: {}\n".format(type(exc).__name__, exc))
+    except Exception:
+        pass
 
 
 def main():
@@ -75,7 +106,7 @@ def main():
             mapping = fh.read()
         body = body.rstrip("\n") + "\n\n" + mapping.rstrip("\n") + "\n"
         if harness == "claude":
-            body = _apply_claude_model_options(body)
+            body = _apply_claude_model_options(body, root)
         # Substitute AFTER the append so placeholders inside the mapping
         # (e.g. the claude-mapping workflow path) resolve too.
         body = body.replace("${CLAUDE_PLUGIN_ROOT}", root)
@@ -92,7 +123,11 @@ def main():
                 }
             }
         print(json.dumps(output))
-    except Exception:
+    except Exception as exc:
+        # Still fail open — but leave a trace. Without one, a silently dead
+        # policy is indistinguishable from a working one for as long as it
+        # takes someone to notice the behavior change.
+        _breadcrumb(exc)
         print("{}")
 
 

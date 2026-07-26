@@ -8,6 +8,11 @@ import unittest
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENTRYPOINT = os.path.join(REPO, "__init__.py")
 
+# Minimum slack left under POLICY_LIMIT. The policy grows a paragraph at a
+# time; without a floor it reaches the ceiling between one release and the
+# next and quietly stops being injected on Hermes.
+HEADROOM_FLOOR = 500
+
 
 def _load_plugin():
     spec = importlib.util.spec_from_file_location("leo_hermes_plugin", ENTRYPOINT)
@@ -49,12 +54,37 @@ class TestHermesPlugin(unittest.TestCase):
         result = self.ctx.hooks["pre_llm_call"](user_message="hello")
         self.assertEqual(set(result), {"context"})
         context = result["context"]
-        self.assertLessEqual(len(context), 10000)
+        self.assertLessEqual(len(context), self.plugin.POLICY_LIMIT)
         self.assertIn("moonshotai/kimi-k3", context)
         self.assertIn("z-ai/glm-5.2", context)
         self.assertIn("homogeneous", context)
         self.assertNotIn("${CLAUDE_PLUGIN_ROOT}", context)
         self.assertIn("plugins/leo/scripts/state.py", context)
+
+    def test_policy_context_keeps_growth_headroom(self):
+        """Trip a test, not production, when the policy grows.
+
+        The budget is enforced at runtime by fail-open degradation, so an
+        oversized policy silently stops being injected. This floor makes the
+        approach visible while there is still room to act on it.
+        """
+        context = self.plugin._render_policy()
+        headroom = self.plugin.POLICY_LIMIT - len(context)
+        self.assertGreaterEqual(
+            headroom,
+            HEADROOM_FLOOR,
+            f"only {headroom} chars left of the Hermes policy budget; trim the "
+            f"policy or raise POLICY_LIMIT before adding more",
+        )
+
+    def test_policy_context_fails_open_when_over_budget(self):
+        original = self.plugin.POLICY_LIMIT
+        self.plugin.POLICY_LIMIT = 10
+        try:
+            self.assertIsNone(self.plugin._policy_context())
+            self.assertIsNone(self.ctx.hooks["pre_llm_call"](user_message="hello"))
+        finally:
+            self.plugin.POLICY_LIMIT = original
 
     def test_guard_blocks_catastrophic_terminal_command(self):
         guard = self.ctx.hooks["pre_tool_call"]

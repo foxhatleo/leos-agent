@@ -71,6 +71,33 @@ def _table(rows):
     return "\n".join(lines)
 
 
+def _collapse_note(rows):
+    """Name tiers that share one model on this harness.
+
+    The policy treats the four tiers as distinct rungs, and its "no Fable
+    tier here, cap escalation at Opus" branch only fires if the harness says
+    so. A mapping that silently points two rungs at one model leaves that
+    branch unreachable while the expert rung is materially fake.
+    """
+    by_model = {}
+    for tier in ("fable", "opus", "sonnet", "haiku"):
+        by_model.setdefault(rows[tier]["model"], []).append(tier)
+    collapsed = [tiers for tiers in by_model.values() if len(tiers) > 1]
+    if not collapsed:
+        return ""
+    groups = ", ".join(
+        "≡".join(t.title() for t in tiers) + f" (`{rows[tiers[0]]['model']}`)"
+        for tiers in collapsed
+    )
+    note = f"\nTier collapse here: {groups} — routing between collapsed rungs buys role, not power. "
+    if any("fable" in tiers and "opus" in tiers for tiers in collapsed):
+        note += (
+            "Fable is not a real rung: `expert` cannot break a deadlock a "
+            "collapsed Opus already lost, so cap escalation at Opus and report. "
+        )
+    return note.rstrip() + "\n"
+
+
 def _mapping_docs(config):
     claude_rows = {
         tier: {
@@ -82,30 +109,35 @@ def _mapping_docs(config):
     codex = config["harnesses"]["codex"]
     cursor = config["harnesses"]["cursor"]
     hermes = config["harnesses"]["hermes"]
+    hermes_rows = {tier: hermes[tier] for tier in ("fable", "opus", "sonnet", "haiku")}
     return {
         "claude": GENERATED
         + "# Claude Code mapping\n\n"
         + _table(claude_rows)
-        + "\n\nSpawn the named native agent; its generated frontmatter selects the configured model.\n",
+        + "\n\nSpawn the named native agent; its generated frontmatter selects the configured model.\n"
+        + _collapse_note(claude_rows),
         "codex": GENERATED
         + "# Codex mapping\n\n"
         + _table(codex)
         + "\n\nSpawn a generic subagent with the canonical `roles/<role>.md` prompt and pass both "
         "`model` and `reasoning_effort` explicitly. A model override in the user's prompt or "
-        "native `AGENTS.md` wins over these defaults.\n",
+        "native `AGENTS.md` wins over these defaults.\n"
+        + _collapse_note(codex),
         "cursor": GENERATED
         + "# Cursor mapping\n\n"
         + _table(cursor)
         + "\n\nCursor plugin agents use `model: inherit`. Select the mapped model in Cursor before "
         "starting a homogeneous tier batch; the plugin does not claim to enforce arbitrary "
-        "per-agent model names.\n",
+        "per-agent model names.\n"
+        + _collapse_note(cursor),
         "hermes": GENERATED
         + "# Hermes mapping\n\n"
         + f"Provider: `{hermes['provider']}`\n\n"
-        + _table({tier: hermes[tier] for tier in ("fable", "opus", "sonnet", "haiku")})
+        + _table(hermes_rows)
         + "\n\nHermes native `delegate_task` has one configured delegation model. Group work into "
         "homogeneous Kimi or GLM batches, switch the parent with `/model`, and set "
-        "`delegation.provider: openrouter` plus the matching `delegation.model` before spawning.\n",
+        "`delegation.provider: openrouter` plus the matching `delegation.model` before spawning.\n"
+        + _collapse_note(hermes_rows),
     }
 
 

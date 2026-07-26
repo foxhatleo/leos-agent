@@ -11,3 +11,5 @@ Provider: `openrouter`
 | Haiku | `z-ai/glm-5.2` | native default |
 
 Hermes native `delegate_task` has one configured delegation model. Group work into homogeneous Kimi or GLM batches, switch the parent with `/model`, and set `delegation.provider: openrouter` plus the matching `delegation.model` before spawning.
+
+Tier collapse here: Fable≡Opus (`moonshotai/kimi-k3`), Sonnet≡Haiku (`z-ai/glm-5.2`) — routing between collapsed rungs buys role, not power. Fable is not a real rung: `expert` cannot break a deadlock a collapsed Opus already lost, so cap escalation at Opus and report.

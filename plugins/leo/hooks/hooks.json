@@ -2,9 +2,9 @@
   "hooks": {
     "SessionStart": [
       {
-        "matcher": "startup|clear|compact",
+        "matcher": "startup|resume|clear|compact",
         "hooks": [
-          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT:-$PLUGIN_ROOT}/hooks/session-start.py\"", "async": false }
+          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT:-$PLUGIN_ROOT}/hooks/session-start.py\"", "timeout": 10 }
         ]
       }
     ],

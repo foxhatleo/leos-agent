@@ -9,3 +9,5 @@
 | Haiku | `gpt-5.6-luna` | low |
 
 Spawn a generic subagent with the canonical `roles/<role>.md` prompt and pass both `model` and `reasoning_effort` explicitly. A model override in the user's prompt or native `AGENTS.md` wins over these defaults.
+
+Tier collapse here: Fable≡Opus (`gpt-5.6-sol`) — routing between collapsed rungs buys role, not power. Fable is not a real rung: `expert` cannot break a deadlock a collapsed Opus already lost, so cap escalation at Opus and report.

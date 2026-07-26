@@ -17,12 +17,25 @@ export const meta = {
 // from the caller. Without it, executors resolve collisions by numeric suffix.
 // Each work item ends up as a committed branch plus an Opus verdict.
 // Merging approved branches is left to the main session.
+//
+// args.tiers optionally remaps the three rungs, e.g.
+//   { tiers: { cheap: 'haiku', normal: 'sonnet[1m]', judge: 'opus[1m]' } }
+// Workflow scripts have no filesystem access, so the canonical matrix in
+// config/models.json cannot be read here — the caller passes it through when
+// this machine's mapping differs from the defaults below.
 
 if (!args || (!args.goal && !Array.isArray(args.tasks))) {
   throw new Error('cost-tiered-fix needs args: { goal: "..." } or { tasks: [...] }')
 }
 
 const BRANCH_PREFIX = args.runId ? `leos/fix-${args.runId}` : 'leos/fix'
+
+const TIERS = {
+  cheap: 'haiku',
+  normal: 'sonnet[1m]',
+  judge: 'opus[1m]',
+  ...(args.tiers || {}),
+}
 
 const PLAN_SCHEMA = {
   type: 'object',
@@ -33,7 +46,7 @@ const PLAN_SCHEMA = {
         type: 'object',
         properties: {
           task: { type: 'string', description: 'self-contained instruction: exact file paths, expected behavior, how to check it' },
-          tier: { type: 'string', enum: ['haiku', 'sonnet[1m]'], description: 'haiku for mechanical work, sonnet[1m] for normal implementation' },
+          tier: { type: 'string', enum: [TIERS.cheap, TIERS.normal], description: `${TIERS.cheap} for mechanical work, ${TIERS.normal} for normal implementation` },
         },
         required: ['task', 'tier'],
       },
@@ -71,27 +84,26 @@ function execPrompt(task, branch) {
   ].join('\n')
 }
 
-// Next tier up the escalation ladder. Opus is the ceiling: it has nowhere
-// left to escalate to, so it maps to itself.
+// Next tier up the escalation ladder. The judge tier is the ceiling: it has
+// nowhere left to escalate to, so it maps to itself.
 function nextTier(tier) {
-  if (tier === 'haiku') return 'sonnet[1m]'
-  if (tier === 'sonnet[1m]') return 'opus[1m]'
-  return 'opus[1m]'
+  if (tier === TIERS.cheap) return TIERS.normal
+  return TIERS.judge
 }
 
 function effortFor(tier) {
-  return tier === 'opus[1m]' ? 'high' : 'low'
+  return tier === TIERS.judge ? 'high' : 'low'
 }
 
 phase('Plan')
 let items
 if (Array.isArray(args.tasks)) {
-  items = args.tasks.map(t => (typeof t === 'string' ? { task: t, tier: 'sonnet[1m]' } : { tier: 'sonnet[1m]', ...t }))
+  items = args.tasks.map(t => (typeof t === 'string' ? { task: t, tier: TIERS.normal } : { tier: TIERS.normal, ...t }))
   log(`Using ${items.length} caller-provided tasks (planning skipped)`)
 } else {
   const plan = await agent(
-    'Decompose this goal into independent, well-scoped work items that can each be done in an isolated worktree without touching the same files. For each item write a self-contained instruction (exact file paths, expected behavior, how to check it) and pick a tier: haiku for mechanical work, sonnet[1m] for normal implementation. At most 10 items — if the goal needs more, return the 10 highest-value and say so in the last item.\n\nGoal: ' + args.goal,
-    { label: 'plan', phase: 'Plan', model: 'opus[1m]', effort: 'high', schema: PLAN_SCHEMA },
+    `Decompose this goal into independent, well-scoped work items that can each be done in an isolated worktree without touching the same files. For each item write a self-contained instruction (exact file paths, expected behavior, how to check it) and pick a tier: ${TIERS.cheap} for mechanical work, ${TIERS.normal} for normal implementation. At most 10 items — if the goal needs more, return the 10 highest-value and say so in the last item.\n\nGoal: ` + args.goal,
+    { label: 'plan', phase: 'Plan', model: TIERS.judge, effort: 'high', schema: PLAN_SCHEMA },
   )
   if (!plan || !Array.isArray(plan.items) || plan.items.length === 0) {
     log('Planning agent failed or returned no items — aborting cleanly')
@@ -144,25 +156,38 @@ const results = await pipeline(
     }
 
     let result
+    let finalTier
     if (!run) {
-      const retryTier = item.tier === 'haiku' ? 'sonnet[1m]' : item.tier
+      const retryTier = item.tier === TIERS.cheap ? TIERS.normal : item.tier
+      finalTier = retryTier
       log(`Item ${i} produced no result — retrying at ${retryTier}`)
       result = await attempt(retryTier, 'r2', 'no result (agent failed)')
       if (!result || result.confidence === 'low') {
         if (result && result.branch) supersededBranches.push(result.branch)
         const escTier = nextTier(retryTier)
+        finalTier = escTier
         log(`Item ${i} still ${result ? 'low confidence' : 'no result'} at ${retryTier} — escalating to ${escTier}`)
         result = await attempt(escTier, 'r3', result ? result.summary : 'no result on retry')
       }
     } else {
       if (run.branch) supersededBranches.push(run.branch)
       const escTier = nextTier(item.tier)
+      finalTier = escTier
       log(`Item ${i} low confidence — escalating to ${escTier}`)
       result = await attempt(escTier, 'r2', run.summary)
     }
 
-    if (!result) return null
-    return { ...result, supersededBranches, escalated: true }
+    // "escalated" means the work actually moved up a rung. A same-tier retry
+    // (a null result at a tier that is already the ceiling) is not one.
+    const escalated = finalTier !== item.tier
+
+    if (!result) {
+      // Every attempt failed, but earlier attempts may already have created
+      // branches. Returning null here would drop supersededBranches and leave
+      // those branches out of the orphan report — invisible litter in the repo.
+      return { summary: 'every attempt failed; no usable result', confidence: 'low', supersededBranches, escalated }
+    }
+    return { ...result, supersededBranches, escalated }
   },
 
   // Stage 3 — Opus verifies the actual diff, not the executor's self-report
@@ -171,16 +196,16 @@ const results = await pipeline(
     if (!run.branch) {
       return { task: item.task, ...run, verdict: { approved: false, issues: ['executor reported no branch — nothing to review'] } }
     }
+    // agentType pulls in the canonical reviewer rubric (roles/reviewer.md)
+    // instead of the weaker inline restatement this used to carry.
     const verdict = await agent(
       [
         `Review branch ${run.branch} against this task: "${item.task}".`,
-        'You are read-only: inspect, never edit files or touch git state.',
+        `Diff scope: git diff $(git merge-base HEAD ${run.branch}) ${run.branch}`,
         `First check the branch is reviewable: git rev-parse --verify ${run.branch} and git diff --stat $(git merge-base HEAD ${run.branch}) ${run.branch}. If the branch is missing or the diff is empty, return approved: false with issue "no reviewable diff".`,
-        `Then inspect the real diff: git diff $(git merge-base HEAD ${run.branch}) ${run.branch}`,
-        'Judge correctness and completeness only: is the task actually done, does anything break, was scope respected?',
         `Executor self-report (do not trust it, verify it): ${run.summary} — checks: ${run.checks || 'none reported'}`,
       ].join('\n'),
-      { label: `verify-${i}`, phase: 'Verify', model: 'opus[1m]', effort: 'medium', schema: VERDICT_SCHEMA },
+      { label: `verify-${i}`, phase: 'Verify', agentType: 'leo:reviewer', model: TIERS.judge, effort: 'medium', schema: VERDICT_SCHEMA },
     )
     return { task: item.task, ...run, verdict }
   },

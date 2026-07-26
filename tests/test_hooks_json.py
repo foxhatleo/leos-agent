@@ -25,7 +25,10 @@ class TestSessionStartHook(unittest.TestCase):
         self.assertTrue(session_start, "expected hooks.SessionStart to be non-empty")
 
         entry = session_start[0]
-        self.assertEqual(entry.get("matcher"), "startup|clear|compact")
+        # `resume` is load-bearing: without it a resumed session starts with
+        # no policy injected at all, which is the failure this hook exists
+        # to prevent.
+        self.assertEqual(entry.get("matcher"), "startup|resume|clear|compact")
 
         hooks = entry.get("hooks", [])
         self.assertTrue(hooks, "expected SessionStart[0].hooks to be non-empty")
@@ -34,7 +37,9 @@ class TestSessionStartHook(unittest.TestCase):
         self.assertIn("${CLAUDE_PLUGIN_ROOT:-$PLUGIN_ROOT}", command)
         self.assertIn("$PLUGIN_ROOT", command)
         self.assertIn("session-start.py", command)
-        self.assertIs(hook.get("async"), False)
+        self.assertIsInstance(hook.get("timeout"), int)
+        # "async" is not a documented hooks-schema field; keep it out.
+        self.assertNotIn("async", hook)
 
 
 class TestPreToolUseHook(unittest.TestCase):
