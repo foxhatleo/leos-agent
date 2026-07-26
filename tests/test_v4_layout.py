@@ -88,6 +88,12 @@ class TestV4Layout(unittest.TestCase):
         self.assertNotIn("agents", manifest)
         self.assertNotIn("hooks", manifest)
 
+        # "skills" is hand-maintained (the renderer only rewrites userConfig
+        # defaults), and Claude is the only harness that reads both roots.
+        # Dropping ./skills-claude/ would silently stop shipping the three
+        # operational skills with the rest of the suite still green.
+        self.assertEqual(manifest["skills"], ["./skills/", "./skills-claude/"])
+
         agents_dir = os.path.join(PLUGIN, "agents")
         self.assertTrue(os.path.isdir(agents_dir), f"missing {agents_dir}")
         roles_dir = os.path.join(PLUGIN, "roles")
