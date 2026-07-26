@@ -8,7 +8,7 @@ import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PAYLOAD = os.path.join(REPO, "plugins", "leo")
-EXPECTED_VERSION = "5.0.0"
+EXPECTED_VERSION = "5.0.1"
 
 MANIFESTS = {
     "claude": os.path.join(PAYLOAD, ".claude-plugin", "plugin.json"),

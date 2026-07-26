@@ -96,7 +96,7 @@ The role mapping is expert → Fable; planner, investigator, and reviewer → Op
 ### Change model defaults
 
 - Maintainers edit only `plugins/leo/config/models.json`, then run `python3 plugins/leo/scripts/render_adapters.py`. CI runs the same command with `--check` to reject generated-file drift.
-- Claude users set `fable_model`, `opus_model`, `sonnet_model`, and `haiku_model` when installing with repeated `--config key=value` flags. To change them later, update `pluginConfigs["leo@leos-agent"].options` in `~/.claude/settings.json`, then run `/reload-plugins`. These non-sensitive values are substituted into native agent definitions.
+- Claude tiers are not configurable per install. Claude Code does not interpolate plugin options into agent frontmatter, so the models are baked into the generated agents: retier by editing `plugins/leo/config/models.json`, re-running the renderer, bumping the plugin version, and running `claude plugin update leo@leos-agent`. The version bump matters — the plugin cache keys on it, so an unbumped edit never reaches an installed plugin.
 - Codex users can override a model for one request in the prompt, or persist a Leo tier override in native `AGENTS.md`. Explicit user instructions take precedence over bundled defaults.
 - Cursor users select the mapped model in the native model picker before starting a homogeneous tier batch. Generated Cursor agents use `model: inherit`.
 - Hermes users switch the parent with `/model` and configure one delegation model for all native children. A delegation batch cannot mix Kimi and GLM.

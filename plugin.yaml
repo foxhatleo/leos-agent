@@ -1,5 +1,5 @@
 name: leo
-version: "5.0.0"
+version: "5.0.1"
 description: "Leo's cost-tiered routing, execute-then-review policy, process skills, and accidental-command guard for Hermes."
 author: "Leo Liang"
 hooks:

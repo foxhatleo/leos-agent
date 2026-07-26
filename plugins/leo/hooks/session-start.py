@@ -50,31 +50,6 @@ def _strip_frontmatter(text):
     return text
 
 
-def _config_defaults(root):
-    """Tier -> model defaults from the canonical matrix, or {} if unreadable."""
-    try:
-        with open(os.path.join(root, "config", "models.json")) as fh:
-            claude = json.load(fh)["harnesses"]["claude"]
-        return {tier: item["model"] for tier, item in claude.items()}
-    except Exception:
-        return {}
-
-
-def _apply_claude_model_options(text, root):
-    # An unset option must still resolve: leaving a literal
-    # "${user_config.opus_model}" in the injected policy would hand the model
-    # a placeholder where a model name belongs. Fall back to the same default
-    # the plugin manifest declares, which comes from config/models.json.
-    defaults = _config_defaults(root)
-    for tier in ("fable", "opus", "sonnet", "haiku"):
-        placeholder = "${user_config." + tier + "_model}"
-        option = os.environ.get("CLAUDE_PLUGIN_OPTION_" + tier.upper() + "_MODEL")
-        value = option or defaults.get(tier)
-        if value:
-            text = text.replace(placeholder, value)
-    return text
-
-
 def _breadcrumb(exc):
     """Record why injection failed. Never raises: this runs on the fail path."""
     try:
@@ -105,8 +80,6 @@ def main():
         with open(mapping_path) as fh:
             mapping = fh.read()
         body = body.rstrip("\n") + "\n\n" + mapping.rstrip("\n") + "\n"
-        if harness == "claude":
-            body = _apply_claude_model_options(body, root)
         # Substitute AFTER the append so placeholders inside the mapping
         # (e.g. the claude-mapping workflow path) resolve too.
         body = body.replace("${CLAUDE_PLUGIN_ROOT}", root)

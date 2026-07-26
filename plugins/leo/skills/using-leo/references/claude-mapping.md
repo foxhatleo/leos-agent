@@ -3,9 +3,9 @@
 
 | Tier | Model | Effort |
 |---|---|---|
-| Fable | `${user_config.fable_model}` | max |
-| Opus | `${user_config.opus_model}` | native default |
-| Sonnet | `${user_config.sonnet_model}` | native default |
-| Haiku | `${user_config.haiku_model}` | native default |
+| Fable | `fable` | max |
+| Opus | `opus[1m]` | native default |
+| Sonnet | `sonnet[1m]` | native default |
+| Haiku | `haiku` | native default |
 
 Spawn the named native agent; its generated frontmatter selects the configured model.

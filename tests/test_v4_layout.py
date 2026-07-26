@@ -70,7 +70,7 @@ class TestV4Layout(unittest.TestCase):
             data = _load("plugins", "leo", f".{harness}-plugin", "plugin.json")
             with self.subTest(harness=harness):
                 self.assertEqual(data["name"], "leo")
-                self.assertEqual(data["version"], "5.0.0")
+                self.assertEqual(data["version"], "5.0.1")
                 self.assertNotIn("mcpServers", data)
         codex = _load("plugins", "leo", ".codex-plugin", "plugin.json")
         self.assertNotIn("hooks", codex)
@@ -88,8 +88,8 @@ class TestV4Layout(unittest.TestCase):
         self.assertNotIn("agents", manifest)
         self.assertNotIn("hooks", manifest)
 
-        # "skills" is hand-maintained (the renderer only rewrites userConfig
-        # defaults), and Claude is the only harness that reads both roots.
+        # The manifest is entirely hand-maintained (the renderer no longer
+        # writes any part of it), and Claude alone reads both skill roots.
         # Dropping ./skills-claude/ would silently stop shipping the three
         # operational skills with the rest of the suite still green.
         self.assertEqual(manifest["skills"], ["./skills/", "./skills-claude/"])

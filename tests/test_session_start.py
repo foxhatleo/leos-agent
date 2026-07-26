@@ -32,11 +32,9 @@ REQUIRED_SUBSTRINGS = (
 MAX_ADDITIONAL_CONTEXT_LEN = 14000
 
 
-def _run(plugin_root, model_options=None):
+def _run(plugin_root):
     env = dict(os.environ)
     env["CLAUDE_PLUGIN_ROOT"] = plugin_root
-    for tier, model in (model_options or {}).items():
-        env[f"CLAUDE_PLUGIN_OPTION_{tier.upper()}_MODEL"] = model
     return subprocess.run(
         [sys.executable, SESSION_START_PY],
         env=env,
@@ -65,11 +63,11 @@ class TestSessionStartInjectsPolicy(unittest.TestCase):
         self.assertNotIn("${CLAUDE_PLUGIN_ROOT}", additional_context)
         self.assertLess(len(additional_context), MAX_ADDITIONAL_CONTEXT_LEN)
 
-    def test_unset_model_options_fall_back_to_config_defaults(self):
-        """No option set is the common case (the manifest supplies defaults).
+    def test_injected_mapping_names_concrete_models(self):
+        """The mapping must name models, never a placeholder.
 
-        Leaving a literal ${user_config.*} in the injected policy would hand
-        the model a placeholder where a model name belongs.
+        Handing the model "${user_config.opus_model}" where a model name
+        belongs is what broke every agent spawn in 4.0-5.0.0.
         """
         result = _run(PLUGIN)
         additional_context = json.loads(result.stdout)["hookSpecificOutput"][
@@ -81,17 +79,6 @@ class TestSessionStartInjectsPolicy(unittest.TestCase):
         for tier, item in claude.items():
             with self.subTest(tier=tier):
                 self.assertIn(item["model"], additional_context)
-
-    def test_claude_model_options_are_substituted(self):
-        result = _run(PLUGIN, {"opus": "opus[1m]", "sonnet": "sonnet[1m]"})
-        self.assertEqual(result.returncode, 0, f"stderr={result.stderr}")
-
-        additional_context = json.loads(result.stdout)["hookSpecificOutput"][
-            "additionalContext"
-        ]
-        self.assertIn("opus[1m]", additional_context)
-        self.assertIn("sonnet[1m]", additional_context)
-        self.assertNotIn("${user_config.opus_model}", additional_context)
 
 
 class TestSessionStartDegradesGracefully(unittest.TestCase):

@@ -125,19 +125,21 @@ class TestModelMatrix(unittest.TestCase):
                 cursor = fh.read()
             self.assertTrue(claude.startswith("---\n"))
             self.assertTrue(cursor.startswith("---\n"))
-            self.assertIn(f"model: ${{user_config.{tier}_model}}", claude)
+            # Concrete alias, not a ${user_config.*} placeholder: Claude Code
+            # never interpolates plugin userConfig into agent frontmatter.
+            self.assertIn(f"model: {self.data['harnesses']['claude'][tier]['model']}\n", claude)
             self.assertIn("model: inherit", cursor)
 
-    def test_claude_user_config_defaults_match_matrix(self):
+    def test_claude_manifest_declares_no_model_user_config(self):
         manifest_path = os.path.join(PLUGIN, ".claude-plugin", "plugin.json")
         with open(manifest_path, encoding="utf-8") as fh:
             manifest = json.load(fh)
-        for tier, item in self.data["harnesses"]["claude"].items():
-            with self.subTest(tier=tier):
-                self.assertEqual(
-                    manifest["userConfig"][f"{tier}_model"]["default"],
-                    item["model"],
-                )
+        self.assertNotIn(
+            "userConfig",
+            manifest,
+            "per-install model overrides were retired: retiering means editing "
+            "config/models.json and re-rendering",
+        )
 
 
 if __name__ == "__main__":

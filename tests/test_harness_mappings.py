@@ -21,7 +21,7 @@ REFERENCES_DIR = os.path.join(SKILLS_DIR, "using-leo", "references")
 HARNESSES = ("claude", "codex", "cursor", "hermes")
 
 REQUIRED_SUBSTRINGS = {
-    "claude": ("${user_config.opus_model}", "${user_config.sonnet_model}"),
+    "claude": ("opus[1m]", "sonnet[1m]", "fable", "haiku"),
     "codex": (
         "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
         "reasoning_effort", "generic subagent",
@@ -31,7 +31,7 @@ REQUIRED_SUBSTRINGS = {
 }
 
 # Claude-only tokens that must never leak into the other harnesses.
-LEAKED_TOKENS = ("user_config.opus_model", "user_config.sonnet_model", "CLAUDE_PLUGIN_ROOT")
+LEAKED_TOKENS = ("opus[1m]", "sonnet[1m]", "CLAUDE_PLUGIN_ROOT")
 
 NON_CLAUDE_HARNESSES = tuple(h for h in HARNESSES if h != "claude")
 

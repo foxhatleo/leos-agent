@@ -353,17 +353,42 @@ class TestExpertClauseAlignment(unittest.TestCase):
 
 
 class TestClaudeMapping(unittest.TestCase):
-    """Claude resolves model tiers through plugin user configuration."""
+    """Claude names its tier models literally — no indirection to resolve."""
 
     def test_mapping_file_exists(self):
         self.assertTrue(os.path.isfile(CLAUDE_MAPPING), f"missing {CLAUDE_MAPPING}")
 
-    def test_mapping_references_all_user_config_options(self):
+    def test_mapping_pins_concrete_models(self):
+        with open(MODEL_CONFIG, encoding="utf-8") as fh:
+            claude = json.load(fh)["harnesses"]["claude"]
         with open(CLAUDE_MAPPING, encoding="utf-8") as fh:
             text = fh.read()
         for tier in ("fable", "opus", "sonnet", "haiku"):
             with self.subTest(tier=tier):
-                self.assertIn(f"${{user_config.{tier}_model}}", text)
+                self.assertIn(f"`{claude[tier]['model']}`", text)
+
+    def test_no_user_config_placeholder_anywhere_in_payload(self):
+        """Regression guard for the 4.0 outage.
+
+        Claude Code does not interpolate plugin userConfig into agent
+        frontmatter. Shipping "model: ${user_config.opus_model}" handed that
+        literal string to the model selector, so every leo agent spawn died
+        with "issue with the selected model" until it was replaced with the
+        concrete alias from config/models.json.
+        """
+        hits = []
+        for base, _dirs, files in os.walk(PAYLOAD):
+            if "__pycache__" in base:
+                continue
+            for name in files:
+                if not name.endswith((".md", ".json", ".py", ".js")):
+                    continue
+                path = os.path.join(base, name)
+                with open(path, encoding="utf-8") as fh:
+                    text = fh.read()
+                if "${user_config." in text or "userConfig" in text:
+                    hits.append(os.path.relpath(path, REPO))
+        self.assertEqual(hits, [], f"userConfig indirection is retired; found in {hits}")
 
     def test_policy_file_no_longer_pins_1m(self):
         # The body is harness-neutral now: no [1m] alias literal, no

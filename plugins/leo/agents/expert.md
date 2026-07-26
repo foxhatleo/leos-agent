@@ -18,7 +18,7 @@ description: >
   this machine's plan lacks Fable access, report that plainly — do not retry
   or substitute silently.
 tools: Read, Grep, Glob, Bash, WebFetch, WebSearch
-model: ${user_config.fable_model}
+model: fable
 effort: max
 ---
 

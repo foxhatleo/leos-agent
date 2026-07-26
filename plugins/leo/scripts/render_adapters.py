@@ -35,7 +35,11 @@ def _agent_docs(role, tier, config):
     frontmatter, body = _split_role(source)
 
     claude_frontmatter = _without(frontmatter, {"model", "effort"})
-    claude_frontmatter.append(f"model: ${{user_config.{tier}_model}}")
+    # Concrete model, never a plugin-config placeholder: Claude Code does not
+    # interpolate plugin options into agent frontmatter, so a placeholder here
+    # reaches the model selector verbatim and every spawn dies with "issue
+    # with the selected model". config/models.json stays the one source.
+    claude_frontmatter.append(f"model: {config['harnesses']['claude'][tier]['model']}")
     effort = config["harnesses"]["claude"][tier].get("effort")
     if effort:
         claude_frontmatter.append(f"effort: {effort}")
@@ -127,13 +131,7 @@ def _skill_notes(config, harness):
 
 
 def _mapping_docs(config):
-    claude_rows = {
-        tier: {
-            "model": f"${{user_config.{tier}_model}}",
-            **({"effort": item["effort"]} if "effort" in item else {}),
-        }
-        for tier, item in config["harnesses"]["claude"].items()
-    }
+    claude_rows = config["harnesses"]["claude"]
     codex = config["harnesses"]["codex"]
     cursor = config["harnesses"]["cursor"]
     hermes = config["harnesses"]["hermes"]
@@ -185,10 +183,9 @@ def render(config):
     for harness, content in _mapping_docs(config).items():
         outputs[ROOT / "skills" / "using-leo" / "references" / f"{harness}-mapping.md"] = content
 
-    manifest = json.loads(CLAUDE_MANIFEST.read_text(encoding="utf-8"))
-    for tier, item in config["harnesses"]["claude"].items():
-        manifest["userConfig"][f"{tier}_model"]["default"] = item["model"]
-    outputs[CLAUDE_MANIFEST] = json.dumps(manifest, indent=2, ensure_ascii=False) + "\n"
+    # The manifest is no longer rewritten here: per-install model overrides
+    # were retired along with the placeholder they fed. Retiering means editing
+    # config/models.json and re-running this script, the flow README documents.
     return outputs
 
 

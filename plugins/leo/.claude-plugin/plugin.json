@@ -1,7 +1,7 @@
 {
   "name": "leo",
   "description": "Leo's portable Claude Code config: cost-tiered model routing, execute-then-review policy, subagents, process skills, and guards.",
-  "version": "5.0.0",
+  "version": "5.0.1",
   "author": {
     "name": "Leo Liang"
   },
@@ -18,31 +18,5 @@
   "skills": [
     "./skills/",
     "./skills-claude/"
-  ],
-  "userConfig": {
-    "fable_model": {
-      "type": "string",
-      "title": "Fable-tier model",
-      "description": "Model used by Leo's expert role.",
-      "default": "fable"
-    },
-    "opus_model": {
-      "type": "string",
-      "title": "Opus-tier model",
-      "description": "Model used for planning, investigation, and review.",
-      "default": "opus[1m]"
-    },
-    "sonnet_model": {
-      "type": "string",
-      "title": "Sonnet-tier model",
-      "description": "Model used for implementation.",
-      "default": "sonnet[1m]"
-    },
-    "haiku_model": {
-      "type": "string",
-      "title": "Haiku-tier model",
-      "description": "Model used for exploration and mechanical work.",
-      "default": "haiku"
-    }
-  }
+  ]
 }
