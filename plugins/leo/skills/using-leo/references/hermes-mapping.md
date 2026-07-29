@@ -18,6 +18,7 @@ Tier collapse here: Fable≡Opus (`moonshotai/kimi-k3`), Sonnet≡Haiku (`z-ai/g
 
 ## Leo skills not available here
 
+- `leo:attach-pr` — its entire purpose is Claude Code Desktop's PR-card detector, which no other harness has, and it reaches its resolver through a Claude-only skill-directory placeholder.
 - `leo:resolve-ticket` — needs plugin-path placeholders, a pinned Claude model, and Claude-only subagent, worktree, and question tools.
 - `leo:review-pr` — its whole mechanism is a script reached through a Claude-only skill-directory placeholder, plus a pinned Claude model.
 - `leo:watch-review` — pinned Claude model, and it drives review-pr through Claude Code's own skill-invocation tool.

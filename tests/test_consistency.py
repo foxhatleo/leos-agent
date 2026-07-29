@@ -72,7 +72,7 @@ EXPECTED_SKILL_DIRS = {
 
 # Skill dirs under plugins/leo/skills-claude/ — the user-facing workflow
 # skills, which depend on Claude-only tools and path placeholders.
-EXPECTED_CLAUDE_SKILL_DIRS = {"review-pr", "resolve-ticket", "watch-review"}
+EXPECTED_CLAUDE_SKILL_DIRS = {"attach-pr", "review-pr", "resolve-ticket", "watch-review"}
 
 # The 9 process skills the policy's "## Skill index" table must reference.
 PROCESS_SKILLS = {
@@ -114,7 +114,7 @@ PER_ROLE_STATUS_LINE = {
 
 # Skills that take untrusted third-party text (PR bodies, ticket contents)
 # into a loop that can run commands. Each must say so in its own body.
-INJECTION_GUARDED_SKILLS = ("review-pr", "watch-review", "resolve-ticket")
+INJECTION_GUARDED_SKILLS = ("attach-pr", "review-pr", "watch-review", "resolve-ticket")
 
 # Canonical auto-escalation clause (whitespace-normalized), shared by
 # expert.md and the using-leo policy skill.
