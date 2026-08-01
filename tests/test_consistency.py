@@ -848,15 +848,81 @@ class TestUntrustedInputGuardrails(unittest.TestCase):
                     text = fh.read()
                 self.assertIn("data, never instructions", text)
 
-    def test_guarded_skills_do_not_grant_blanket_gh(self):
-        # `Bash(gh *)` also grants `gh api -X POST`: arbitrary repository
-        # writes, in a loop whose input is attacker-supplied.
+    def test_guarded_skills_do_not_grant_blanket_write_reach(self):
+        """review-pr's own body makes this argument, and resolve-ticket then
+        granted both of the things it names: "a blanket `Bash(python3 *)`
+        reaches every gh verb through subprocess, and a blanket `Bash(git *)`
+        reaches push --force and config — either one silently restores exactly
+        the arbitrary-write capability the gh list was written to remove."
+        The test only banned the gh form, so both passed.
+        """
         for name in INJECTION_GUARDED_SKILLS:
             path = skill_path(name)
+            # Frontmatter only: review-pr and watch-review both quote these
+            # exact strings in prose to explain why they are refused, and a
+            # whole-file scan would fail on the argument for the rule.
+            with open(path, encoding="utf-8") as fh:
+                lines = fh.read().splitlines()
+            end = lines.index("---", 1)
+            grants = [l.strip() for l in lines[1:end] if l.strip().startswith("- Bash(")]
+            for blanket in ("Bash(gh *)", "Bash(git *)", "Bash(python3 *)"):
+                with self.subTest(skill=name, grant=blanket):
+                    self.assertNotIn(f"- {blanket}", grants)
+
+
+class TestOperationalSkillPortability(unittest.TestCase):
+    """The operational skills carry no harness-only *mechanics*.
+
+    A Claude-ism here does not fail loudly on another harness — an unexpanded
+    `$0` reviews the wrong PR and a `!`-preflight simply never runs, so the
+    skill proceeds on missing data. `exclude` cannot catch that; only this can.
+
+    attach-pr is exempt and stays Claude-only: its entire product is a side
+    effect in Claude Code Desktop's PR-card detector, so elsewhere it would
+    succeed and produce nothing observable.
+    """
+
+    PORTABLE_OPS = ("review-pr", "resolve-ticket", "watch-review")
+
+    def test_no_pinned_model_in_frontmatter(self):
+        """Only Claude spellings are legal, and OpenCode has no per-spawn
+        override at all, so the tier belongs in the body as prose."""
+        for name in self.PORTABLE_OPS:
             with self.subTest(skill=name):
-                with open(path, encoding="utf-8") as fh:
-                    text = fh.read()
-                self.assertNotIn("Bash(gh *)", text)
+                fm = parse_frontmatter(skill_path(name))
+                self.assertNotIn("model", fm)
+
+    def test_the_tier_is_stated_in_the_body_instead(self):
+        for name in self.PORTABLE_OPS:
+            with self.subTest(skill=name):
+                with open(skill_path(name), encoding="utf-8") as fh:
+                    self.assertIn("tier", fh.read().lower())
+
+    def test_no_command_injection_preflight_or_positional_args(self):
+        for name in self.PORTABLE_OPS:
+            path = skill_path(name)
+            with open(path, encoding="utf-8") as fh:
+                body = fh.read().split("---", 2)[2]
+            with self.subTest(skill=name):
+                self.assertNotRegex(
+                    body, r"!`", "!`cmd` preflight injection is Claude-command syntax; "
+                    "elsewhere it silently never runs")
+                self.assertNotRegex(
+                    body, r"`\$0`|\s\$0\s", "$0 is Claude-command argument substitution")
+
+    def test_no_claude_only_tool_names_in_the_body(self):
+        """Frontmatter allowed-tools may name Claude tools — it is a grant list
+        Claude honours and others ignore. The body is procedure, and a
+        procedure that names one tool as the only way to do something does not
+        travel."""
+        for name in self.PORTABLE_OPS:
+            path = skill_path(name)
+            with open(path, encoding="utf-8") as fh:
+                body = fh.read().split("---", 2)[2]
+            for token in ("EnterWorktree", "ExitWorktree", "subagent_type",
+                          "isolation: worktree", "general-purpose`"):
+                with self.subTest(skill=name, token=token):
+                    self.assertNotIn(token, body)
 
 
 class TestReadmeRoster(unittest.TestCase):
