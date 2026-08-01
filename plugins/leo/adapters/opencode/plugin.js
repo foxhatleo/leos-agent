@@ -19,6 +19,7 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 
@@ -28,6 +29,15 @@ const LEO_POLICY_MARKER = '<leo-policy>';
 
 function localStateRoot() {
   return process.env.LEOS_AGENT_LOCAL_PATH || path.join(os.homedir(), '.leos-agent-local');
+}
+
+// One OpenCode process serves several project directories at once (its own log
+// shows one run= creating an instance per directory), and ESM caches this
+// module once per process, so nothing below may key off process.cwd() or hold
+// per-directory state in a bare module variable. The directory arrives on
+// PluginInput and is threaded through every consumer instead.
+function directoryKey(directory) {
+  return createHash('sha256').update(directory).digest('hex').slice(0, 12);
 }
 
 // A 6-line strip, not a YAML parser: the body starts after the second
@@ -43,7 +53,7 @@ function stripFrontmatter(raw) {
   return raw;
 }
 
-async function assemblePolicy() {
+async function assemblePolicy(directory) {
   let skillRaw;
   try {
     skillRaw = await readFile(path.join(ROOT, 'skills', 'using-leo', 'SKILL.md'), 'utf8');
@@ -73,7 +83,7 @@ async function assemblePolicy() {
   // Memory rides in its own envelope after the policy. Spawned rather than
   // reimplemented in JS: memory.py already owns the store, the projection and
   // the marker engine, and a fourth copy of that renderer would drift.
-  const memory = await memoryBlock();
+  const memory = await memoryBlock(directory);
   if (memory) {
     policy += '\n\n<leo-memory>\n' + memory + '\n</leo-memory>';
   }
@@ -83,13 +93,18 @@ async function assemblePolicy() {
 // Hard-kills after 4s: OpenCode session start must not hang on a memory store
 // living on a slow or unreachable filesystem. Any failure yields '' and the
 // session proceeds with policy only.
-function memoryBlock() {
+//
+// `memory.py session` renders the block for the repo it is run in, so the
+// directory has to be the session's, not the server's: process.cwd() here
+// would serve one project's repo-scoped memories to every other project the
+// same OpenCode process is hosting.
+function memoryBlock(directory) {
   return new Promise((resolve) => {
     let done = false;
     const finish = (value) => { if (!done) { done = true; resolve(value); } };
     try {
       const child = spawn('python3', [path.join(ROOT, 'scripts', 'memory.py'), 'session'], {
-        cwd: process.cwd(),
+        cwd: directory,
         stdio: ['ignore', 'pipe', 'ignore'],
       });
       const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} finish(''); }, 4000);
@@ -106,9 +121,12 @@ function memoryBlock() {
   });
 }
 
-async function writePolicyFile(policy) {
+// Named per directory: the memory envelope inside is repo-scoped, so a single
+// shared filename would have each project's instance overwriting the file the
+// other projects' config.instructions already point at.
+async function writePolicyFile(policy, directory) {
   const dir = localStateRoot();
-  const dest = path.join(dir, 'opencode-policy.md');
+  const dest = path.join(dir, `opencode-policy-${directoryKey(directory)}.md`);
   try {
     await mkdir(dir, { recursive: true });
     await writeFile(dest, policy, 'utf8');
@@ -118,21 +136,24 @@ async function writePolicyFile(policy) {
   }
 }
 
-let policyCache;
-async function getPolicy() {
-  if (policyCache === undefined) {
-    policyCache = await assemblePolicy();
+// Keyed by directory for the same reason. A bare module variable is shared by
+// every instance in the process, which would pin whichever project started
+// first and serve its memories to the rest.
+const policyCache = new Map();
+async function getPolicy(directory) {
+  if (!policyCache.has(directory)) {
+    policyCache.set(directory, await assemblePolicy(directory));
   }
-  return policyCache;
+  return policyCache.get(directory);
 }
 
-let policyPathCache;
-async function getPolicyPath() {
-  if (policyPathCache === undefined) {
-    const policy = await getPolicy();
-    policyPathCache = policy ? await writePolicyFile(policy) : null;
+const policyPathCache = new Map();
+async function getPolicyPath(directory) {
+  if (!policyPathCache.has(directory)) {
+    const policy = await getPolicy(directory);
+    policyPathCache.set(directory, policy ? await writePolicyFile(policy, directory) : null);
   }
-  return policyPathCache;
+  return policyPathCache.get(directory);
 }
 
 async function loadAgents() {
@@ -146,7 +167,14 @@ async function loadAgents() {
 
 let guardWarnedOnce = false;
 
-export default async function leoPlugin(_ctx) {
+export default async function leoPlugin(ctx) {
+  // The only place the session's directory is available. tool.execute.before
+  // receives just {tool, sessionID, callID} (@opencode-ai/plugin's own types),
+  // so reading a directory off that input yields undefined every time and
+  // falls through to the server's cwd — a different tree whenever one process
+  // hosts more than one project.
+  const directory = (ctx && (ctx.directory || ctx.worktree)) || process.cwd();
+
   return {
     async config(config) {
       config.skills ||= {};
@@ -160,7 +188,7 @@ export default async function leoPlugin(_ctx) {
       config.agent ||= {};
       Object.assign(config.agent, agents);
 
-      const policyPath = await getPolicyPath();
+      const policyPath = await getPolicyPath(directory);
       if (policyPath) {
         config.instructions ||= [];
         if (!config.instructions.includes(policyPath)) {
@@ -178,7 +206,7 @@ export default async function leoPlugin(_ctx) {
       if (!Array.isArray(system)) return;
       if (system.some((s) => typeof s === 'string' && s.includes(LEO_POLICY_MARKER))) return;
 
-      const policy = await getPolicy();
+      const policy = await getPolicy(directory);
       if (policy) system.push(policy);
     },
 
@@ -187,8 +215,14 @@ export default async function leoPlugin(_ctx) {
       const command = output && output.args && output.args.command;
       if (typeof command !== 'string' || !command) return;
 
-      const cwd = (input && (input.directory || input.worktree || input.cwd)) || process.cwd();
-      const payload = JSON.stringify({ tool_name: 'Bash', tool_input: { command }, cwd });
+      // bash-guard expands relative targets against this cwd, so the wrong
+      // one misjudges in both directions: a home-level delete read as safe,
+      // a project-local delete read as critical.
+      const payload = JSON.stringify({
+        tool_name: 'Bash',
+        tool_input: { command },
+        cwd: directory,
+      });
       const guardPath = path.join(ROOT, 'hooks', 'bash-guard.py');
 
       let exitCode;

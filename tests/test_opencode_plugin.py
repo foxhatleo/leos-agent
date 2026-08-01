@@ -8,6 +8,8 @@ Run: python3 -m unittest tests.test_opencode_plugin -v
 
 import json
 import os
+import shutil
+import subprocess
 import sys
 import unittest
 
@@ -38,6 +40,18 @@ def _load_agents():
 def _read_plugin_js():
     with open(PLUGIN_JS, encoding="utf-8") as fh:
         return fh.read()
+
+
+def _read_plugin_js_code():
+    """plugin.js without its comment lines.
+
+    The comments explain which cwd is wrong and why, so counting occurrences
+    in the raw text finds the rationale rather than the code — the same reason
+    TestReleaseWorkflowPublish strips '#' lines from the workflow.
+    """
+    return "\n".join(
+        line for line in _read_plugin_js().splitlines() if not line.lstrip().startswith("//")
+    )
 
 
 class TestOpenCodeAgentsJson(unittest.TestCase):
@@ -105,6 +119,76 @@ class TestOpenCodePluginJsStatic(unittest.TestCase):
     def test_references_agents_json_not_agents_dir_parsing(self):
         text = _read_plugin_js()
         self.assertIn("agents.json", text)
+
+
+class TestOpenCodeSessionDirectory(unittest.TestCase):
+    """One OpenCode process hosts several project directories (its log shows
+    one run= creating an instance per directory) and ESM caches the bridge once
+    per process, so every directory-dependent value has to come from the
+    PluginInput the plugin factory is handed. It previously came from
+    tool.execute.before's input, which carries only {tool, sessionID, callID},
+    so the guard judged every command against the server's cwd.
+    """
+
+    def test_directory_comes_from_plugin_input(self):
+        text = _read_plugin_js_code()
+        self.assertIn("ctx.directory || ctx.worktree", text)
+        self.assertNotIn("input.directory", text)
+        self.assertNotIn("input.worktree", text)
+        self.assertNotIn("leoPlugin(_ctx)", text)
+
+    def test_no_consumer_falls_back_to_the_server_cwd(self):
+        # The single tolerated process.cwd() is the last-resort default when
+        # PluginInput carries no directory at all.
+        text = _read_plugin_js_code()
+        self.assertEqual(text.count("process.cwd()"), 1)
+        self.assertNotIn("cwd: process.cwd()", text)
+
+    def test_per_directory_state_is_not_held_in_bare_module_variables(self):
+        # A shared cache would pin whichever project started first and serve
+        # its repo-scoped memory block to every other project in the process.
+        text = _read_plugin_js_code()
+        self.assertIn("policyCache = new Map()", text)
+        self.assertIn("policyPathCache = new Map()", text)
+        self.assertIn("opencode-policy-${directoryKey(directory)}.md", text)
+
+
+@unittest.skipUnless(shutil.which("node"), "node is required to drive the ESM bridge")
+class TestOpenCodeGuardLive(unittest.TestCase):
+    """Static lint cannot tell a threaded directory from an ignored one, so
+    drive the real hook: the same command must be judged differently in two
+    directories. `rm -rf .` is critical in $HOME and fine inside a project.
+    """
+
+    def _run_guard(self, directory, command):
+        script = """
+        const plugin = (await import(process.argv[1])).default;
+        const hooks = await plugin({ directory: process.argv[2] });
+        try {
+          await hooks['tool.execute.before'](
+            { tool: 'bash', sessionID: 's', callID: 'c' },
+            { args: { command: process.argv[3] } },
+          );
+          console.log('ALLOW');
+        } catch {
+          console.log('BLOCK');
+        }
+        """
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script, PLUGIN_JS, directory, command],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.strip()
+
+    def test_guard_judges_against_the_session_directory(self):
+        self.assertEqual(self._run_guard(os.path.expanduser("~"), "rm -rf ."), "BLOCK")
+        self.assertEqual(self._run_guard(REPO, "rm -rf ."), "ALLOW")
+
+    def test_unconditional_tripwire_still_fires(self):
+        self.assertEqual(self._run_guard(REPO, "rm -rf ~"), "BLOCK")
 
 
 class TestOpenCodePackageJson(unittest.TestCase):
