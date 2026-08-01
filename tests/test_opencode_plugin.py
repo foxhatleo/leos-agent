@@ -123,5 +123,41 @@ class TestOpenCodePackageJson(unittest.TestCase):
                 self.assertNotIn(excluded, data["files"])
 
 
+class TestReleaseWorkflowPublish(unittest.TestCase):
+    """The publish step is only exercised on a tag, so pin its shape here."""
+
+    @classmethod
+    def setUpClass(cls):
+        path = os.path.join(REPO, ".github", "workflows", "release.yml")
+        with open(path, encoding="utf-8") as fh:
+            cls.workflow = fh.read()
+        # The comments here explain why NPM_TOKEN is absent and why the two
+        # publish steps are ordered as they are, so matching against raw text
+        # would find the prose rather than the steps.
+        cls.steps = "\n".join(
+            line for line in cls.workflow.splitlines() if not line.lstrip().startswith("#")
+        )
+
+    def test_publish_path_is_relative(self):
+        # A bare `plugins/leo` is read by npm as the GitHub shorthand
+        # owner/repo, and the publish dies trying to clone it.
+        self.assertIn("npm publish ./plugins/leo --access public", self.steps)
+        self.assertNotIn("npm publish plugins/leo", self.steps)
+
+    def test_trusted_publishing_not_token_auth(self):
+        self.assertIn("id-token: write", self.steps)
+        for token in ("NODE_AUTH_TOKEN", "NPM_TOKEN"):
+            with self.subTest(token=token):
+                self.assertNotIn(token, self.steps)
+
+    def test_npm_publish_precedes_github_release(self):
+        # gh release create is not idempotent: if it ran first, a failed
+        # publish could never be retried by re-running the workflow.
+        self.assertLess(
+            self.steps.index("npm publish ./plugins/leo"),
+            self.steps.index("gh release create"),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
