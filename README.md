@@ -82,27 +82,23 @@ Verify the enabled state with `hermes plugins list`; inside a running session, `
 
 ### OpenCode
 
-OpenCode has no GitHub-based plugin marketplace — the plugin is distributed on npm as `leos-agent`.
+OpenCode has no GitHub-based plugin marketplace — the plugin is distributed on npm as `leos-agent` and installed by module name:
 
 ```sh
-npm install -g opencode-ai   # if not already installed
+opencode plugin leos-agent --global
 ```
 
-Add it to `~/.config/opencode/opencode.json`:
+That resolves the package and adds it to the global config for you. On OpenCode builds without the `plugin` subcommand, add it by hand instead — the config file is `~/.config/opencode/opencode.json` or `opencode.jsonc` (OpenCode loads `config.json`, `opencode.json`, and `opencode.jsonc`, in that order):
 
 ```json
 { "$schema": "https://opencode.ai/config.json", "plugin": ["leos-agent"] }
 ```
 
-Start a new OpenCode session after adding it. On startup the plugin registers the skills directory, the six generated subagent roles, and the using-leo policy (injected through `config.instructions` and, as a fallback, the chat system-prompt transform), and installs the bash deletion tripwire.
+Start a new OpenCode session after installing. On startup the plugin registers the skills directory, the six generated subagent roles, and the using-leo policy (injected through `config.instructions` and, as a fallback, the chat system-prompt transform), and installs the bash deletion tripwire.
 
 OpenCode names skills from their own frontmatter and applies no plugin namespace, so they are invoked as `brainstorming` and `verification` rather than `leo:brainstorming`. The harness mapping tells the agent to read `leo:<skill>` in the policy as `<skill>` here.
 
-If skills don't appear (npm installs into OpenCode's own node_modules cache, and the path there can vary by OpenCode version), add the fallback manually:
-
-```json
-{ "skills": { "paths": ["~/.cache/opencode/node_modules/leos-agent/skills"] } }
-```
+If skills don't appear, run `opencode debug skill` — every Leo skill should list a `location` inside the installed package. `opencode debug config` shows the resolved `skills.paths`, `instructions`, and `agent` entries. The plugin derives its own install location and registers all three itself, so no path ever needs to be written by hand; if they are missing, the plugin did not load at all.
 
 Remove it by deleting the `"leos-agent"` entry from the `plugin` array.
 

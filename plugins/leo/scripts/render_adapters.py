@@ -325,14 +325,16 @@ def _payload_readme(config):
         "each install it through their own plugin system — see "
         "[the repository](https://github.com/foxhatleo/leos-agent) for those.\n\n"
         "## Install\n\n"
-        "Add it to `~/.config/opencode/opencode.json`:\n\n"
+        "```sh\nopencode plugin leos-agent --global\n```\n\n"
+        "On builds without the `plugin` subcommand, add it to "
+        "`~/.config/opencode/opencode.json` (or `opencode.jsonc`) by hand:\n\n"
         '```json\n{ "$schema": "https://opencode.ai/config.json", "plugin": ["leos-agent"] }\n```\n\n'
         "Start a new OpenCode session. The plugin registers the skills directory, the "
         f"{len(json.loads(_opencode_agents(config)))} subagent roles, and the operating policy, and installs the "
         "bash deletion tripwire.\n\n"
-        "If the skills do not appear, register the path by hand — npm installs into OpenCode's own "
-        "cache and the location varies by version:\n\n"
-        '```json\n{ "skills": { "paths": ["~/.cache/opencode/node_modules/leos-agent/skills"] } }\n```\n\n'
+        "If the skills do not appear, run `opencode debug skill` — each one should list a "
+        "`location` inside this package. The plugin resolves its own install path and registers "
+        "it, so none needs to be written by hand.\n\n"
         "## Model tiers\n\n"
         "Tier names describe the kind of work, not a fixed provider model.\n\n"
         + _table({tier: opencode[tier] for tier in ("fable", "opus", "sonnet", "haiku")})
