@@ -74,6 +74,57 @@ def _agent_docs(role, tier, config):
     return claude, cursor
 
 
+def _opencode_agents(config):
+    """Render adapters/opencode/agents.json: one entry per role, keyed by
+    role name, sourced from the same roles/*.md canonical prompts and the
+    same config/models.json tiers every other harness reads.
+
+    A role whose tier resolves to the same model as `opus` on this harness
+    is skipped — that is `expert`/fable here, since opencode's tier table
+    collapses Fable onto Opus (see the opencode harnesses block). Dropping
+    it, rather than registering a fake rung, matches the removed v3.1
+    bridge's posture.
+    """
+    opencode = config["harnesses"]["opencode"]
+    opus_model = opencode["opus"]["model"]
+    agents = {}
+    for role, tier in sorted(config["roles"].items()):
+        model = opencode[tier]["model"]
+        if model == opus_model and tier != "opus":
+            continue
+        source = (ROLE_ROOT / f"{role}.md").read_text(encoding="utf-8")
+        frontmatter, body = _split_role(source)
+        fm = {}
+        for line in frontmatter:
+            if ":" not in line:
+                continue
+            key, _, value = line.partition(":")
+            fm[key.strip()] = value.strip()
+        if role in READ_ONLY:
+            permission = {"edit": "deny"}
+        else:
+            # Stopgap for opencode#5894 (unconfirmed whether
+            # tool.execute.before intercepts subagent bash): coarse denies
+            # on the catastrophic rm class for write-capable agents. The
+            # precise tripwire stays hooks/bash-guard.py.
+            permission = {
+                "bash": {
+                    "rm -rf ~": "deny",
+                    "rm -rf ~/*": "deny",
+                    "rm -rf /": "deny",
+                    "rm -rf /*": "deny",
+                }
+            }
+        agents[role] = {
+            "description": fm.get("description", ""),
+            "mode": "subagent",
+            "model": f"openrouter/{model}",
+            "prompt": body,
+            "permission": permission,
+        }
+    return json.dumps(agents, indent=2, sort_keys=True) + "\n"
+
+
 def _table(rows):
     lines = ["| Tier | Model | Effort |", "|---|---|---|"]
     for tier in ("fable", "opus", "sonnet", "haiku"):
@@ -143,6 +194,8 @@ def _mapping_docs(config):
     cursor = config["harnesses"]["cursor"]
     hermes = config["harnesses"]["hermes"]
     hermes_rows = {tier: hermes[tier] for tier in ("fable", "opus", "sonnet", "haiku")}
+    opencode = config["harnesses"]["opencode"]
+    opencode_rows = {tier: opencode[tier] for tier in ("fable", "opus", "sonnet", "haiku")}
     return {
         "claude": GENERATED
         + "# Claude Code mapping\n\n"
@@ -184,6 +237,28 @@ def _mapping_docs(config):
         "read-only contract is a convention here, not a guarantee.\n"
         + _collapse_note(hermes_rows)
         + _skill_notes(config, "hermes"),
+        "opencode": GENERATED
+        + "# OpenCode mapping\n\n"
+        + f"Provider: `{opencode['provider']}`\n\n"
+        + _table(opencode_rows)
+        + "\n\nRoles register as native OpenCode agents (from `adapters/opencode/agents.json`, "
+        "generated from `config/models.json` and `roles/*.md`) and are spawned via the task tool "
+        "as subagents. There is no per-spawn model override on this harness: each agent always "
+        "runs its registered model, so `reviewer` always runs the full Opus-tier model — the "
+        "trivial-diff Sonnet-tier downscale does not apply here; every diff gets the full review.\n"
+        "\nRead-only is harness-enforced here, unlike Codex and Cursor: read-only roles carry a "
+        "generated `permission.edit: deny`, so an off-policy write attempt is refused by OpenCode "
+        "itself, not merely discouraged by the prompt. Write-capable agents additionally carry "
+        "coarse `rm -rf` bash denies as a stopgap for opencode#5894 (unconfirmed whether "
+        "`tool.execute.before` also intercepts subagent bash); the precise tripwire stays "
+        "`hooks/bash-guard.py` on the primary agent.\n"
+        "\nNo `EnterWorktree` tool exists here — use leo:worktrees' raw `git worktree` fallback for "
+        "isolated branch work. State reads and writes go through `python3 <plugin-root>/scripts/state.py` "
+        "(`get` / `merge` / `path`), same contract as every other harness. There is no Workflow tool "
+        "and no `cost-tiered-fix.js` here — a batch of independent tasks is fanned out as manual "
+        "parallel task-tool subagent spawns instead.\n"
+        + _collapse_note(opencode_rows)
+        + _skill_notes(config, "opencode"),
     }
 
 
@@ -198,6 +273,7 @@ def render(config):
         outputs[ROOT / "adapters" / "cursor" / "agents" / f"{role}.md"] = cursor
     for harness, content in _mapping_docs(config).items():
         outputs[ROOT / "skills" / "using-leo" / "references" / f"{harness}-mapping.md"] = content
+    outputs[ROOT / "adapters" / "opencode" / "agents.json"] = _opencode_agents(config)
 
     # The manifest is no longer rewritten here: per-install model overrides
     # were retired along with the placeholder they fed. Retiering means editing
@@ -228,6 +304,7 @@ def main():
     for pattern in (
         "agents/*.md",
         "adapters/cursor/agents/*.md",
+        "adapters/opencode/agents.json",
         "skills/using-leo/references/*-mapping.md",
     ):
         for path in sorted(ROOT.glob(pattern)):

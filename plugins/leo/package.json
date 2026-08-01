@@ -1,0 +1,16 @@
+{
+  "name": "leos-agent",
+  "version": "6.1.0",
+  "description": "Leo's agent operating policy: cost-tiered routing, subagent roles, review gates, guardrails.",
+  "type": "module",
+  "main": "adapters/opencode/plugin.js",
+  "exports": { ".": "./adapters/opencode/plugin.js" },
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/foxhatleo/leos-agent.git" },
+  "homepage": "https://github.com/foxhatleo/leos-agent",
+  "files": ["adapters/", "config/", "hooks/", "roles/", "scripts/", "skills/", "workflows/", "settings.json"],
+  "scripts": {
+    "//prepack": "A `files` whitelist overrides .npmignore for directory entries, so local test runs leak __pycache__/*.pyc into the tarball. Clear them before packing.",
+    "prepack": "find . -name __pycache__ -type d -prune -exec rm -rf {} +"
+  }
+}

@@ -18,7 +18,7 @@ CLAUDE_SKILLS_DIR = os.path.join(REPO, "plugins", "leo", "skills-claude")
 SKILL_ROOTS = (SKILLS_DIR, CLAUDE_SKILLS_DIR)
 REFERENCES_DIR = os.path.join(SKILLS_DIR, "using-leo", "references")
 
-HARNESSES = ("claude", "codex", "cursor", "hermes")
+HARNESSES = ("claude", "codex", "cursor", "hermes", "opencode")
 
 REQUIRED_SUBSTRINGS = {
     "claude": ("opus", "sonnet", "fable", "haiku"),
@@ -28,6 +28,7 @@ REQUIRED_SUBSTRINGS = {
     ),
     "cursor": ("GPT-5.6 Sol", "Grok 4.5", "Composer 2.5", "model: inherit"),
     "hermes": ("openrouter", "moonshotai/kimi-k3", "z-ai/glm-5.2", "homogeneous"),
+    "opencode": ("openrouter", "moonshotai/kimi-k3", "z-ai/glm-5.2", "permission.edit: deny"),
 }
 
 # Claude-only tokens that must never leak into the other harnesses.

@@ -15,6 +15,7 @@ MANIFESTS = (
     PAYLOAD / ".claude-plugin" / "plugin.json",
     PAYLOAD / ".codex-plugin" / "plugin.json",
     PAYLOAD / ".cursor-plugin" / "plugin.json",
+    PAYLOAD / "package.json",
 )
 
 

@@ -477,7 +477,7 @@ class TestExecutorImplementerTools(unittest.TestCase):
 HARNESS_STATE_PREFIXES = (
     STATE_PREFIX,                 # ${CLAUDE_PLUGIN_ROOT}/scripts/
     "$PLUGIN_ROOT/scripts/",      # Codex
-    "<plugin-root>/scripts/",     # Cursor mapping prose
+    "<plugin-root>/scripts/",     # Cursor and OpenCode mapping prose
 )
 
 

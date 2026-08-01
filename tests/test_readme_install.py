@@ -39,7 +39,8 @@ class TestReadmeInstall(unittest.TestCase):
         ):
             self.assertIn(value, self.readme)
         self.assertNotIn("./install.sh", self.readme)
-        self.assertNotIn("OpenCode", self.readme)
+        self.assertIn('"plugin": ["leos-agent"]', self.readme)
+        self.assertIn("opencode.json", self.readme)
         self.assertIn("MCP", self.readme)
         self.assertIn("independently", self.readme)
 

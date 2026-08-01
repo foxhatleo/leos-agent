@@ -107,9 +107,20 @@ class TestV4Layout(unittest.TestCase):
         )
 
     def test_removed_setup_surfaces_are_absent(self):
-        for relative in ("install.sh", "install", ".opencode", "package.json", ".mcp.json"):
+        # .opencode and package.json are no longer retired surfaces: the
+        # OpenCode bridge and its npm manifest now live at the conventional
+        # payload paths (plugins/leo/adapters/opencode/, plugins/leo/package.json).
+        # This assertion is repo-root only, so it never sees them there.
+        for relative in ("install.sh", "install", ".mcp.json"):
             with self.subTest(path=relative):
                 self.assertFalse(os.path.lexists(os.path.join(REPO, relative)))
+
+    def test_payload_package_json_excludes_claude_only_surfaces(self):
+        data = _load("plugins", "leo", "package.json")
+        self.assertEqual(data["name"], "leos-agent")
+        for excluded in ("skills-claude/", ".claude-plugin/", ".codex-plugin/", ".cursor-plugin/"):
+            with self.subTest(excluded=excluded):
+                self.assertNotIn(excluded, data["files"])
 
     def test_operational_skills_treat_mcp_as_external(self):
         path = os.path.join(PLUGIN, "skills-claude", "resolve-ticket", "SKILL.md")

@@ -1,5 +1,5 @@
 name: leo
-version: "6.0.0"
+version: "6.1.0"
 description: "Leo's cost-tiered routing, execute-then-review policy, process skills, and accidental-command guard for Hermes."
 author: "Leo Liang"
 # No hooks key: Hermes reads name/version/description/requires_env here and

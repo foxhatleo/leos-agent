@@ -1,6 +1,6 @@
 # Leo
 
-Leo is a portable agent operating policy for Claude Code, Codex, Cursor, and Hermes. It packages cost-tiered model routing, seven specialist roles, process skills, execute-then-review discipline, and a narrow catastrophic-command guard as native plugins.
+Leo is a portable agent operating policy for Claude Code, Codex, Cursor, Hermes, and OpenCode. It packages cost-tiered model routing, seven specialist roles, process skills, execute-then-review discipline, and a narrow catastrophic-command guard as native plugins.
 
 The repository does not need to be cloned for normal use. Each harness installs Leo through its own plugin system, and updates come through that system.
 
@@ -80,16 +80,40 @@ Hermes installs the Git repository into its plugin directory and loads the root 
 
 Verify the enabled state with `hermes plugins list`; inside a running session, `/plugins` shows the loaded plugin.
 
+### OpenCode
+
+OpenCode has no GitHub-based plugin marketplace — the plugin is distributed on npm as `leos-agent`.
+
+```sh
+npm install -g opencode-ai   # if not already installed
+```
+
+Add it to `~/.config/opencode/opencode.json`:
+
+```json
+{ "$schema": "https://opencode.ai/config.json", "plugin": ["leos-agent"] }
+```
+
+Start a new OpenCode session after adding it. On startup the plugin registers the leo:* skills directory, the six generated subagent roles, and the using-leo policy (injected through `config.instructions` and, as a fallback, the chat system-prompt transform), and installs the bash deletion tripwire.
+
+If skills don't appear (npm installs into OpenCode's own node_modules cache, and the path there can vary by OpenCode version), add the fallback manually:
+
+```json
+{ "skills": { "paths": ["~/.cache/opencode/node_modules/leos-agent/skills"] } }
+```
+
+Remove it by deleting the `"leos-agent"` entry from the `plugin` array.
+
 ## Model tiers
 
 Tier names describe work, not a universal provider model. The canonical defaults live in [`plugins/leo/config/models.json`](plugins/leo/config/models.json).
 
-| Tier | Typical work | Claude Code | Cursor | Codex | Hermes via OpenRouter |
-|---|---|---|---|---|---|
-| Fable | Expert arbitration | `fable` | GPT-5.6 Sol | `gpt-5.6-sol`, max | `moonshotai/kimi-k3` |
-| Opus | Planning, investigation, review | `opus` | Grok 4.5 | `gpt-5.6-sol`, high | `moonshotai/kimi-k3` |
-| Sonnet | Implementation | `sonnet` | Grok 4.5 | `gpt-5.6-terra`, medium | `z-ai/glm-5.2` |
-| Haiku | Exploration and mechanical work | `haiku` | Composer 2.5 | `gpt-5.6-luna`, low | `z-ai/glm-5.2` |
+| Tier | Typical work | Claude Code | Cursor | Codex | Hermes via OpenRouter | OpenCode via OpenRouter |
+|---|---|---|---|---|---|---|
+| Fable | Expert arbitration | `fable` | GPT-5.6 Sol | `gpt-5.6-sol`, max | `moonshotai/kimi-k3` | `moonshotai/kimi-k3` |
+| Opus | Planning, investigation, review | `opus` | Grok 4.5 | `gpt-5.6-sol`, high | `moonshotai/kimi-k3` | `moonshotai/kimi-k3` |
+| Sonnet | Implementation | `sonnet` | Grok 4.5 | `gpt-5.6-terra`, medium | `z-ai/glm-5.2` | `z-ai/glm-5.2` |
+| Haiku | Exploration and mechanical work | `haiku` | Composer 2.5 | `gpt-5.6-luna`, low | `z-ai/glm-5.2` | `z-ai/glm-5.2` |
 
 The role mapping is expert → Fable; planner, investigator, and reviewer → Opus; implementer → Sonnet; executor and explore → Haiku.
 
@@ -102,6 +126,7 @@ The role mapping is expert → Fable; planner, investigator, and reviewer → Op
 - Codex users can override a model for one request in the prompt, or persist a Leo tier override in native `AGENTS.md`. Explicit user instructions take precedence over bundled defaults.
 - Cursor users select the mapped model in the native model picker before starting a homogeneous tier batch. Generated Cursor agents use `model: inherit`.
 - Hermes users switch the parent with `/model` and configure one delegation model for all native children. A delegation batch cannot mix Kimi and GLM.
+- OpenCode tiers, like Hermes, have no Fable rung — Fable and Opus collapse onto `moonshotai/kimi-k3`, so `expert` is not registered as an agent on this harness. `reviewer` always runs the full Opus-tier model here; there is no per-spawn downscale.
 
 For a Fable/Opus Hermes batch:
 
@@ -134,8 +159,8 @@ Group delegated work into homogeneous Kimi or GLM batches and change this native
 - `using-leo`: the session policy for model routing, delegation, and execute-then-review.
 - Seven roles: expert, planner, investigator, reviewer, implementer, executor, and explore.
 - Process skills: `brainstorming`, `writing-plans`, `executing-plans`, `debugging`, `test-first`, `verification`, `delegation`, `worktrees`, and `finishing-a-branch`.
-- Operational skills: `attach-pr`, `resolve-ticket`, `review-pr`, and `watch-review` — Claude Code only. They depend on Claude-only tools and path placeholders, so they ship from a separate `skills-claude/` root that the Cursor, Codex, and Hermes manifests do not read. Each harness's mapping appendix names what it is missing and why.
-- Session bootstrap hooks for Claude Code, Codex, and Cursor, plus native policy injection for Hermes.
+- Operational skills: `attach-pr`, `resolve-ticket`, `review-pr`, and `watch-review` — Claude Code only. They depend on Claude-only tools and path placeholders, so they ship from a separate `skills-claude/` root that the Cursor, Codex, Hermes, and OpenCode manifests do not read. Each harness's mapping appendix names what it is missing and why.
+- Session bootstrap hooks for Claude Code, Codex, and Cursor, plus native policy injection for Hermes and OpenCode.
 - A shared bash guard that blocks a narrow class of accidental home/system-scale destructive commands.
 
 The bash guard is an accident-prevention tripwire, not an adversarial shell sandbox. It deliberately does not try to enumerate every obfuscation or malicious-command technique; each harness's permissions and sandbox remain the security boundary.
@@ -163,14 +188,16 @@ ${LEOS_AGENT_LOCAL_PATH:-$HOME/.leos-agent-local}/<skill-or-agent-name>.json
 .agents/plugins/marketplace.json     Codex marketplace catalog
 .cursor-plugin/marketplace.json      Cursor marketplace catalog
 plugin.yaml + __init__.py            Hermes plugin entrypoint
-plugins/leo/                          self-contained cached plugin payload
+plugins/leo/                          self-contained cached plugin payload, also published to npm as leos-agent
   .claude-plugin/plugin.json
   .codex-plugin/plugin.json
   .cursor-plugin/plugin.json
+  package.json                        npm manifest for the OpenCode distribution
   config/models.json                  canonical model matrix
   roles/                              canonical role prompts
   agents/                             generated Claude agents (conventional path)
   adapters/                           generated agent definitions for other harnesses
+  adapters/opencode/                  OpenCode plugin.js bridge + generated agents.json
   skills/                             portable skills (every harness)
   skills-claude/                      Claude-only operational skills
   hooks/ scripts/ workflows/
@@ -187,9 +214,14 @@ Run the complete local checks with:
 python3 plugins/leo/scripts/render_adapters.py --check
 python3 -m unittest discover -s tests -v
 claude plugin validate .
-python3 ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py plugins/leo
+curl -fsSL https://raw.githubusercontent.com/openai/codex/main/codex-rs/skills/src/assets/samples/plugin-creator/scripts/validate_plugin.py -o /tmp/validate_plugin.py
+python3 /tmp/validate_plugin.py plugins/leo
 ```
 
-Version `5.0.0` is aligned across the three plugin manifests and Hermes manifest. A future `vX.Y.Z` tag triggers the release workflow, which verifies version alignment, runs the suite, builds the generic and Hermes archives, and publishes a GitHub release. Creating or pushing the tag remains a deliberate maintainer action.
+Version `6.1.0` is aligned across the three plugin manifests, the Hermes manifest, and `plugins/leo/package.json`. A future `vX.Y.Z` tag triggers the release workflow, which verifies version alignment, runs the suite, builds the generic and Hermes archives, publishes a GitHub release, and publishes `plugins/leo` to npm as `leos-agent` (Trusted Publishing / OIDC — no stored token). Creating or pushing the tag remains a deliberate maintainer action.
 
-For local harness testing, point each harness's development-plugin facility at `plugins/leo/`; test Hermes from the repository root because its entrypoint wraps the nested payload.
+For local harness testing, point each harness's development-plugin facility at `plugins/leo/`; test Hermes from the repository root because its entrypoint wraps the nested payload. For OpenCode, point the `plugin` array at the working tree instead of the npm package name:
+
+```json
+{ "plugin": ["/absolute/path/to/leos-agent/plugins/leo"] }
+```
