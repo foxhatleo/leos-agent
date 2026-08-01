@@ -17,6 +17,7 @@
 // posture as hooks/session-start.py.
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { appendFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
@@ -165,7 +166,26 @@ async function loadAgents() {
   }
 }
 
-let guardWarnedOnce = false;
+// A guard that cannot run allows the command — the same posture as Claude
+// Code and Codex, where PreToolUse blocks only on exit 2 and any other
+// outcome is non-blocking. What must not happen is that it goes quiet: a
+// one-shot warning latch meant the second and every later unguarded command
+// passed with nothing said anywhere. Breadcrumb every one of them, to the
+// same local log the other bootstraps write to.
+function guardBreadcrumb(err) {
+  const reason = (err && err.message) || String(err);
+  try {
+    const dir = localStateRoot();
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(
+      path.join(dir, 'opencode-guard.log'),
+      `${new Date().toISOString()} guard did not run, command allowed: ${reason}\n`,
+    );
+  } catch {
+    // A breadcrumb that cannot be written must not itself break the session.
+  }
+  console.error('[leo guard] guard did not run, allowing command:', reason);
+}
 
 export default async function leoPlugin(ctx) {
   // The only place the session's directory is available. tool.execute.before
@@ -227,9 +247,18 @@ export default async function leoPlugin(ctx) {
 
       let exitCode;
       let stderr = '';
+      let timer;
       try {
         exitCode = await new Promise((resolve, reject) => {
           const proc = spawn('python3', [guardPath], { stdio: ['pipe', 'ignore', 'pipe'] });
+          // Every other guard channel is bounded — Claude Code, Codex and
+          // Cursor all set timeout 10 in their hook manifests, and Hermes
+          // runs in-process so it cannot hang on its own. Unbounded, a wedged
+          // python3 hangs the tool call forever with nothing shown to anyone.
+          timer = setTimeout(() => {
+            try { proc.kill('SIGKILL'); } catch {}
+            reject(new Error('bash-guard.py timed out after 10s'));
+          }, 10000);
           proc.stderr.on('data', (d) => {
             stderr += d.toString();
           });
@@ -239,14 +268,10 @@ export default async function leoPlugin(ctx) {
           proc.stdin.end();
         });
       } catch (err) {
-        if (!guardWarnedOnce) {
-          guardWarnedOnce = true;
-          console.error(
-            '[leo guard] infra failure spawning bash-guard.py, allowing command:',
-            err && err.message ? err.message : err,
-          );
-        }
+        guardBreadcrumb(err);
         return; // infra fail-open
+      } finally {
+        clearTimeout(timer);
       }
 
       if (exitCode === 2) {

@@ -99,7 +99,7 @@ def _slurp(path):
 
 def _breadcrumbs():
     out = {}
-    for name in ("session-start.log", "hermes-policy.log"):
+    for name in ("session-start.log", "hermes-policy.log", "opencode-guard.log"):
         path = os.path.join(_local_root(), name)
         if not os.path.exists(path):
             continue

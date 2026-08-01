@@ -11,6 +11,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -153,6 +154,28 @@ class TestOpenCodeSessionDirectory(unittest.TestCase):
         self.assertIn("opencode-policy-${directoryKey(directory)}.md", text)
 
 
+class TestOpenCodeGuardFailureHandling(unittest.TestCase):
+    """The guard allows what it cannot judge, matching Claude Code and Codex
+    (PreToolUse blocks only on exit 2). Only Cursor fails closed, deliberately,
+    via failClosed. What is not acceptable is being unbounded or silent.
+    """
+
+    def test_guard_spawn_is_bounded(self):
+        text = _read_plugin_js_code()
+        # One for the memory spawn, one for the guard spawn.
+        self.assertEqual(text.count("setTimeout"), 2)
+        self.assertIn("timed out after 10s", text)
+
+    def test_every_unguarded_command_is_recorded(self):
+        text = _read_plugin_js_code()
+        self.assertNotIn("guardWarnedOnce", text)
+        self.assertIn("opencode-guard.log", text)
+
+    def test_doctor_surfaces_the_guard_log(self):
+        with open(os.path.join(PAYLOAD, "scripts", "doctor.py"), encoding="utf-8") as fh:
+            self.assertIn("opencode-guard.log", fh.read())
+
+
 @unittest.skipUnless(shutil.which("node"), "node is required to drive the ESM bridge")
 class TestOpenCodeGuardLive(unittest.TestCase):
     """Static lint cannot tell a threaded directory from an ignored one, so
@@ -189,6 +212,33 @@ class TestOpenCodeGuardLive(unittest.TestCase):
 
     def test_unconditional_tripwire_still_fires(self):
         self.assertEqual(self._run_guard(REPO, "rm -rf ~"), "BLOCK")
+
+    def test_unrunnable_guard_allows_and_leaves_a_breadcrumb(self):
+        """With python3 off PATH the guard cannot run. The command proceeds —
+        that is the same posture as Claude Code — but it must not do so
+        silently, which is what the old one-shot warning latch caused.
+        """
+        with tempfile.TemporaryDirectory() as local:
+            # node by absolute path, so an empty PATH strands only the
+            # plugin's own `spawn('python3')` lookup.
+            env = dict(os.environ, PATH="/nonexistent", LEOS_AGENT_LOCAL_PATH=local)
+            result = subprocess.run(
+                [
+                    shutil.which("node"), "--input-type=module", "-e",
+                    "const p=(await import(process.argv[1])).default;"
+                    "const h=await p({directory:process.argv[2]});"
+                    "try{await h['tool.execute.before']("
+                    "{tool:'bash',sessionID:'s',callID:'c'},"
+                    "{args:{command:'rm -rf ~'}});console.log('ALLOW')}"
+                    "catch{console.log('BLOCK')}",
+                    PLUGIN_JS, REPO,
+                ],
+                capture_output=True, text=True, timeout=60, env=env,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "ALLOW")
+            with open(os.path.join(local, "opencode-guard.log"), encoding="utf-8") as fh:
+                self.assertIn("guard did not run", fh.read())
 
 
 class TestOpenCodePackageJson(unittest.TestCase):
