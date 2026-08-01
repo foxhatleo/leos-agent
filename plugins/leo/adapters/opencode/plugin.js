@@ -68,7 +68,42 @@ async function assemblePolicy() {
   // hooks/session-start.py:97 uses.
   combined = combined.split('${CLAUDE_PLUGIN_ROOT}').join(ROOT);
 
-  return LEO_POLICY_MARKER + '\n' + combined + '</leo-policy>';
+  let policy = LEO_POLICY_MARKER + '\n' + combined + '</leo-policy>';
+
+  // Memory rides in its own envelope after the policy. Spawned rather than
+  // reimplemented in JS: memory.py already owns the store, the projection and
+  // the marker engine, and a fourth copy of that renderer would drift.
+  const memory = await memoryBlock();
+  if (memory) {
+    policy += '\n\n<leo-memory>\n' + memory + '\n</leo-memory>';
+  }
+  return policy;
+}
+
+// Hard-kills after 4s: OpenCode session start must not hang on a memory store
+// living on a slow or unreachable filesystem. Any failure yields '' and the
+// session proceeds with policy only.
+function memoryBlock() {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (value) => { if (!done) { done = true; resolve(value); } };
+    try {
+      const child = spawn('python3', [path.join(ROOT, 'scripts', 'memory.py'), 'session'], {
+        cwd: process.cwd(),
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} finish(''); }, 4000);
+      let out = '';
+      child.stdout.on('data', (chunk) => { out += chunk.toString(); });
+      child.on('error', () => { clearTimeout(timer); finish(''); });
+      child.on('close', (code) => {
+        clearTimeout(timer);
+        finish(code === 0 ? out.trim() : '');
+      });
+    } catch {
+      finish('');
+    }
+  });
 }
 
 async function writePolicyFile(policy) {

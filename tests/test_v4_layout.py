@@ -27,6 +27,9 @@ class TestV4Layout(unittest.TestCase):
             "config/models.json",
             "hooks/hooks.json",
             "skills/using-leo/SKILL.md",
+            "scripts/state.py",
+            "scripts/memory.py",
+            "scripts/doctor.py",
         ):
             with self.subTest(path=relative):
                 self.assertTrue(os.path.isfile(os.path.join(PLUGIN, relative)))

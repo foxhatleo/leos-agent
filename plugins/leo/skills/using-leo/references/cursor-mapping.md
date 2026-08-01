@@ -10,6 +10,10 @@
 
 Cursor plugin agents use `model: inherit`. Select the mapped model in Cursor before starting a homogeneous tier batch; the plugin does not claim to enforce arbitrary per-agent model names.
 
+Visual evidence here: Browser Preview against a running dev server, else a Playwright server if one is registered. When no rung answers, leo:visual-verification requires the unverified-change warning in place of a done report.
+
+Memory projection here writes to a generated rules file in the per-user Cursor rules directory. Only global-scope facts are projected — every per-user surface loads in every repository, so repo-scoped facts would leak across projects; they reach the model through the session context block instead. Leo's block is delimited by its own markers and the rest of the file is left untouched.
+
 Tier collapse here: Opus≡Sonnet (`Grok 4.5`) — routing between collapsed rungs buys role, not power.
 
 ## Leo skills not available here

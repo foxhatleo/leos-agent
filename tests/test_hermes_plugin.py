@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import os
+import tempfile
 import unittest
 
 
@@ -37,9 +38,24 @@ class FakeContext:
 class TestHermesPlugin(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        # The fail-open cases deliberately drive _breadcrumb, which resolves
+        # its path from the environment at call time. Without this redirect the
+        # suite appends to the developer's own ~/.leos-agent-local/ on every
+        # run, which is how that log filled up with untimestamped test noise.
+        cls._sandbox = tempfile.TemporaryDirectory(prefix="leo-hermes-")
+        cls._saved_local = os.environ.get("LEOS_AGENT_LOCAL_PATH")
+        os.environ["LEOS_AGENT_LOCAL_PATH"] = cls._sandbox.name
         cls.plugin = _load_plugin()
         cls.ctx = FakeContext()
         cls.plugin.register(cls.ctx)
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls._saved_local is None:
+            os.environ.pop("LEOS_AGENT_LOCAL_PATH", None)
+        else:
+            os.environ["LEOS_AGENT_LOCAL_PATH"] = cls._saved_local
+        cls._sandbox.cleanup()
 
     def test_registers_every_portable_skill_and_required_hooks(self):
         skill_root = os.path.join(REPO, "plugins", "leo", "skills")

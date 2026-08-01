@@ -188,6 +188,37 @@ def _skill_notes(config, harness):
     return "\n".join(lines) + "\n"
 
 
+def _capability_notes(config, harness):
+    """Per-harness visual-evidence rungs and memory projection target.
+
+    Both are things leo:visual-verification and leo:memory would otherwise have
+    to guess at from inside a session. Written as prose rather than a literal
+    plugin-root token: tests/test_harness_mappings.py fails the build if the
+    Claude placeholder leaks into another harness's mapping.
+    """
+    visual = config.get("visual", {}).get(harness)
+    target = config.get("memoryTarget", {}).get(harness)
+    if not visual and not target:
+        return ""
+    out = []
+    if visual:
+        out.append(
+            f"\nVisual evidence here: {visual}. When no rung answers, "
+            "leo:visual-verification requires the unverified-change warning in "
+            "place of a done report.\n"
+        )
+    if target:
+        out.append(
+            f"\nMemory projection here writes to {target}. Only global-scope "
+            "facts are projected — every per-user surface loads in every "
+            "repository, so repo-scoped facts would leak across projects; they "
+            "reach the model through the session context block instead. Leo's "
+            "block is delimited by its own markers and the rest of the file is "
+            "left untouched.\n"
+        )
+    return "".join(out)
+
+
 def _mapping_docs(config):
     claude_rows = config["harnesses"]["claude"]
     codex = config["harnesses"]["codex"]
@@ -201,6 +232,7 @@ def _mapping_docs(config):
         + "# Claude Code mapping\n\n"
         + _table(claude_rows)
         + "\n\nSpawn the named native agent; its generated frontmatter selects the configured model.\n"
+        + _capability_notes(config, "claude")
         + _collapse_note(claude_rows)
         + _skill_notes(config, "claude"),
         "codex": GENERATED
@@ -213,6 +245,7 @@ def _mapping_docs(config):
         "(planner, investigator, reviewer, explore) are pasted prompts, so nothing stops a "
         "subagent that ignores them from editing. Treat their read-only contract as a "
         "convention, and never route work here that depends on it being a guarantee.\n"
+        + _capability_notes(config, "codex")
         + _collapse_note(codex)
         + _skill_notes(config, "codex"),
         "cursor": GENERATED
@@ -221,6 +254,7 @@ def _mapping_docs(config):
         + "\n\nCursor plugin agents use `model: inherit`. Select the mapped model in Cursor before "
         "starting a homogeneous tier batch; the plugin does not claim to enforce arbitrary "
         "per-agent model names.\n"
+        + _capability_notes(config, "cursor")
         + _collapse_note(cursor)
         + _skill_notes(config, "cursor"),
         "hermes": GENERATED
@@ -235,6 +269,7 @@ def _mapping_docs(config):
         "an ordinary skill instead — read it at the start of a session to load the policy. "
         "Read-only is prompt-enforced only: the judge roles are pasted prompts, so their "
         "read-only contract is a convention here, not a guarantee.\n"
+        + _capability_notes(config, "hermes")
         + _collapse_note(hermes_rows)
         + _skill_notes(config, "hermes"),
         "opencode": GENERATED
@@ -261,6 +296,7 @@ def _mapping_docs(config):
         "(`get` / `merge` / `path`), same contract as every other harness. There is no Workflow tool "
         "and no `cost-tiered-fix.js` here — a batch of independent tasks is fanned out as manual "
         "parallel task-tool subagent spawns instead.\n"
+        + _capability_notes(config, "opencode")
         + _collapse_note(opencode_rows)
         + _skill_notes(config, "opencode"),
     }

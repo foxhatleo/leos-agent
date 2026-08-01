@@ -62,12 +62,13 @@ ALLOWED_SKILL_FRONTMATTER_KEYS = {
 EXECUTOR_TOOL_SET = {"Read", "Grep", "Glob", "Bash", "Write", "Edit"}
 
 # Skill dirs under plugins/leo/skills/ — portable to every harness: the
-# policy skill itself plus the 9 process skills it indexes.
+# policy skill itself plus the 14 process skills it indexes.
 EXPECTED_SKILL_DIRS = {
     "using-leo",
     "debugging", "verification", "test-first", "writing-plans",
     "executing-plans", "brainstorming", "worktrees", "finishing-a-branch",
-    "delegation",
+    "delegation", "memory", "freshness", "visual-verification", "doctor",
+    "writing-skills",
 }
 
 # Skill dirs under plugins/leo/skills-claude/ — the user-facing workflow
@@ -78,7 +79,8 @@ EXPECTED_CLAUDE_SKILL_DIRS = {"attach-pr", "review-pr", "resolve-ticket", "watch
 PROCESS_SKILLS = {
     "debugging", "verification", "test-first", "writing-plans",
     "executing-plans", "brainstorming", "worktrees", "finishing-a-branch",
-    "delegation",
+    "delegation", "memory", "freshness", "visual-verification", "doctor",
+    "writing-skills",
 }
 
 # Per-skill token pins: substrings each skill's body must contain, so the
@@ -93,6 +95,11 @@ PER_SKILL_TOKENS = {
     "worktrees": {"provenance", "never remove a worktree from inside", "check-ignore"},
     "finishing-a-branch": {"typed confirmation", "review verdict"},
     "delegation": {"needs-context", "blocked", "concerns", "cost-tiered-fix.js", "disjoint"},
+    "memory": {"fact per file", "Exemptions", "durable", "forget", "Secrets"},
+    "freshness": {"Exemptions", "lockfile", "installed", "Recall is not a source"},
+    "visual-verification": {"UNVERIFIED UI CHANGE", "ladder", "Playwright", "Probed:"},
+    "doctor": {"verdict", "harness", "not loaded", "context"},
+    "writing-skills": {"when_to_use", "closed", "~/.claude/skills"},
 }
 
 # The four-state return contract only works if BOTH ends declare it: the

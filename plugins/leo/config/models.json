@@ -16,6 +16,20 @@
       "watch-review": "pinned Claude model, and it drives review-pr through Claude Code's own skill-invocation tool"
     }
   },
+  "visual": {
+    "claude": "the Browser pane (start or attach a preview, then take a screenshot), an attached Chrome, or the iOS Simulator control tool; some arrive only after a tool search, so an empty tool list is not proof of absence",
+    "codex": "the bundled browser plugin, else computer-use, else Playwright driven from the shell",
+    "cursor": "Browser Preview against a running dev server, else a Playwright server if one is registered",
+    "hermes": "no built-in renderer; Playwright driven from the shell is the only rung, and only when the project already depends on it",
+    "opencode": "no built-in renderer; a registered Playwright server or the Playwright CLI"
+  },
+  "memoryTarget": {
+    "claude": "the per-user `CLAUDE.md` in the Claude config directory",
+    "codex": "the per-user `AGENTS.md` in the Codex home directory",
+    "cursor": "a generated rules file in the per-user Cursor rules directory",
+    "hermes": "nothing — this harness exposes no per-user memory file",
+    "opencode": "the per-user `AGENTS.md` in the OpenCode config directory"
+  },
   "roles": {
     "expert": "fable",
     "planner": "opus",

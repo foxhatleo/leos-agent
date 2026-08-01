@@ -9,3 +9,7 @@
 | Haiku | `haiku` | native default |
 
 Spawn the named native agent; its generated frontmatter selects the configured model.
+
+Visual evidence here: the Browser pane (start or attach a preview, then take a screenshot), an attached Chrome, or the iOS Simulator control tool; some arrive only after a tool search, so an empty tool list is not proof of absence. When no rung answers, leo:visual-verification requires the unverified-change warning in place of a done report.
+
+Memory projection here writes to the per-user `CLAUDE.md` in the Claude config directory. Only global-scope facts are projected — every per-user surface loads in every repository, so repo-scoped facts would leak across projects; they reach the model through the session context block instead. Leo's block is delimited by its own markers and the rest of the file is left untouched.

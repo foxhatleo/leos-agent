@@ -161,6 +161,7 @@ Group delegated work into homogeneous Kimi or GLM batches and change this native
 - `using-leo`: the session policy for model routing, delegation, and execute-then-review.
 - Seven roles: expert, planner, investigator, reviewer, implementer, executor, and explore.
 - Process skills: `brainstorming`, `writing-plans`, `executing-plans`, `debugging`, `test-first`, `verification`, `delegation`, `worktrees`, and `finishing-a-branch`.
+- Evidence and upkeep skills, portable to every harness: `freshness` (confirm a third-party API against the installed package before coding against it), `visual-verification` (a change someone can see needs a render, or an explicit unverified warning), `memory` (durable cross-harness facts), `doctor` (report how the plugin is wired here), and `writing-skills` (author a skill in this shape, and where a personal one goes per harness).
 - Operational skills: `attach-pr`, `resolve-ticket`, `review-pr`, and `watch-review` — Claude Code only. They depend on Claude-only tools and path placeholders, so they ship from a separate `skills-claude/` root that the Cursor, Codex, Hermes, and OpenCode manifests do not read. Each harness's mapping appendix names what it is missing and why.
 - Session bootstrap hooks for Claude Code, Codex, and Cursor, plus native policy injection for Hermes and OpenCode.
 - A shared bash guard that blocks a narrow class of accidental home/system-scale destructive commands.
@@ -180,6 +181,20 @@ ${LEOS_AGENT_LOCAL_PATH:-$HOME/.leos-agent-local}/<skill-or-agent-name>.json
 ```
 
 `~/.leos-agent-local` is a dedicated data directory, not an installation clone, so there's no nested `local/` segment inside it. State is separated by repository or project, remains outside plugin caches, and survives plugin upgrades. `LEOS_AGENT_LOCAL_PATH` can redirect it.
+
+## Memory
+
+Durable facts are separate from that per-task JSON. They live one fact per markdown file under:
+
+```text
+${LEOS_AGENT_LOCAL_PATH:-$HOME/.leos-agent-local}/memory/
+```
+
+with a `global/` scope and a `repo/<slug>/` scope, plus a generated index. That store is the only writable copy; read and write it through `python3 <plugin-root>/scripts/memory.py` (`write` / `list` / `read` / `forget`).
+
+Each harness's own per-user memory surface then receives a generated copy of the **global** facts — `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.config/opencode/AGENTS.md`, and a Cursor rules file — so a preference learned on one harness is present on the next. Repo-scoped facts are deliberately never projected: every one of those surfaces loads in every repository, so projecting them would leak one project's memories into unrelated sessions. Repo facts reach the model through the session-start context block, which knows the working directory.
+
+Projection only ever rewrites the text between its own `<!-- BEGIN leos-agent memory -->` and `<!-- END leos-agent memory -->` markers; everything outside them is preserved byte for byte, and the file is copied once to `<file>.leo-backup` before the first write. A directory that does not already exist is never created, so a harness you have not installed is left alone. Set `LEOS_AGENT_NO_PROJECT=1` to disable writing to native surfaces entirely. Repository-tracked `CLAUDE.md` and `AGENTS.md` files are never touched, so memories never land in git.
 
 **Upgrading to 6.0.0.** Before 6.0.0 this was `LEOS_AGENT_PATH`, and state lived one level deeper, under a nested `local/`. The old variable is no longer read: if it is still set it is ignored silently rather than erroring, so state at the old location becomes invisible instead of failing loudly. That is deliberate — a hard error here would break every session, including the hooks on the failure path — but it means the move is manual. Copy any `*.json` from the old `<old-path>/local/` into `${LEOS_AGENT_LOCAL_PATH:-$HOME/.leos-agent-local}/`, and rename the variable wherever you set it.
 
@@ -221,7 +236,7 @@ curl -fsSL https://raw.githubusercontent.com/openai/codex/main/codex-rs/skills/s
 python3 /tmp/validate_plugin.py plugins/leo
 ```
 
-Version `6.1.1` is aligned across the three plugin manifests, the Hermes manifest, and `plugins/leo/package.json`. A future `vX.Y.Z` tag triggers the release workflow, which verifies version alignment, runs the suite, builds the generic and Hermes archives, publishes a GitHub release, and publishes `plugins/leo` to npm as `leos-agent` (Trusted Publishing / OIDC — no stored token). Creating or pushing the tag remains a deliberate maintainer action.
+Version `6.2.0` is aligned across the three plugin manifests, the Hermes manifest, and `plugins/leo/package.json`. A future `vX.Y.Z` tag triggers the release workflow, which verifies version alignment, runs the suite, builds the generic and Hermes archives, publishes a GitHub release, and publishes `plugins/leo` to npm as `leos-agent` (Trusted Publishing / OIDC — no stored token). Creating or pushing the tag remains a deliberate maintainer action.
 
 For local harness testing, point each harness's development-plugin facility at `plugins/leo/`; test Hermes from the repository root because its entrypoint wraps the nested payload. For OpenCode, point the `plugin` array at the working tree instead of the npm package name:
 

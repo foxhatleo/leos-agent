@@ -66,6 +66,8 @@ For a non-trivial task where I haven't used a trigger phrase, propose orchestrat
 
 Any skill or agent that needs to persist information writes JSON to `$LEOS_AGENT_LOCAL_PATH/<skill-or-agent-name>.json` — `LEOS_AGENT_LOCAL_PATH` is an optional override, unset it defaults to `~/.leos-agent-local` (in bash: `${LEOS_AGENT_LOCAL_PATH:-$HOME/.leos-agent-local}`). Top-level keys are `owner/repo` (or the absolute project path when there's no GitHub repo): **data always stays separate per repo/project**. Read and write through `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/state.py"` (`get` / `merge` / `path`) instead of hand-rolling read-modify-write — the code ships with the plugin, the data stays under `${LEOS_AGENT_LOCAL_PATH:-$HOME/.leos-agent-local}/`, gitignored, per-machine, never synced, and survives plugin updates. Examples: `review-watcher.json` (PR numbers already auto-reviewed), `resolve-ticket.json` (ticket-prefix → tracker mappings).
 
+Durable facts are a different thing and do not belong in those JSON files: a preference, a repo rule the code never states, a settled decision goes to the memory store at `$LEOS_AGENT_LOCAL_PATH/memory/`, one fact per file, through `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/memory.py"` and leo:memory. That store is canonical and each harness's own memory surface receives a generated copy of the global facts, so a preference learned on one harness is in front of me on the next. Its index is appended below when the store is not empty.
+
 ## Cost discipline
 
 Spend expensive tokens on planning, verification, and synthesis (low volume, high leverage); spend cheap tokens on execution volume. When dispatching delegated work, pin the tier per task — the `executor` role runs at the Haiku tier for mechanical and boilerplate work and at the Sonnet tier at low effort for ordinary implementation, judges/verifiers at the Opus tier. The Fable tier is the most expensive per call and cheap as a policy only because it fires rarely and only on verdicts — batch fan-outs never auto-use it (that is exactly where a Fable jump silently multiplies cost).
@@ -81,9 +83,14 @@ Reach for the matching skill at the decision point — each one encodes the mech
 | Turning a chosen approach into a plan | leo:writing-plans |
 | Carrying out a written plan | leo:executing-plans |
 | Adding or changing runtime behavior | leo:test-first |
+| Coding against a third-party API | leo:freshness |
 | Before claiming anything done / fixed / passing | leo:verification |
+| A UI-visible change, before done | leo:visual-verification |
 | Dispatching subagents or a fan-out | leo:delegation |
 | Isolating branch work | leo:worktrees |
 | Landing or cleaning up a finished branch | leo:finishing-a-branch |
+| A durable fact surfaces, or one turns out wrong | leo:memory |
+| Policy or harness wiring in doubt | leo:doctor |
+| Authoring or editing a skill | leo:writing-skills |
 
 Three operational skills — `leo:resolve-ticket`, `leo:review-pr`, `leo:watch-review` — are Claude Code only and are deliberately absent from the table above; they are invoked by name, and on any other harness they are not registered at all (the harness mapping appended below says so explicitly).

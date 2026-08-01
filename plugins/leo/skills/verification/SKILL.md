@@ -58,6 +58,8 @@ exit gets read as success because the output scrolled by fast.
 | Build is green | the build command, run now, read for errors/warnings |
 | Bug is fixed | the reproducer that showed the bug — now green, run fresh |
 | Agent reports done | its diff and output, inspected directly — its "success" is a claim, not evidence |
+| This library call is correct | the installed package or current docs, read this session — see leo:freshness |
+| A UI change looks right | a render produced after the edit, looked at — see leo:visual-verification |
 
 ## Subagent reports are claims, not evidence
 
@@ -100,3 +102,8 @@ it as such.
   soften or summarize away.
 - End-to-end exercise — when the falsifying command is "does the real flow
   work," drive the actual app or flow, not just the test suite.
+- leo:freshness — this gate proves the code you wrote runs; that one governs
+  whether the third-party API you wrote it against actually exists. A green
+  test against a mocked dependency clears this skill and not that one.
+- leo:visual-verification — for a change someone sees, the falsifying artifact
+  is a render, not an exit status. That skill owns what the render must show.

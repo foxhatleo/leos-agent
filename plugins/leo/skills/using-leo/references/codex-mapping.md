@@ -12,6 +12,10 @@ Spawn a generic subagent with the canonical `roles/<role>.md` prompt and pass bo
 
 Read-only is prompt-enforced here, not harness-enforced: the judge roles (planner, investigator, reviewer, explore) are pasted prompts, so nothing stops a subagent that ignores them from editing. Treat their read-only contract as a convention, and never route work here that depends on it being a guarantee.
 
+Visual evidence here: the bundled browser plugin, else computer-use, else Playwright driven from the shell. When no rung answers, leo:visual-verification requires the unverified-change warning in place of a done report.
+
+Memory projection here writes to the per-user `AGENTS.md` in the Codex home directory. Only global-scope facts are projected — every per-user surface loads in every repository, so repo-scoped facts would leak across projects; they reach the model through the session context block instead. Leo's block is delimited by its own markers and the rest of the file is left untouched.
+
 Tier collapse here: Fable≡Opus (`gpt-5.6-sol`) — routing between collapsed rungs buys role, not power. Fable is not a real rung: `expert` cannot break a deadlock a collapsed Opus already lost, so cap escalation at Opus and report.
 
 ## Leo skills not available here

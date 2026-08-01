@@ -14,6 +14,10 @@ Hermes native `delegate_task` has one configured delegation model. Group work in
 
 This policy is NOT injected automatically here. Hermes accepts a `pre_llm_call` hook but its runtime never invokes one, so the plugin registers `leo:using-leo` as an ordinary skill instead — read it at the start of a session to load the policy. Read-only is prompt-enforced only: the judge roles are pasted prompts, so their read-only contract is a convention here, not a guarantee.
 
+Visual evidence here: no built-in renderer; Playwright driven from the shell is the only rung, and only when the project already depends on it. When no rung answers, leo:visual-verification requires the unverified-change warning in place of a done report.
+
+Memory projection here writes to nothing — this harness exposes no per-user memory file. Only global-scope facts are projected — every per-user surface loads in every repository, so repo-scoped facts would leak across projects; they reach the model through the session context block instead. Leo's block is delimited by its own markers and the rest of the file is left untouched.
+
 Tier collapse here: Fable≡Opus (`moonshotai/kimi-k3`), Sonnet≡Haiku (`z-ai/glm-5.2`) — routing between collapsed rungs buys role, not power. Fable is not a real rung: `expert` cannot break a deadlock a collapsed Opus already lost, so cap escalation at Opus and report.
 
 ## Leo skills not available here

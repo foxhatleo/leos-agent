@@ -51,18 +51,23 @@ DENYLIST = [
     "red flags",
 ]
 
-# The nine process skills from using-leo's Skill index, plus the
+# The fourteen process skills from using-leo's Skill index, plus the
 # using-leo policy skill itself.
 PROCESS_SKILLS = [
     "brainstorming",
     "debugging",
     "delegation",
+    "doctor",
     "executing-plans",
     "finishing-a-branch",
+    "freshness",
+    "memory",
     "test-first",
     "verification",
+    "visual-verification",
     "worktrees",
     "writing-plans",
+    "writing-skills",
 ]
 SHINGLE_SKILLS = PROCESS_SKILLS + ["using-leo"]
 

@@ -31,6 +31,13 @@ REQUIRED_SUBSTRINGS = {
     "opencode": ("openrouter", "moonshotai/kimi-k3", "z-ai/glm-5.2", "permission.edit: deny"),
 }
 
+# Every mapping must state which visual-evidence rungs exist and where memory
+# projects, or a session has to guess at both. Pinned per harness so a config
+# entry going missing fails the build instead of rendering an empty paragraph.
+CAPABILITY_SUBSTRINGS = ("Visual evidence here", "Memory projection here")
+# The two harnesses whose only rung is a shell-driven driver must say so.
+PLAYWRIGHT_HARNESSES = ("hermes", "opencode")
+
 # Claude-only tokens that must never leak into the other harnesses.
 LEAKED_TOKENS = ("opus[1m]", "sonnet[1m]", "CLAUDE_PLUGIN_ROOT")
 # [1m] is /model syntax, not an agent-frontmatter model shape, so it must
@@ -58,6 +65,28 @@ def _skill_dirs():
             if os.path.isfile(os.path.join(skill_root, d, "SKILL.md"))
         }
     return found
+
+
+
+class TestCapabilityNotes(unittest.TestCase):
+    def test_every_mapping_states_visual_and_memory_capability(self):
+        for harness in HARNESSES:
+            text = _read(harness)
+            for substring in CAPABILITY_SUBSTRINGS:
+                with self.subTest(harness=harness, substring=substring):
+                    self.assertIn(substring, text)
+
+    def test_shell_only_harnesses_name_the_driver(self):
+        for harness in PLAYWRIGHT_HARNESSES:
+            with self.subTest(harness=harness):
+                self.assertIn("Playwright", _read(harness))
+
+    def test_repo_scoped_facts_are_documented_as_never_projected(self):
+        """The constraint is easy to 'fix' by someone who does not know why it
+        exists, so every mapping carries the reason, not just the rule."""
+        for harness in HARNESSES:
+            with self.subTest(harness=harness):
+                self.assertIn("Only global-scope", _read(harness))
 
 
 class TestMappingFilesExist(unittest.TestCase):

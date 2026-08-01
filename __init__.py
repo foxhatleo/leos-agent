@@ -9,10 +9,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 PAYLOAD = ROOT / "plugins" / "leo"
 # Self-imposed context budget, not a documented Hermes API cap: it exists so
-# the policy can't grow without someone noticing. 14000 matches the Claude
+# the policy can't grow without someone noticing. 16000 matches the Claude
 # SessionStart budget in tests/test_session_start.py, so both bootstraps are
 # held to one number. Overflow degrades to no injection (see _policy_context).
-POLICY_LIMIT = 14_000
+#
+# Deliberate raise from 14000, the second such raise (12000 -> 14000 -> 16000).
+# The memory index is appended after the policy and is bounded by whatever is
+# left under this ceiling, so the number now covers policy + mapping + memory
+# rather than policy + mapping alone. _render_policy() stays policy-only and
+# keeps its own growth headroom check; _context() is what this limit bounds.
+POLICY_LIMIT = 16_000
 _GUARD = None
 
 
@@ -55,6 +61,44 @@ def _render_policy():
     return context
 
 
+def _memory():
+    """Load scripts/memory.py the same way the guard is loaded, at :73-81."""
+    spec = importlib.util.spec_from_file_location(
+        "leo_memory", str(PAYLOAD / "scripts" / "memory.py")
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _memory_block():
+    """The memory index, or "" on any failure. Never raises."""
+    try:
+        return _memory().session(os.getcwd())
+    except Exception as exc:
+        _breadcrumb(exc)
+        return ""
+
+
+def _context():
+    """Policy plus memory, bounded as a whole.
+
+    _render_policy stays policy-only on purpose: it carries the growth-headroom
+    gate, and folding a store that grows on its own into that measurement would
+    turn a tripwire for policy creep into noise. Memory is appended here and
+    trimmed to whatever room is left, so it can never be the reason the policy
+    stops being injected.
+    """
+    context = _render_policy()
+    block = _memory_block()
+    if not block:
+        return context
+    envelope = f"\n\n<leo-memory>\n{block.rstrip()}\n</leo-memory>"
+    if len(context) + len(envelope) > POLICY_LIMIT:
+        return context
+    return context + envelope
+
+
 def _policy_context():
     """Fail open: a policy that outgrew the budget must not break every turn.
 
@@ -64,7 +108,7 @@ def _policy_context():
     leave a breadcrumb instead.
     """
     try:
-        return _render_policy()
+        return _context()
     except Exception as exc:
         _breadcrumb(exc)
         return None
@@ -138,3 +182,8 @@ def register(ctx):
         ctx.register_skill(skill_md.parent.name, skill_md)
     ctx.register_hook("pre_llm_call", _on_pre_llm_call)
     ctx.register_hook("pre_tool_call", _on_pre_tool_call)
+    # register() is the only Hermes code path that reliably runs at session
+    # start, so the memory refresh hangs off it. Hermes has no memory surface
+    # of its own, but the refresh keeps the store's index current and projects
+    # the global facts to the harnesses that do.
+    _memory_block()

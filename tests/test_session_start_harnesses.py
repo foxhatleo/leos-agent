@@ -19,6 +19,20 @@ SESSION_START_PY = os.path.join(PLUGIN, "hooks", "session-start.py")
 ROOT_ENV_VARS = ("CLAUDE_PLUGIN_ROOT", "CURSOR_PLUGIN_ROOT", "PLUGIN_ROOT")
 
 
+# Same sandbox rationale as tests/test_session_start.py: the hook is a real
+# subprocess, so it must never be pointed at the developer's own HOME.
+_SANDBOX = tempfile.TemporaryDirectory(prefix="leo-session-start-harnesses-")
+
+SANDBOX_ENV = {
+    "HOME": _SANDBOX.name,
+    "LEOS_AGENT_LOCAL_PATH": os.path.join(_SANDBOX.name, "local"),
+    "CLAUDE_CONFIG_DIR": os.path.join(_SANDBOX.name, "claude"),
+    "CODEX_HOME": os.path.join(_SANDBOX.name, "codex"),
+    "XDG_CONFIG_HOME": os.path.join(_SANDBOX.name, "config"),
+    "LEOS_AGENT_NO_PROJECT": "1",
+}
+
+
 def _run(env_overrides):
     env = dict(os.environ)
     for var in ROOT_ENV_VARS:
@@ -26,6 +40,7 @@ def _run(env_overrides):
     # A Codex-launched test run would otherwise leak CODEX_* into every case.
     for var in [k for k in env if k.startswith("CODEX_")]:
         env.pop(var, None)
+    env.update(SANDBOX_ENV)
     env.update(env_overrides)
     return subprocess.run(
         [sys.executable, SESSION_START_PY],

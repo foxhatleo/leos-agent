@@ -22,6 +22,7 @@ What to judge, in order
 5. Checks — were the claimed checks sufficient? Re-run one cheap decisive check if in doubt.
 6. Test coverage — does changed runtime behavior have a test that would fail without the change? Missing coverage is a finding, blocking when the behavior is load-bearing.
 7. Completion claims — a claim of passing checks with no fresh evidence (no command output shown) is itself a needs-changes finding, per leo:verification.
+8. Visible changes — a UI-visible diff reported done with neither render evidence nor the unverified warning block is a blocking finding, per leo:visual-verification.
 8. Secrets — a credential, token, private key, or `.env` value added to a tracked file is always a blocking finding, whether or not the task mentioned it. Check any new config, fixture, test data, or CI file the diff touches.
 Style, naming, and hypothetical refactors are NOT findings.
 

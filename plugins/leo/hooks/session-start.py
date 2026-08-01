@@ -72,6 +72,20 @@ def _breadcrumb(exc):
         pass
 
 
+def _memory_block(root):
+    """Refresh the store, project it, and return the index for this project.
+
+    Imported rather than spawned: this hook has a 10-second budget and a
+    subprocess would spend a chunk of it on interpreter startup alone.
+    """
+    scripts = os.path.join(root, "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import memory
+
+    return memory.session(os.getcwd())
+
+
 def main():
     try:
         root = _root()
@@ -97,6 +111,19 @@ def main():
         body = body.replace("${CLAUDE_PLUGIN_ROOT}", root)
 
         wrapped = "<leo-policy>\n" + body + "\n</leo-policy>"
+
+        # Memory rides in its own envelope, appended after substitution: it is
+        # data, not policy, and keeping the two separable lets each be measured
+        # against the budget on its own. The nested handler is load-bearing —
+        # the outer one drops the entire policy, and a broken memory store must
+        # never cost the session its operating instructions.
+        try:
+            memory_block = _memory_block(root)
+        except Exception as exc:
+            _breadcrumb(exc)
+            memory_block = ""
+        if memory_block:
+            wrapped += "\n\n<leo-memory>\n" + memory_block.rstrip("\n") + "\n</leo-memory>"
 
         if harness == "cursor":
             output = {"additional_context": wrapped}

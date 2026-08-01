@@ -27,9 +27,31 @@ REQUIRED_SUBSTRINGS = (
 # Deliberate raise from 12000: the policy body is now harness-neutral (tier
 # names as role labels, no [1m]/Agent-tool/Workflow-tool specifics) and the
 # injector appends the Claude harness mapping on top of it, so the combined
-# payload (body + mapping) runs larger than the body alone did. 14000 guards
-# against future creep of body+mapping together, not a fresh estimate.
-MAX_ADDITIONAL_CONTEXT_LEN = 14000
+# payload (body + mapping) runs larger than the body alone did.
+#
+# Raised again 14000 -> 16000 when the memory index joined the payload: the
+# injector now appends policy + mapping + a bounded memory block. The memory
+# block sizes itself to the room left under this number, so this guards creep
+# of all three together, not a fresh estimate of any one of them.
+MAX_ADDITIONAL_CONTEXT_LEN = 16000
+
+
+# The hook runs as a real subprocess with a real environment, so anything it
+# writes lands wherever that environment points. Before memory projection that
+# only meant breadcrumbs in the developer's own ~/.leos-agent-local; once the
+# hook projects into per-user memory files, an unsandboxed run would rewrite
+# ~/.claude/CLAUDE.md and ~/.codex/AGENTS.md every time the suite executes.
+# Every subprocess gets a throwaway HOME and an explicit projection kill switch.
+_SANDBOX = tempfile.TemporaryDirectory(prefix="leo-session-start-")
+
+SANDBOX_ENV = {
+    "HOME": _SANDBOX.name,
+    "LEOS_AGENT_LOCAL_PATH": os.path.join(_SANDBOX.name, "local"),
+    "CLAUDE_CONFIG_DIR": os.path.join(_SANDBOX.name, "claude"),
+    "CODEX_HOME": os.path.join(_SANDBOX.name, "codex"),
+    "XDG_CONFIG_HOME": os.path.join(_SANDBOX.name, "config"),
+    "LEOS_AGENT_NO_PROJECT": "1",
+}
 
 
 def _run(plugin_root, extra_env=None):
@@ -37,6 +59,7 @@ def _run(plugin_root, extra_env=None):
     env["CLAUDE_PLUGIN_ROOT"] = plugin_root
     for var in [k for k in env if k.startswith("CODEX_")] + ["PLUGIN_ROOT", "CURSOR_PLUGIN_ROOT"]:
         env.pop(var, None)
+    env.update(SANDBOX_ENV)
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
@@ -112,6 +135,56 @@ class TestSessionStartDegradesGracefully(unittest.TestCase):
         self.assertEqual(result.returncode, 0, f"stderr={result.stderr}")
         payload = json.loads(result.stdout)
         self.assertEqual(payload, {})
+
+
+class TestMemoryEnvelope(unittest.TestCase):
+    """Memory rides in its own envelope so a broken store can never cost the
+    session its policy, and so each can be measured against the budget alone."""
+
+    def _run_with_store(self, facts):
+        sandbox = tempfile.TemporaryDirectory()
+        self.addCleanup(sandbox.cleanup)
+        local = os.path.join(sandbox.name, "local")
+        env = {"LEOS_AGENT_LOCAL_PATH": local, "LEOS_AGENT_NO_PROJECT": "1"}
+        memory_py = os.path.join(PLUGIN, "scripts", "memory.py")
+        for title, body in facts:
+            done = subprocess.run(
+                [sys.executable, memory_py, "write", "global", "preference", title],
+                env={**os.environ, **env}, input=body,
+                capture_output=True, text=True, timeout=30,
+            )
+            self.assertEqual(done.returncode, 0, done.stderr)
+        return _run(PLUGIN, extra_env=env)
+
+    def _context(self, result):
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+
+    def test_empty_store_adds_no_envelope(self):
+        context = self._context(self._run_with_store([]))
+        self.assertIn("<leo-policy>", context)
+        self.assertNotIn("<leo-memory>", context)
+
+    def test_stored_fact_reaches_the_session(self):
+        context = self._context(
+            self._run_with_store([("Squash merge", "Leo squashes, never a merge commit.")])
+        )
+        self.assertIn("<leo-memory>", context)
+        self.assertIn("Squash merge", context)
+        self.assertLess(len(context), MAX_ADDITIONAL_CONTEXT_LEN)
+
+    def test_unreadable_store_still_yields_the_policy(self):
+        sandbox = tempfile.TemporaryDirectory()
+        self.addCleanup(sandbox.cleanup)
+        broken = os.path.join(sandbox.name, "local", "memory", "global")
+        os.makedirs(broken)
+        with open(os.path.join(broken, "junk.md"), "w", encoding="utf-8") as fh:
+            fh.write("not a fact")
+        result = _run(PLUGIN, extra_env={
+            "LEOS_AGENT_LOCAL_PATH": os.path.join(sandbox.name, "local"),
+            "LEOS_AGENT_NO_PROJECT": "1",
+        })
+        self.assertIn("Model routing", self._context(result))
 
 
 if __name__ == "__main__":
