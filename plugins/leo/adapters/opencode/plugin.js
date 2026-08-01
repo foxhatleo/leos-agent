@@ -195,6 +195,12 @@ export default async function leoPlugin(ctx) {
   // hosts more than one project.
   const directory = (ctx && (ctx.directory || ctx.worktree)) || process.cwd();
 
+  // OpenCode runs no session-start hook and exports no plugin-root variable,
+  // so scripts/doctor.py cannot tell this harness apart from a bare shell and
+  // used to inherit the bootstrap's "claude" default. Declare it, and do it
+  // here so the guard and memory subprocesses inherit it too.
+  process.env.LEOS_AGENT_HARNESS = 'opencode';
+
   return {
     async config(config) {
       config.skills ||= {};

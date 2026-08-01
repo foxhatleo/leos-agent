@@ -25,8 +25,15 @@ from a skill that does not exist, right up until the moment you invoke it.
 ## Run the script
 
 ```sh
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/doctor.py"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/doctor.py" --harness <name>
 ```
+
+Pass `--harness` with the harness you are on — the mapping appendix in your
+context names it in its own heading (`# Hermes mapping` → `hermes`). Detection
+without it relies on a plugin-root variable that Hermes and OpenCode do not
+export, so on those two the script reports `unknown` rather than guessing.
+`unknown` on a harness whose mapping you can plainly read is a missing
+argument, not a fault.
 
 `${CLAUDE_PLUGIN_ROOT}` is the Claude Code spelling. Codex exports
 `$PLUGIN_ROOT` and Cursor `$CURSOR_PLUGIN_ROOT`. On Hermes and OpenCode no
@@ -76,7 +83,8 @@ useful, but never conclude "the hook failed this session" from it.
 |---|---|---|
 | Policy absent, bootstrap installed | the hook fired and failed open | read the newest breadcrumb, then confirm it describes this session before believing it |
 | Policy present, mapping names another harness | detection resolved wrong, usually a stray plugin-root variable exported in an unrelated shell | unset it, restart the session |
-| Shipped roster exceeds what you can invoke | the harness cached an older payload, or the skills directory is not registered | update the plugin; on OpenCode add the documented skills-path fallback |
+| Harness reported as `unknown` | no `--harness`, and this harness exports no plugin-root variable | re-run with `--harness <name>` read off your mapping heading |
+| Shipped roster exceeds what you can invoke | the harness cached an older payload, or the skills directory is not registered | update the plugin; on OpenCode check `opencode debug skill` for each skill's `location` |
 | Skills listed without the `leo:` prefix | OpenCode, working as designed | invoke them bare; not a fault |
 | Tier names resolve to models this harness cannot run | mapping and harness disagree | same as row 2 |
 | Machine-local state not writable | the path override points somewhere unwritable | fix or unset it |

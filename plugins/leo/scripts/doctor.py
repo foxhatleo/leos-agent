@@ -12,8 +12,9 @@ verdict about this session. They carry no timestamps and the test suite drives
 the failure paths deliberately, so "the log has errors" proves nothing on its
 own.
 
-  doctor.py           human-readable report
-  doctor.py --json    the same facts as JSON
+  doctor.py                    human-readable report
+  doctor.py --json             the same facts as JSON
+  doctor.py --harness <name>   state the harness instead of detecting it
 
 Exit code is 0 unless the payload itself cannot be found.
 """
@@ -27,15 +28,57 @@ PAYLOAD = os.path.dirname(_HERE)
 TIERS = ("fable", "opus", "sonnet", "haiku")
 
 
-def _detect_harness():
-    """Reuse hooks/session-start.py rather than re-deriving the rules.
+HARNESS_ENV = ("CURSOR_PLUGIN_ROOT", "CURSOR_VERSION", "PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT")
 
-    Its ordering carries two subtleties a second implementation gets wrong:
-    Cursor must be tested first because it sets more than one variable, and the
-    absence of CLAUDE_PLUGIN_ROOT is not a Codex signal. The filename is
-    hyphenated and therefore not importable by name, so it loads by path — the
-    same technique hooks/cursor-guard.py uses.
+
+def _known_harnesses():
+    models = _read_json(os.path.join(PAYLOAD, "config", "models.json")) or {}
+    return set(models.get("harnesses") or ())
+
+
+def _detect_harness(argv=()):
+    """Three signals, most explicit first; never a guess.
+
+    The env-var rules still live in hooks/session-start.py and are reused
+    rather than re-derived, because their ordering carries two subtleties a
+    second implementation gets wrong: Cursor must be tested first because it
+    sets more than one variable, and the absence of CLAUDE_PLUGIN_ROOT is not
+    a Codex signal. The filename is hyphenated and therefore not importable by
+    name, so it loads by path — the same technique hooks/cursor-guard.py uses.
+
+    What is new is that the delegation is *gated*. That function's final branch
+    returns "claude" as a default, which is right for a hook that only ever
+    runs on the three hook harnesses. doctor ships to five. Hermes and OpenCode
+    run no hook and export no plugin-root variable, so doctor inherited the
+    default and reported `claude` on both — printing Claude's tier table and
+    listing four Claude-only skills as available on harnesses that have none of
+    them. Absence of every marker means unknown, and unknown is reported.
     """
+    known = _known_harnesses()
+
+    # 1. Stated outright. leo:doctor tells the agent to pass the harness it can
+    #    read off its own mapping heading. Validated against the config, so a
+    #    typo degrades to detection rather than inventing a harness.
+    argv = list(argv)
+    for index, arg in enumerate(argv):
+        name = None
+        if arg == "--harness" and index + 1 < len(argv):
+            name = argv[index + 1]
+        elif arg.startswith("--harness="):
+            name = arg.split("=", 1)[1]
+        if name and name in known:
+            return name, "--harness"
+
+    # 2. A positive signal the two hookless harnesses set for themselves at
+    #    registration (__init__.py and adapters/opencode/plugin.js).
+    declared = os.environ.get("LEOS_AGENT_HARNESS")
+    if declared and declared in known:
+        return declared, "env (LEOS_AGENT_HARNESS)"
+
+    # 3. The env-var rules, unchanged — but only when a marker actually exists.
+    if not any(os.environ.get(var) for var in HARNESS_ENV):
+        return "unknown", "no signal"
+
     path = os.path.join(PAYLOAD, "hooks", "session-start.py")
     try:
         spec = importlib.util.spec_from_file_location("leo_session_start", path)
@@ -43,15 +86,11 @@ def _detect_harness():
         spec.loader.exec_module(module)
         return module._detect_harness(), "hooks/session-start.py"
     except Exception:
-        # Hermes and OpenCode never run that script and export no plugin-root
-        # variable, so absence of every marker is itself the signal.
         if os.environ.get("CURSOR_PLUGIN_ROOT") or os.environ.get("CURSOR_VERSION"):
             return "cursor", "env"
         if os.environ.get("PLUGIN_ROOT"):
             return "codex", "env"
-        if os.environ.get("CLAUDE_PLUGIN_ROOT"):
-            return "claude", "env"
-        return "unknown", "env"
+        return "claude", "env"
 
 
 def _read_json(path):
@@ -120,8 +159,8 @@ def _skills():
     return shipped
 
 
-def collect():
-    harness, source = _detect_harness()
+def collect(argv=()):
+    harness, source = _detect_harness(argv)
     manifest = _read_json(os.path.join(PAYLOAD, ".claude-plugin", "plugin.json")) or {}
     models = _read_json(os.path.join(PAYLOAD, "config", "models.json")) or {}
     config = (models.get("harnesses") or {}).get(harness) or {}
@@ -233,7 +272,7 @@ def _render(data):
 
 
 def main(argv):
-    data = collect()
+    data = collect(argv)
     if "--json" in argv:
         print(json.dumps(data, indent=1, sort_keys=True))
     else:

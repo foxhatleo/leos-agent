@@ -17,7 +17,7 @@ DOCTOR_PY = os.path.join(PAYLOAD, "scripts", "doctor.py")
 SESSION_START_PY = os.path.join(PAYLOAD, "hooks", "session-start.py")
 
 HARNESS_ENV_VARS = ("CLAUDE_PLUGIN_ROOT", "PLUGIN_ROOT", "CURSOR_PLUGIN_ROOT",
-                    "CURSOR_VERSION")
+                    "CURSOR_VERSION", "LEOS_AGENT_HARNESS")
 
 
 def _load(path, name):
@@ -108,6 +108,69 @@ class TestHarnessDetection(DoctorCase):
                 os.environ.update(overrides)
                 self.assertEqual(session_start._detect_harness(), expected)
                 self.assertEqual(doctor._detect_harness()[0], expected)
+
+    def test_no_signal_reports_unknown_where_the_bootstrap_defaults_to_claude(self):
+        """The one place the two are meant to disagree.
+
+        session-start's final branch is a default for a hook that only runs on
+        the three hook harnesses. doctor ships to five, so inheriting that
+        default made it report `claude` on Hermes and OpenCode — with Claude's
+        tier table and four Claude-only skills listed as available.
+        """
+        session_start = _load(SESSION_START_PY, "leo_session_start_nosig")
+        doctor = _load(DOCTOR_PY, "leo_doctor_nosig")
+        self.assertEqual(session_start._detect_harness(), "claude")
+        harness, source = doctor._detect_harness()
+        self.assertEqual(harness, "unknown")
+        self.assertEqual(source, "no signal")
+
+    def test_harness_argument_wins_over_detection(self):
+        doctor = _load(DOCTOR_PY, "leo_doctor_arg")
+        os.environ["CLAUDE_PLUGIN_ROOT"] = PAYLOAD
+        for argv in (["--harness", "opencode"], ["--harness=opencode"]):
+            with self.subTest(argv=argv):
+                self.assertEqual(doctor._detect_harness(argv), ("opencode", "--harness"))
+
+    def test_unknown_harness_argument_falls_back_rather_than_inventing(self):
+        doctor = _load(DOCTOR_PY, "leo_doctor_bogus")
+        os.environ["CLAUDE_PLUGIN_ROOT"] = PAYLOAD
+        self.assertEqual(doctor._detect_harness(["--harness", "bogus"])[0], "claude")
+
+    def test_hookless_harnesses_declare_themselves(self):
+        doctor = _load(DOCTOR_PY, "leo_doctor_env")
+        os.environ["LEOS_AGENT_HARNESS"] = "opencode"
+        harness, source = doctor._detect_harness()
+        self.assertEqual(harness, "opencode")
+        self.assertIn("LEOS_AGENT_HARNESS", source)
+
+    def test_registration_sites_export_the_declaration(self):
+        """The env var is only useful if the two hookless harnesses set it."""
+        with open(os.path.join(REPO, "__init__.py"), encoding="utf-8") as fh:
+            self.assertIn('os.environ["LEOS_AGENT_HARNESS"] = "hermes"', fh.read())
+        plugin_js = os.path.join(PAYLOAD, "adapters", "opencode", "plugin.js")
+        with open(plugin_js, encoding="utf-8") as fh:
+            self.assertIn("process.env.LEOS_AGENT_HARNESS = 'opencode'", fh.read())
+
+
+class TestHookessHarnessReport(DoctorCase):
+    """What the report actually says once the harness is known."""
+
+    def test_opencode_gets_its_own_tiers_and_no_claude_only_skills(self):
+        done = self.run_cli("--json", "--harness", "opencode")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        data = json.loads(done.stdout)
+        self.assertEqual(data["harness"]["value"], "opencode")
+        self.assertEqual(data["tiers"]["opus"]["model"], "moonshotai/kimi-k3")
+        self.assertNotIn("review-pr", data["skills"]["expected_here"])
+        self.assertIn("review-pr", data["skills"]["excluded_here"])
+
+    def test_unknown_harness_claims_no_tier_table(self):
+        done = self.run_cli("--json")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        data = json.loads(done.stdout)
+        self.assertEqual(data["harness"]["value"], "unknown")
+        self.assertIsNone(data["tiers"]["opus"]["model"])
+        self.assertNotIn("review-pr", data["skills"]["expected_here"])
 
 
 class TestDegradation(DoctorCase):

@@ -168,6 +168,10 @@ def _excluded_skills(harness="hermes"):
 
 
 def register(ctx):
+    # Hermes runs no session-start hook and exports no plugin-root variable, so
+    # scripts/doctor.py has no way to tell this harness apart from a bare shell
+    # and used to inherit the bootstrap's "claude" default. Declare it.
+    os.environ["LEOS_AGENT_HARNESS"] = "hermes"
     # Hermes accepts pre_llm_call in register_hook() and lists it in VALID_HOOKS,
     # but its runtime never calls invoke_hook() with it (upstream issue #2817,
     # closed as not planned). So _on_pre_llm_call below has never run, and the
