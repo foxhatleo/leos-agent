@@ -1,8 +1,8 @@
-# Leo
+# Leo's Agent
 
-Leo is a portable agent operating policy for Claude Code, Codex, Cursor, Hermes, and OpenCode. It packages cost-tiered model routing, seven specialist roles, process skills, execute-then-review discipline, and a narrow catastrophic-command guard as native plugins.
+Leo's Agent is a portable agent operating policy for Claude Code, Codex, Cursor, Hermes, and OpenCode. It packages cost-tiered model routing, seven specialist roles, process skills, execute-then-review discipline, and a narrow catastrophic-command guard as native plugins.
 
-The repository does not need to be cloned for normal use. Each harness installs Leo through its own plugin system, and updates come through that system.
+The repository does not need to be cloned for normal use. Each harness installs Leo's Agent through its own plugin system, and updates come through that system.
 
 ## Install
 
@@ -21,7 +21,7 @@ claude plugin update leo@leos-agent
 claude plugin uninstall leo@leos-agent
 ```
 
-Start a new session after installing or updating. Claude loads Leo's native agents, skills, settings, and hooks from the cached plugin.
+Start a new session after installing or updating. Claude loads the plugin's native agents, skills, settings, and hooks from the cache.
 
 Verify the installed version and component inventory with `claude plugin list` and `claude plugin details leo@leos-agent`.
 
@@ -40,13 +40,13 @@ codex plugin add leo@leos-agent
 codex plugin remove leo@leos-agent
 ```
 
-Start a new task after installing or updating. Codex loads the skills and hooks from the plugin; Leo dispatches generic subagents with an explicit role prompt, model, and reasoning effort instead of installing global agent TOMLs.
+Start a new task after installing or updating. Codex loads the skills and hooks from the plugin; Leo's Agent dispatches generic subagents with an explicit role prompt, model, and reasoning effort instead of installing global agent TOMLs.
 
 Verify that `leo@leos-agent` is installed with `codex plugin list`.
 
 ### Cursor
 
-Once Leo is listed in Cursor's public marketplace:
+Once Leo's Agent is listed in Cursor's public marketplace:
 
 ```text
 /add-plugin leo
@@ -58,7 +58,7 @@ Before marketplace approval, install it directly from this public repository:
 /add-plugin leo@https://github.com/foxhatleo/leos-agent
 ```
 
-Use Cursor's Customize → Plugins screen to verify, update, disable, or remove it. Cursor agents inherit the model selected in the UI; Leo recommends a tier but does not claim to enforce an arbitrary model name per subagent.
+Use Cursor's Customize → Plugins screen to verify, update, disable, or remove it. Cursor agents inherit the model selected in the UI; Leo's Agent recommends a tier but does not claim to enforce an arbitrary model name per subagent.
 
 ### Hermes
 
@@ -76,7 +76,7 @@ hermes plugins disable leo
 hermes plugins remove leo
 ```
 
-Hermes installs the Git repository into its plugin directory and loads the root `plugin.yaml` and `__init__.py` entrypoint. Leo registers its skills as `leo:<skill>` and injects the routing policy before model calls.
+Hermes installs the Git repository into its plugin directory and loads the root `plugin.yaml` and `__init__.py` entrypoint. Leo's Agent registers its skills as `leo:<skill>` and injects the routing policy before model calls.
 
 Verify the enabled state with `hermes plugins list`; inside a running session, `/plugins` shows the loaded plugin.
 
@@ -94,7 +94,9 @@ Add it to `~/.config/opencode/opencode.json`:
 { "$schema": "https://opencode.ai/config.json", "plugin": ["leos-agent"] }
 ```
 
-Start a new OpenCode session after adding it. On startup the plugin registers the leo:* skills directory, the six generated subagent roles, and the using-leo policy (injected through `config.instructions` and, as a fallback, the chat system-prompt transform), and installs the bash deletion tripwire.
+Start a new OpenCode session after adding it. On startup the plugin registers the skills directory, the six generated subagent roles, and the using-leo policy (injected through `config.instructions` and, as a fallback, the chat system-prompt transform), and installs the bash deletion tripwire.
+
+OpenCode names skills from their own frontmatter and applies no plugin namespace, so they are invoked as `brainstorming` and `verification` rather than `leo:brainstorming`. The harness mapping tells the agent to read `leo:<skill>` in the policy as `<skill>` here.
 
 If skills don't appear (npm installs into OpenCode's own node_modules cache, and the path there can vary by OpenCode version), add the fallback manually:
 
@@ -123,7 +125,7 @@ The role mapping is expert → Fable; planner, investigator, and reviewer → Op
 - Claude tiers are not configurable per install. Claude Code does not interpolate plugin options into agent frontmatter, so the models are baked into the generated agents: retier by editing `plugins/leo/config/models.json`, re-running the renderer, bumping the plugin version, and running `claude plugin update leo@leos-agent`. The version bump matters — the plugin cache keys on it, so an unbumped edit never reaches an installed plugin.
 - Claude agent models are bare aliases, never `opus[1m]`. Agent frontmatter accepts an alias, a full model id, or `inherit`; the extended-context suffix is `/model` syntax and belongs only in *skill* frontmatter, which is why the Claude-only skills still carry it. On plans where Opus already runs with the larger context window, the suffix bought nothing in agents anyway.
 - `plugins/leo/settings.json` is a reference copy of Leo's own Claude Code settings, not a plugin component — no harness loads it. Apply those values by hand if you want them.
-- Codex users can override a model for one request in the prompt, or persist a Leo tier override in native `AGENTS.md`. Explicit user instructions take precedence over bundled defaults.
+- Codex users can override a model for one request in the prompt, or persist a tier override in native `AGENTS.md`. Explicit user instructions take precedence over bundled defaults.
 - Cursor users select the mapped model in the native model picker before starting a homogeneous tier batch. Generated Cursor agents use `model: inherit`.
 - Hermes users switch the parent with `/model` and configure one delegation model for all native children. A delegation batch cannot mix Kimi and GLM.
 - OpenCode tiers, like Hermes, have no Fable rung — Fable and Opus collapse onto `moonshotai/kimi-k3`, so `expert` is not registered as an agent on this harness. `reviewer` always runs the full Opus-tier model here; there is no per-spawn downscale.
@@ -167,7 +169,7 @@ The bash guard is an accident-prevention tripwire, not an adversarial shell sand
 
 ## MCP integrations
 
-Leo does not bundle MCP servers. Install and authenticate Linear, Slack, Atlassian, Google, Vercel, Notion, or other MCP integrations independently through the harness that will use them. This keeps the workflow policy separate from personal services, credentials, and organization-specific access.
+Leo's Agent does not bundle MCP servers. Install and authenticate Linear, Slack, Atlassian, Google, Vercel, Notion, or other MCP integrations independently through the harness that will use them. This keeps the workflow policy separate from personal services, credentials, and organization-specific access.
 
 ## Machine-local state
 
@@ -193,6 +195,7 @@ plugins/leo/                          self-contained cached plugin payload, also
   .codex-plugin/plugin.json
   .cursor-plugin/plugin.json
   package.json                        npm manifest for the OpenCode distribution
+  README.md                           generated npm landing page (not a copy of this file)
   config/models.json                  canonical model matrix
   roles/                              canonical role prompts
   agents/                             generated Claude agents (conventional path)
@@ -218,7 +221,7 @@ curl -fsSL https://raw.githubusercontent.com/openai/codex/main/codex-rs/skills/s
 python3 /tmp/validate_plugin.py plugins/leo
 ```
 
-Version `6.1.0` is aligned across the three plugin manifests, the Hermes manifest, and `plugins/leo/package.json`. A future `vX.Y.Z` tag triggers the release workflow, which verifies version alignment, runs the suite, builds the generic and Hermes archives, publishes a GitHub release, and publishes `plugins/leo` to npm as `leos-agent` (Trusted Publishing / OIDC — no stored token). Creating or pushing the tag remains a deliberate maintainer action.
+Version `6.1.1` is aligned across the three plugin manifests, the Hermes manifest, and `plugins/leo/package.json`. A future `vX.Y.Z` tag triggers the release workflow, which verifies version alignment, runs the suite, builds the generic and Hermes archives, publishes a GitHub release, and publishes `plugins/leo` to npm as `leos-agent` (Trusted Publishing / OIDC — no stored token). Creating or pushing the tag remains a deliberate maintainer action.
 
 For local harness testing, point each harness's development-plugin facility at `plugins/leo/`; test Hermes from the repository root because its entrypoint wraps the nested payload. For OpenCode, point the `plugin` array at the working tree instead of the npm package name:
 

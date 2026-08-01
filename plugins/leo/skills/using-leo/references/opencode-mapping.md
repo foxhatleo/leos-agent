@@ -14,7 +14,9 @@ Roles register as native OpenCode agents (from `adapters/opencode/agents.json`, 
 
 Read-only is harness-enforced here, unlike Codex and Cursor: read-only roles carry a generated `permission.edit: deny`, so an off-policy write attempt is refused by OpenCode itself, not merely discouraged by the prompt. Write-capable agents additionally carry coarse `rm -rf` bash denies as a stopgap for opencode#5894 (unconfirmed whether `tool.execute.before` also intercepts subagent bash); the precise tripwire stays `hooks/bash-guard.py` on the primary agent.
 
-No `EnterWorktree` tool exists here — use leo:worktrees' raw `git worktree` fallback for isolated branch work. State reads and writes go through `python3 <plugin-root>/scripts/state.py` (`get` / `merge` / `path`), same contract as every other harness. There is no Workflow tool and no `cost-tiered-fix.js` here — a batch of independent tasks is fanned out as manual parallel task-tool subagent spawns instead.
+Skills are invoked by bare name here — `brainstorming`, `verification` — not with the `leo:` prefix the policy above uses. The plugin registers the skills directory by path, so OpenCode names each skill from its own `name:` frontmatter and applies no plugin namespace. Read `leo:<skill>` anywhere in the policy as `<skill>` on this harness.
+
+No `EnterWorktree` tool exists here — use the worktrees skill's raw `git worktree` fallback for isolated branch work. State reads and writes go through `python3 <plugin-root>/scripts/state.py` (`get` / `merge` / `path`), same contract as every other harness. There is no Workflow tool and no `cost-tiered-fix.js` here — a batch of independent tasks is fanned out as manual parallel task-tool subagent spawns instead.
 
 Tier collapse here: Fable≡Opus (`moonshotai/kimi-k3`), Sonnet≡Haiku (`z-ai/glm-5.2`) — routing between collapsed rungs buys role, not power. Fable is not a real rung: `expert` cannot break a deadlock a collapsed Opus already lost, so cap escalation at Opus and report.
 

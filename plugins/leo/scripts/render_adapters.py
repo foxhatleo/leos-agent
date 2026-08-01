@@ -252,7 +252,11 @@ def _mapping_docs(config):
         "coarse `rm -rf` bash denies as a stopgap for opencode#5894 (unconfirmed whether "
         "`tool.execute.before` also intercepts subagent bash); the precise tripwire stays "
         "`hooks/bash-guard.py` on the primary agent.\n"
-        "\nNo `EnterWorktree` tool exists here — use leo:worktrees' raw `git worktree` fallback for "
+        "\nSkills are invoked by bare name here — `brainstorming`, `verification` — not with the "
+        "`leo:` prefix the policy above uses. The plugin registers the skills directory by path, so "
+        "OpenCode names each skill from its own `name:` frontmatter and applies no plugin "
+        "namespace. Read `leo:<skill>` anywhere in the policy as `<skill>` on this harness.\n"
+        "\nNo `EnterWorktree` tool exists here — use the worktrees skill's raw `git worktree` fallback for "
         "isolated branch work. State reads and writes go through `python3 <plugin-root>/scripts/state.py` "
         "(`get` / `merge` / `path`), same contract as every other harness. There is no Workflow tool "
         "and no `cost-tiered-fix.js` here — a batch of independent tasks is fanned out as manual "
@@ -260,6 +264,50 @@ def _mapping_docs(config):
         + _collapse_note(opencode_rows)
         + _skill_notes(config, "opencode"),
     }
+
+
+def _payload_readme(config):
+    """The npm landing page for `leos-agent`.
+
+    The root README cannot be symlinked in: every harness copies or caches
+    this payload on its own, so a link pointing outside it dangles, and the
+    packaging tests forbid symlinks here for exactly that reason. Generating
+    it instead keeps one source and lets --check catch drift.
+
+    Scoped to OpenCode deliberately — npm is only how OpenCode installs this.
+    Every other harness has a native marketplace, and its instructions would
+    be noise on this page.
+    """
+    opencode = config["harnesses"]["opencode"]
+    return (
+        GENERATED
+        + "\n# Leo's Agent\n\n"
+        "Leo's Agent is a portable agent operating policy: cost-tiered model routing, specialist "
+        "subagent roles, process skills, execute-then-review discipline, and a narrow "
+        "catastrophic-command guard.\n\n"
+        "This npm package is the **OpenCode** distribution. Claude Code, Codex, Cursor, and Hermes "
+        "each install it through their own plugin system — see "
+        "[the repository](https://github.com/foxhatleo/leos-agent) for those.\n\n"
+        "## Install\n\n"
+        "Add it to `~/.config/opencode/opencode.json`:\n\n"
+        '```json\n{ "$schema": "https://opencode.ai/config.json", "plugin": ["leos-agent"] }\n```\n\n'
+        "Start a new OpenCode session. The plugin registers the skills directory, the "
+        f"{len(json.loads(_opencode_agents(config)))} subagent roles, and the operating policy, and installs the "
+        "bash deletion tripwire.\n\n"
+        "If the skills do not appear, register the path by hand — npm installs into OpenCode's own "
+        "cache and the location varies by version:\n\n"
+        '```json\n{ "skills": { "paths": ["~/.cache/opencode/node_modules/leos-agent/skills"] } }\n```\n\n'
+        "## Model tiers\n\n"
+        "Tier names describe the kind of work, not a fixed provider model.\n\n"
+        + _table({tier: opencode[tier] for tier in ("fable", "opus", "sonnet", "haiku")})
+        + "\n\nFable and Opus collapse onto one model here, so `expert` is not registered as an "
+        "agent and escalation caps at Opus. Retier by editing `config/models.json` and re-running "
+        "`scripts/render_adapters.py`.\n\n"
+        "## Links\n\n"
+        "- [Repository and full documentation](https://github.com/foxhatleo/leos-agent)\n"
+        "- [Operating policy](https://github.com/foxhatleo/leos-agent/blob/main/plugins/leo/skills/using-leo/SKILL.md)\n\n"
+        "MIT licensed.\n"
+    )
 
 
 def render(config):
@@ -274,6 +322,7 @@ def render(config):
     for harness, content in _mapping_docs(config).items():
         outputs[ROOT / "skills" / "using-leo" / "references" / f"{harness}-mapping.md"] = content
     outputs[ROOT / "adapters" / "opencode" / "agents.json"] = _opencode_agents(config)
+    outputs[ROOT / "README.md"] = _payload_readme(config)
 
     # The manifest is no longer rewritten here: per-install model overrides
     # were retired along with the placeholder they fed. Retiering means editing
@@ -305,6 +354,7 @@ def main():
         "agents/*.md",
         "adapters/cursor/agents/*.md",
         "adapters/opencode/agents.json",
+        "README.md",
         "skills/using-leo/references/*-mapping.md",
     ):
         for path in sorted(ROOT.glob(pattern)):

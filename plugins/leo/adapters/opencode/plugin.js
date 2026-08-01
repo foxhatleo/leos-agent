@@ -1,4 +1,6 @@
-// Leo's OpenCode bridge: registers the leo:* skills dir, injects the
+// Leo's OpenCode bridge: registers the skills dir by path (OpenCode names
+// each skill from its own frontmatter, so there is no leo: prefix here as
+// there is on Claude Code and Hermes), injects the
 // generated subagent roster from adapters/opencode/agents.json, assembles
 // the using-leo policy plus the OpenCode mapping appendix and hands it to
 // OpenCode through config.instructions (belt) and the
