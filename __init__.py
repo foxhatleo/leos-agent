@@ -125,11 +125,85 @@ def _load_guard():
     return _GUARD
 
 
+_INJECTED = set()
+_INJECTED_UNKEYED = False
+_PRIMARY_ALIVE = False
+
+
+def _claim_injection(task_id):
+    """Test-and-set for the fallback channel: once per session, and never at
+    all once the primary channel has proved it works.
+
+    Hermes passes task_id as the session identifier, or an empty string when
+    it is unset. Keyed when present; a single process-wide flag when not,
+    which is exact for the CLI (one process, one session) and deliberately
+    coarse rather than a guess anywhere else.
+
+    The asymmetry is the point. pre_llm_call's contract is to supply context
+    on every call, so gating *it* to once per session would make the policy
+    vanish after turn one the day upstream wires it up — trading a silent
+    absence for a subtler one. Instead the primary channel stays unbounded and
+    the fallback stands down as soon as it fires.
+    """
+    global _INJECTED_UNKEYED
+    if _PRIMARY_ALIVE:
+        return False
+    key = task_id if isinstance(task_id, str) and task_id else None
+    if key is None:
+        if _INJECTED_UNKEYED:
+            return False
+        _INJECTED_UNKEYED = True
+        return True
+    if key in _INJECTED:
+        return False
+    if len(_INJECTED) > 256:
+        # A long-lived gateway process must not grow this without bound.
+        _INJECTED.clear()
+    _INJECTED.add(key)
+    return True
+
+
 def _on_pre_llm_call(**_):
+    """Registered but never invoked upstream (#2817). Left intact and
+    unbounded so that the day it starts firing it simply works, and marks
+    itself alive so the tool-result fallback stops duplicating it."""
+    global _PRIMARY_ALIVE
     context = _policy_context()
     if context is None:
         return None
+    _PRIMARY_ALIVE = True
     return {"context": context}
+
+
+def _on_transform_tool_result(result="", task_id=None, **_):
+    """Ride the session's first tool result.
+
+    pre_llm_call is registered and never invoked (#2817, closed as not
+    planned), so for two years the policy has reached a Hermes turn only if
+    the user read leo:using-leo by hand. pre_tool_call *is* invoked, but the
+    only thing it can return that reaches the model is a block directive —
+    injecting through it would mean denying the user's tool call and dressing
+    the policy up as an error, which is worse than not injecting at all.
+    transform_tool_result is the one invoked hook that can put text into the
+    conversation without refusing anything.
+
+    Appended, never substituted: the model still gets its tool output. Any
+    failure returns None, which the runtime reads as "leave the result
+    alone" — a bug here would destroy tool output, so every path that is not
+    a confident success returns None.
+    """
+    if not isinstance(result, str):
+        return None
+    if not _claim_injection(task_id):
+        return None
+    try:
+        context = _context()
+    except Exception as exc:
+        _breadcrumb(exc)
+        return None
+    if not context:
+        return None
+    return f"{result}\n\n{context}"
 
 
 def _on_pre_tool_call(tool_name="", args=None, **_):
@@ -174,11 +248,13 @@ def register(ctx):
     os.environ["LEOS_AGENT_HARNESS"] = "hermes"
     # Hermes accepts pre_llm_call in register_hook() and lists it in VALID_HOOKS,
     # but its runtime never calls invoke_hook() with it (upstream issue #2817,
-    # closed as not planned). So _on_pre_llm_call below has never run, and the
-    # policy has never reached a Hermes turn — silently, because a hook that is
-    # never invoked cannot even leave a breadcrumb. Registering using-leo as a
-    # normal skill is the part that actually works today; the hook stays
-    # registered so injection starts working the day upstream wires it up.
+    # closed as not planned). So _on_pre_llm_call has never run, and the policy
+    # never reached a Hermes turn — silently, because a hook that is never
+    # invoked cannot even leave a breadcrumb. transform_tool_result carries it
+    # instead; the pre_llm_call registration stays so injection improves the day
+    # upstream wires it up, and both share one gate so it cannot double-inject.
+    # Registering using-leo as a normal skill also stays: a session that runs no
+    # tool at all still has to be able to load the policy by reading it.
     excluded = _excluded_skills("hermes")
     for skill_md in sorted((PAYLOAD / "skills").glob("*/SKILL.md")):
         if skill_md.parent.name in excluded:
@@ -186,6 +262,7 @@ def register(ctx):
         ctx.register_skill(skill_md.parent.name, skill_md)
     ctx.register_hook("pre_llm_call", _on_pre_llm_call)
     ctx.register_hook("pre_tool_call", _on_pre_tool_call)
+    ctx.register_hook("transform_tool_result", _on_transform_tool_result)
     # register() is the only Hermes code path that reliably runs at session
     # start, so the memory refresh hangs off it. Hermes has no memory surface
     # of its own, but the refresh keeps the store's index current and projects

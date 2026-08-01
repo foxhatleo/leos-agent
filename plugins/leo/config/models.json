@@ -24,8 +24,8 @@
           "note": "`sessionStart` hook, every session"
         },
         "hermes": {
-          "mode": "none",
-          "note": "none — `leo:using-leo` is registered as an ordinary skill; read it at the start of a session"
+          "mode": "tool-result",
+          "note": "rides the session's first tool result — so a session that runs no tool gets none; read `leo:using-leo` if the policy is not already in your context"
         },
         "opencode": {
           "mode": "config-file",

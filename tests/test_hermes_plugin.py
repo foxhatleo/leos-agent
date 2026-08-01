@@ -72,7 +72,19 @@ class TestHermesPlugin(unittest.TestCase):
             and name not in excluded
         )
         self.assertEqual(sorted(self.ctx.skills), expected)
-        self.assertEqual(set(self.ctx.hooks), {"pre_llm_call", "pre_tool_call"})
+        self.assertEqual(
+            set(self.ctx.hooks),
+            {"pre_llm_call", "pre_tool_call", "transform_tool_result"},
+        )
+
+    def test_operational_skills_are_registered(self):
+        """The parity gain, proved in-process rather than asserted about a
+        manifest string. Hermes is the only harness whose registration runs
+        here, so it is the one place this can be shown rather than inferred.
+        """
+        for name in ("review-pr", "resolve-ticket", "watch-review"):
+            with self.subTest(skill=name):
+                self.assertIn(name, self.ctx.skills)
 
     def test_non_portable_skills_are_never_registered(self):
         """Asserted by name, not derived — a derived expectation would
@@ -161,6 +173,77 @@ class TestHermesPlugin(unittest.TestCase):
             with self.subTest(tool_name=tool_name, args=args):
                 result = guard(tool_name=tool_name, args=args)
                 self.assertEqual(result["action"], "block")
+
+
+class TestHermesPolicyInjection(unittest.TestCase):
+    """pre_llm_call is dead upstream, so the policy rides the first tool
+    result instead. The invariant that matters most is that a tool result is
+    never damaged: this hook can only ever append, and any doubt returns None.
+    """
+
+    def setUp(self):
+        self.plugin = _load_plugin()
+        self.plugin._INJECTED = set()
+        self.plugin._INJECTED_UNKEYED = False
+        self.plugin._PRIMARY_ALIVE = False
+        self.hook = self.plugin._on_transform_tool_result
+
+    def test_policy_rides_the_first_tool_result(self):
+        out = self.hook(tool_name="terminal", result="total 4\nREADME.md", task_id="t1")
+        self.assertTrue(out.startswith("total 4\nREADME.md"))
+        self.assertIn("<leo-policy>", out)
+        self.assertIn("moonshotai/kimi-k3", out)
+        self.assertNotIn("${CLAUDE_PLUGIN_ROOT}", out)
+
+    def test_injected_once_per_session(self):
+        self.assertIsNotNone(self.hook(result="ok", task_id="t1"))
+        self.assertIsNone(self.hook(result="ok", task_id="t1"))
+        self.assertIsNotNone(self.hook(result="ok", task_id="t2"))
+
+    def test_unkeyed_sessions_still_inject_exactly_once(self):
+        self.assertIsNotNone(self.hook(result="ok", task_id=""))
+        self.assertIsNone(self.hook(result="ok", task_id=""))
+        self.assertIsNone(self.hook(result="ok", task_id=None))
+
+    def test_never_swallows_a_tool_result(self):
+        """The assertion that matters most. Over budget must yield None —
+        not an empty string, not a truncated result — because the runtime
+        reads None as 'leave the result alone'."""
+        original = self.plugin.POLICY_LIMIT
+        self.plugin.POLICY_LIMIT = 10
+        try:
+            self.assertIsNone(self.hook(result="important output", task_id="t1"))
+        finally:
+            self.plugin.POLICY_LIMIT = original
+
+    def test_non_string_results_are_left_alone(self):
+        self.assertIsNone(self.hook(result=None, task_id="t1"))
+        self.assertIsNone(self.hook(result={"data": 1}, task_id="t1"))
+
+    def test_pre_tool_call_is_never_used_to_inject(self):
+        """pre_tool_call's only model-visible return is a block directive, so
+        injecting through it would mean denying the user's tool call and
+        dressing the policy up as an error. Pinned so it is not 'improved'
+        into that later."""
+        out = self.plugin._on_pre_tool_call(
+            tool_name="terminal", args={"command": "pwd", "cwd": REPO}
+        )
+        self.assertIsNone(out)
+        blocked = self.plugin._on_pre_tool_call(
+            tool_name="terminal", args={"command": "rm -rf /", "cwd": REPO}
+        )
+        self.assertNotIn("<leo-policy>", blocked["message"])
+
+    def test_the_fallback_stands_down_once_the_primary_channel_fires(self):
+        """If upstream ever wires pre_llm_call up, the policy must not arrive
+        twice — and the primary channel must stay unbounded, or the policy
+        would vanish after turn one."""
+        first = self.plugin._on_pre_llm_call(user_message="hello")
+        self.assertIn("context", first)
+        # Unbounded: it supplies context on every call, not just the first.
+        self.assertIn("context", self.plugin._on_pre_llm_call(user_message="again"))
+        # And the fallback now stays out of the way.
+        self.assertIsNone(self.hook(result="ok", task_id="t9"))
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ Provider: `openrouter`
 
 | Capability | Here |
 |---|---|
-| Policy injection | none — `leo:using-leo` is registered as an ordinary skill; read it at the start of a session |
+| Policy injection | rides the session's first tool result — so a session that runs no tool gets none; read `leo:using-leo` if the policy is not already in your context |
 | Subagent spawn | native `delegate_task`, canonical role prompt pasted in |
 | Per-spawn model | no — one `delegation.model` for every child, so batch homogeneous Kimi or GLM work and switch it between batches |
 | Read-only roles | prompt only — a convention, never a guarantee; never route work here that depends on it |
