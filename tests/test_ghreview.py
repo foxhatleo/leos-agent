@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for skills-claude/review-pr/scripts/ghreview.py."""
+"""Tests for scripts/ghreview.py."""
 import contextlib
 import io
 import importlib.util
@@ -10,7 +10,7 @@ import types
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-GHREVIEW_PY = os.path.join(REPO, "plugins", "leo", "skills-claude", "review-pr", "scripts", "ghreview.py")
+GHREVIEW_PY = os.path.join(REPO, "plugins", "leo", "scripts", "ghreview.py")
 
 spec = importlib.util.spec_from_file_location("ghreview", GHREVIEW_PY)
 ghreview = importlib.util.module_from_spec(spec)

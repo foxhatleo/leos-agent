@@ -557,10 +557,30 @@ def _state_py_prefix_matches(line, idx, prefixes=(STATE_PREFIX,)):
     return False
 
 
-class TestStatePyReferencesPrefixed(unittest.TestCase):
-    """Invariant 11: state.py references must use the full CLAUDE_PLUGIN_ROOT
-    prefix, except bare shorthand when an alias definition exists in the
-    same file."""
+# Every helper shipped under scripts/. They are all reached the same way, so
+# they all need the same prefix discipline: a path that does not resolve is a
+# runtime failure, and ${CLAUDE_SKILL_DIR} — which nothing in this repo ever
+# substituted — is exactly how one of them shipped broken.
+HELPER_SCRIPTS = (
+    "state.py", "memory.py", "doctor.py", "setup.py",
+    "ghreview.py", "resolve_attach_target.py",
+)
+
+
+class TestHelperScriptReferencesPrefixed(unittest.TestCase):
+    """Invariant 11: references to a shipped helper script must use the full
+    CLAUDE_PLUGIN_ROOT prefix, except bare shorthand when an alias definition
+    exists in the same file."""
+
+    def test_no_unsubstituted_skill_dir_placeholder(self):
+        """${CLAUDE_SKILL_DIR} was spelled eight times and substituted by
+        nothing — not by session-start.py, not by __init__.py, not by the
+        OpenCode bridge, and pinned by no test. It only ever worked because
+        Claude Code happened to export it."""
+        for path in skill_files():
+            with open(path, encoding="utf-8") as fh:
+                with self.subTest(file=os.path.relpath(path, REPO)):
+                    self.assertNotIn("CLAUDE_SKILL_DIR", fh.read())
 
     def test_every_occurrence_prefixed(self):
         walked = []
@@ -579,7 +599,7 @@ class TestStatePyReferencesPrefixed(unittest.TestCase):
                 # Check if this file has an alias definition matching
                 # STATE=...${CLAUDE_PLUGIN_ROOT}/scripts/state.py...
                 has_alias = any(
-                    re.search(r'=[^=]*\$\{CLAUDE_PLUGIN_ROOT\}/scripts/state\.py', line)
+                    re.search(r'=[^=]*\$\{CLAUDE_PLUGIN_ROOT\}/scripts/[a-z_]+\.py', line)
                     for line in lines
                 )
 
@@ -591,7 +611,8 @@ class TestStatePyReferencesPrefixed(unittest.TestCase):
                 allowed = HARNESS_STATE_PREFIXES if in_references else (STATE_PREFIX,)
 
                 for lineno, line in enumerate(lines, start=1):
-                    if "state.py" not in line:
+                    script = next((s for s in HELPER_SCRIPTS if s in line), None)
+                    if script is None:
                         continue
                     # An allowed-tools permission pattern is a glob, not a path to
                     # run: `Bash(python3 */state.py *)` is exactly how the grant
@@ -600,7 +621,7 @@ class TestStatePyReferencesPrefixed(unittest.TestCase):
                     # the narrowing this suite wants.
                     if "Bash(" in line:
                         continue
-                    for m in re.finditer(re.escape("state.py"), line):
+                    for m in re.finditer(re.escape(script), line):
                         idx = m.start()
 
                         has_full_prefix = _state_py_prefix_matches(line, idx, allowed)
@@ -617,7 +638,7 @@ class TestStatePyReferencesPrefixed(unittest.TestCase):
                             self.assertTrue(
                                 passes,
                                 f"{os.path.relpath(path, REPO)}:{lineno} references "
-                                f"state.py without the full CLAUDE_PLUGIN_ROOT prefix",
+                                f"{script} without the full CLAUDE_PLUGIN_ROOT prefix",
                             )
 
 

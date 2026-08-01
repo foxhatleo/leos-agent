@@ -82,4 +82,4 @@ It does not install, update, or repair the plugin, and it does not diagnose —
 if the question is "did the policy load" or "why can't I invoke this skill",
 that is leo:doctor, which reads and never writes. setup only records consent
 and flips flags; the projection itself happens at the next session start,
-through the same `scripts/memory.py` path every harness already uses.
+through the same `memory.py` helper every harness already uses.
