@@ -33,7 +33,7 @@ Tier names describe the kind of work, not a fixed provider model.
 | Sonnet | `z-ai/glm-5.2` | native default |
 | Haiku | `z-ai/glm-5.2` | native default |
 
-Fable and Opus collapse onto one model here, so `expert` is not registered as an agent and escalation caps at Opus. Retier by editing `config/models.json` and re-running `scripts/render_adapters.py`.
+Fable is not a real rung here, so `expert` is not registered as an agent and escalation caps at Opus. Retier by editing `config/models.json` and re-running `scripts/render_adapters.py`.
 
 ## Links
 

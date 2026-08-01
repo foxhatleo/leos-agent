@@ -70,8 +70,8 @@ class TestJsonReport(DoctorCase):
         tiers = json.loads(done.stdout)["tiers"]
         with open(os.path.join(PAYLOAD, "config", "models.json"), encoding="utf-8") as fh:
             expected = json.load(fh)["harnesses"]["claude"]
-        for tier, value in expected.items():
-            self.assertEqual(tiers[tier]["model"], value["model"])
+        for tier in ("fable", "opus", "sonnet", "haiku"):
+            self.assertEqual(tiers[tier]["model"], expected[tier]["model"])
 
     def test_reports_shipped_skills_from_disk(self):
         done = self.run_cli("--json", env_overrides={"CLAUDE_PLUGIN_ROOT": PAYLOAD})

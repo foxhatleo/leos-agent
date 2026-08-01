@@ -67,7 +67,7 @@ class TestOpenCodeAgentsJson(unittest.TestCase):
         agents = _load_agents()
         for role, agent in agents.items():
             with self.subTest(role=role):
-                tier = config["roles"][role]
+                tier = config["roles"][role]["tier"]
                 self.assertTrue(agent["model"].startswith("openrouter/"))
                 self.assertEqual(agent["model"], f"openrouter/{opencode[tier]['model']}")
 

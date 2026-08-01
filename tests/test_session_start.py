@@ -103,9 +103,9 @@ class TestSessionStartInjectsPolicy(unittest.TestCase):
         with open(os.path.join(PLUGIN, "config", "models.json"), encoding="utf-8") as fh:
             claude = json.load(fh)["harnesses"]["claude"]
         self.assertNotIn("${user_config.", additional_context)
-        for tier, item in claude.items():
+        for tier in ("fable", "opus", "sonnet", "haiku"):
             with self.subTest(tier=tier):
-                self.assertIn(item["model"], additional_context)
+                self.assertIn(claude[tier]["model"], additional_context)
 
 
 class TestSessionStartLocaleIndependent(unittest.TestCase):

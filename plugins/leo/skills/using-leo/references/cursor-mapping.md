@@ -8,11 +8,22 @@
 | Sonnet | `Grok 4.5` | native default |
 | Haiku | `Composer 2.5` | native default |
 
-Cursor plugin agents use `model: inherit`. Select the mapped model in Cursor before starting a homogeneous tier batch; the plugin does not claim to enforce arbitrary per-agent model names.
+## Capabilities here
+
+| Capability | Here |
+|---|---|
+| Policy injection | `sessionStart` hook, every session |
+| Subagent spawn | plugin agent from the generated Cursor agents directory |
+| Per-spawn model | no — agents are `model: inherit`; select the tier's model in the UI before a homogeneous batch |
+| Read-only roles | harness-enforced — generated `readonly: true` |
+| Worktrees | no native tool — raw `git worktree` at `.claude/worktrees/<name>` |
+| Workflow runner | none — fan out by hand and keep the ledger in `<plugin-root>/scripts/state.py` |
+| Follow-up to a live agent | none established — re-dispatch cold with the context restated |
+| Skill names | `leo:<name>` |
 
 Visual evidence here: Browser Preview against a running dev server, else a Playwright server if one is registered. When no rung answers, leo:visual-verification requires the unverified-change warning in place of a done report.
 
-Memory projection here writes to a generated rules file in the per-user Cursor rules directory. Only global-scope facts are projected — every per-user surface loads in every repository, so repo-scoped facts would leak across projects; they reach the model through the session context block instead. Leo's block is delimited by its own markers and the rest of the file is left untouched.
+Memory projection here writes to a generated rules file in the per-user Cursor rules directory. Only global-scope facts are projected — every per-user surface loads in every repository, so repo facts would leak across projects; they reach the model through the session context block instead. Leo's block is marker-delimited; the rest of the file is untouched.
 
 Tier collapse here: Opus≡Sonnet (`Grok 4.5`) — routing between collapsed rungs buys role, not power.
 

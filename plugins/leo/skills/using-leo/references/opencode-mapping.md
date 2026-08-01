@@ -10,17 +10,22 @@ Provider: `openrouter`
 | Sonnet | `z-ai/glm-5.2` | native default |
 | Haiku | `z-ai/glm-5.2` | native default |
 
-Roles register as native OpenCode agents (from `adapters/opencode/agents.json`, generated from `config/models.json` and `roles/*.md`) and are spawned via the task tool as subagents. There is no per-spawn model override on this harness: each agent always runs its registered model, so `reviewer` always runs the full Opus-tier model — the trivial-diff Sonnet-tier downscale does not apply here; every diff gets the full review.
+## Capabilities here
 
-Read-only is harness-enforced here, unlike Codex and Cursor: read-only roles carry a generated `permission.edit: deny`, so an off-policy write attempt is refused by OpenCode itself, not merely discouraged by the prompt. Write-capable agents additionally carry coarse `rm -rf` bash denies as a stopgap for opencode#5894 (unconfirmed whether `tool.execute.before` also intercepts subagent bash); the precise tripwire stays `hooks/bash-guard.py` on the primary agent.
-
-Skills are invoked by bare name here — `brainstorming`, `verification` — not with the `leo:` prefix the policy above uses. The plugin registers the skills directory by path, so OpenCode names each skill from its own `name:` frontmatter and applies no plugin namespace. Read `leo:<skill>` anywhere in the policy as `<skill>` on this harness.
-
-No `EnterWorktree` tool exists here — use the worktrees skill's raw `git worktree` fallback for isolated branch work. State reads and writes go through `python3 <plugin-root>/scripts/state.py` (`get` / `merge` / `path`), same contract as every other harness. There is no Workflow tool and no `cost-tiered-fix.js` here — a batch of independent tasks is fanned out as manual parallel task-tool subagent spawns instead.
+| Capability | Here |
+|---|---|
+| Policy injection | `config.instructions`, with a system-prompt transform as backstop |
+| Subagent spawn | registered agent from `agents.json`, spawned via the task tool |
+| Per-spawn model | no — each agent always runs its registered model, so `reviewer` never downscales on a trivial diff |
+| Read-only roles | harness-enforced — generated `permission.edit: deny`, refused by OpenCode itself |
+| Worktrees | no native tool — raw `git worktree` at `.claude/worktrees/<name>` |
+| Workflow runner | no runner — `cost-tiered-fix.js` ships in the package but nothing here executes it; fan out by hand and keep the ledger in `<plugin-root>/scripts/state.py` |
+| Follow-up to a live agent | none established — re-dispatch cold with the context restated |
+| Skill names | bare `<name>` — read every `leo:<x>` above as `<x>` |
 
 Visual evidence here: no built-in renderer; a registered Playwright server or the Playwright CLI. When no rung answers, leo:visual-verification requires the unverified-change warning in place of a done report.
 
-Memory projection here writes to the per-user `AGENTS.md` in the OpenCode config directory. Only global-scope facts are projected — every per-user surface loads in every repository, so repo-scoped facts would leak across projects; they reach the model through the session context block instead. Leo's block is delimited by its own markers and the rest of the file is left untouched.
+Memory projection here writes to the per-user `AGENTS.md` in the OpenCode config directory. Only global-scope facts are projected — every per-user surface loads in every repository, so repo facts would leak across projects; they reach the model through the session context block instead. Leo's block is marker-delimited; the rest of the file is untouched.
 
 Tier collapse here: Fable≡Opus (`moonshotai/kimi-k3`), Sonnet≡Haiku (`z-ai/glm-5.2`) — routing between collapsed rungs buys role, not power. Fable is not a real rung: `expert` cannot break a deadlock a collapsed Opus already lost, so cap escalation at Opus and report.
 

@@ -10,13 +10,22 @@ Provider: `openrouter`
 | Sonnet | `z-ai/glm-5.2` | native default |
 | Haiku | `z-ai/glm-5.2` | native default |
 
-Hermes native `delegate_task` has one configured delegation model. Group work into homogeneous Kimi or GLM batches, switch the parent with `/model`, and set `delegation.provider: openrouter` plus the matching `delegation.model` before spawning.
+## Capabilities here
 
-This policy is NOT injected automatically here. Hermes accepts a `pre_llm_call` hook but its runtime never invokes one, so the plugin registers `leo:using-leo` as an ordinary skill instead — read it at the start of a session to load the policy. Read-only is prompt-enforced only: the judge roles are pasted prompts, so their read-only contract is a convention here, not a guarantee.
+| Capability | Here |
+|---|---|
+| Policy injection | none — `leo:using-leo` is registered as an ordinary skill; read it at the start of a session |
+| Subagent spawn | native `delegate_task`, canonical role prompt pasted in |
+| Per-spawn model | no — one `delegation.model` for every child, so batch homogeneous Kimi or GLM work and switch it between batches |
+| Read-only roles | prompt only — a convention, never a guarantee; never route work here that depends on it |
+| Worktrees | no native tool — raw `git worktree` at `.claude/worktrees/<name>` |
+| Workflow runner | none — fan out by hand and keep the ledger in `<plugin-root>/scripts/state.py` |
+| Follow-up to a live agent | none established — re-dispatch cold with the context restated |
+| Skill names | `leo:<name>` |
 
 Visual evidence here: no built-in renderer; Playwright driven from the shell is the only rung, and only when the project already depends on it. When no rung answers, leo:visual-verification requires the unverified-change warning in place of a done report.
 
-Memory projection here writes to `SOUL.md` in the Hermes home, and only once `leo:setup enable hermes-memory` turns it on — that file is the agent's own identity prompt, so it is never written to unasked and never created. Only global-scope facts are projected — every per-user surface loads in every repository, so repo-scoped facts would leak across projects; they reach the model through the session context block instead. Leo's block is delimited by its own markers and the rest of the file is left untouched.
+Memory projection here writes to `SOUL.md` in the Hermes home, and only once `leo:setup enable hermes-memory` turns it on — that file is the agent's own identity prompt, so it is never written to unasked and never created. Only global-scope facts are projected — every per-user surface loads in every repository, so repo facts would leak across projects; they reach the model through the session context block instead. Leo's block is marker-delimited; the rest of the file is untouched.
 
 Tier collapse here: Fable≡Opus (`moonshotai/kimi-k3`), Sonnet≡Haiku (`z-ai/glm-5.2`) — routing between collapsed rungs buys role, not power. Fable is not a real rung: `expert` cannot break a deadlock a collapsed Opus already lost, so cap escalation at Opus and report.
 

@@ -20,23 +20,24 @@ class TestModelMatrix(unittest.TestCase):
             cls.data = json.load(fh)
 
     def test_exact_defaults(self):
-        self.assertEqual(self.data["schemaVersion"], 2)
+        self.assertEqual(self.data["schemaVersion"], 3)
         self.assertEqual(
             self.data["roles"],
             {
-                "expert": "fable",
-                "planner": "opus",
-                "investigator": "opus",
-                "reviewer": "opus",
-                "implementer": "sonnet",
-                "executor": "haiku",
-                "explore": "haiku",
+                "expert": {"tier": "fable", "access": "read-only"},
+                "planner": {"tier": "opus", "access": "read-only"},
+                "investigator": {"tier": "opus", "access": "read-only"},
+                "reviewer": {"tier": "opus", "access": "read-only"},
+                "implementer": {"tier": "sonnet", "access": "write"},
+                "executor": {"tier": "haiku", "access": "write"},
+                "explore": {"tier": "haiku", "access": "read-only"},
             },
         )
         harnesses = self.data["harnesses"]
         self.assertEqual(
             harnesses["claude"],
             {
+                "title": "Claude Code",
                 "fable": {"model": "fable", "effort": "max"},
                 "opus": {"model": "opus"},
                 "sonnet": {"model": "sonnet"},
@@ -46,6 +47,7 @@ class TestModelMatrix(unittest.TestCase):
         self.assertEqual(
             harnesses["cursor"],
             {
+                "title": "Cursor",
                 "fable": {"model": "GPT-5.6 Sol"},
                 "opus": {"model": "Grok 4.5"},
                 "sonnet": {"model": "Grok 4.5"},
@@ -55,6 +57,7 @@ class TestModelMatrix(unittest.TestCase):
         self.assertEqual(
             harnesses["codex"],
             {
+                "title": "Codex",
                 "fable": {"model": "gpt-5.6-sol", "effort": "max"},
                 "opus": {"model": "gpt-5.6-sol", "effort": "high"},
                 "sonnet": {"model": "gpt-5.6-terra", "effort": "medium"},
@@ -118,7 +121,8 @@ class TestModelMatrix(unittest.TestCase):
             sorted(name for name in os.listdir(claude_dir) if name.endswith(".md")),
             [f"{name}.md" for name in sorted(self.data["roles"])],
         )
-        for role, tier in self.data["roles"].items():
+        for role, spec in self.data["roles"].items():
+            tier = spec["tier"]
             with open(os.path.join(claude_dir, f"{role}.md"), encoding="utf-8") as fh:
                 claude = fh.read()
             with open(os.path.join(cursor_dir, f"{role}.md"), encoding="utf-8") as fh:
