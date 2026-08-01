@@ -29,9 +29,6 @@ Tier collapse here: Opus≡Sonnet (`Grok 4.5`) — routing between collapsed run
 
 ## Leo skills not available here
 
-- `leo:attach-pr` — its entire purpose is Claude Code Desktop's PR-card detector, which no other harness has, and it reaches its resolver through a Claude-only skill-directory placeholder.
-- `leo:resolve-ticket` — needs plugin-path placeholders, a pinned Claude model, and Claude-only subagent, worktree, and question tools.
-- `leo:review-pr` — its whole mechanism is a script reached through a Claude-only skill-directory placeholder, plus a pinned Claude model.
-- `leo:watch-review` — pinned Claude model, and it drives review-pr through Claude Code's own skill-invocation tool.
+- `leo:attach-pr` — its entire product is a side effect in Claude Code Desktop's PR-card detector, which no other harness has — the same commands would run here, succeed, and produce nothing observable.
 
-Every other skill in the policy's Skill index is registered here and behaves the same. Reviewing a pull request on this harness means running the canonical reviewer role prompt against the diff by hand.
+Every other skill in the policy's Skill index is registered here and behaves the same, and so are the operational skills — `leo:review-pr`, `leo:resolve-ticket` and `leo:watch-review` all run on this harness. Where they name a capability the table above says is missing, take the fallback each one documents.

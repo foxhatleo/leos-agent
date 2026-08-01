@@ -158,7 +158,7 @@ Group delegated work into homogeneous Kimi or GLM batches and change this native
 - Seven roles: expert, planner, investigator, reviewer, implementer, executor, and explore.
 - Process skills: `brainstorming`, `writing-plans`, `executing-plans`, `debugging`, `test-first`, `verification`, `delegation`, `worktrees`, and `finishing-a-branch`.
 - Evidence and upkeep skills, portable to every harness: `freshness` (confirm a third-party API against the installed package before coding against it), `visual-verification` (a change someone can see needs a render, or an explicit unverified warning), `memory` (durable cross-harness facts), `doctor` (report how the plugin is wired here), `writing-skills` (author a skill in this shape, and where a personal one goes per harness), and `setup` (turn on opt-in wiring a plugin install cannot turn on for itself).
-- Operational skills: `attach-pr`, `resolve-ticket`, `review-pr`, and `watch-review` — Claude Code only. They depend on Claude-only tools and path placeholders, so they ship from a separate `skills-claude/` root that the Cursor, Codex, Hermes, and OpenCode manifests do not read. Each harness's mapping appendix names what it is missing and why.
+- Operational skills, portable to every harness: `resolve-ticket`, `review-pr`, and `watch-review`. `attach-pr` alone stays Claude Code only — its entire product is a side effect in Claude Code Desktop's PR-card detector, so elsewhere the same commands would succeed and produce nothing observable. It ships from a separate `skills-claude/` root that the Cursor, Codex, Hermes, and OpenCode manifests do not read, and each harness's mapping appendix says so.
 - Session bootstrap hooks for Claude Code, Codex, and Cursor, plus native policy injection for Hermes and OpenCode.
 - A shared bash guard that blocks a narrow class of accidental home/system-scale destructive commands.
 
@@ -213,7 +213,7 @@ plugins/leo/                          self-contained cached plugin payload, also
   adapters/                           generated agent definitions for other harnesses
   adapters/opencode/                  OpenCode plugin.js bridge + generated agents.json
   skills/                             portable skills (every harness)
-  skills-claude/                      Claude-only operational skills
+  skills-claude/                      attach-pr (Claude Code only)
   hooks/ scripts/ workflows/
 tests/                                stdlib packaging and behavior tests
 ```

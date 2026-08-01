@@ -96,7 +96,10 @@ capability at runtime (a Linear issue-fetch tool; the Atlassian tools
 if the tools are deferred.
 
 Prefix → tracker mappings live in machine-local state (see the injected
-leo:using-leo policy › Machine-local state): `STATE='python3 "${CLAUDE_PLUGIN_ROOT}/scripts/state.py"'`,
+leo:using-leo policy › Machine-local state). `${CLAUDE_PLUGIN_ROOT}` below is
+the Claude Code spelling of the plugin root and is not substituted into this
+skill body; leo:delegation's ledger section gives the per-harness forms.
+`STATE='python3 "${CLAUDE_PLUGIN_ROOT}/scripts/state.py"'`,
 file `resolve-ticket.json`, keyed by this repo's `owner/repo`, shaped
 `{"prefixes": {"ENG": "linear"}}`. A project CLAUDE.md may still declare its
 tracker outright — that wins without a lookup.

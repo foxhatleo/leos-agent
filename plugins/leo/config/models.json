@@ -250,10 +250,7 @@
   ],
   "skills": {
     "claudeOnly": [
-      "attach-pr",
-      "resolve-ticket",
-      "review-pr",
-      "watch-review"
+      "attach-pr"
     ],
     "exclude": {
       "claude": [],
@@ -263,10 +260,7 @@
       "opencode": []
     },
     "reasons": {
-      "attach-pr": "its entire purpose is Claude Code Desktop's PR-card detector, which no other harness has, and it reaches its resolver through a Claude-only skill-directory placeholder",
-      "resolve-ticket": "needs plugin-path placeholders, a pinned Claude model, and Claude-only subagent, worktree, and question tools",
-      "review-pr": "its whole mechanism is a script reached through a Claude-only skill-directory placeholder, plus a pinned Claude model",
-      "watch-review": "pinned Claude model, and it drives review-pr through Claude Code's own skill-invocation tool"
+      "attach-pr": "its entire product is a side effect in Claude Code Desktop's PR-card detector, which no other harness has — the same commands would run here, succeed, and produce nothing observable"
     }
   },
   "visual": {

@@ -260,8 +260,10 @@ def _skill_notes(config, harness):
     lines.append("")
     lines.append(
         "Every other skill in the policy's Skill index is registered here and "
-        "behaves the same. Reviewing a pull request on this harness means "
-        "running the canonical reviewer role prompt against the diff by hand."
+        "behaves the same, and so are the operational skills — `leo:review-pr`, "
+        "`leo:resolve-ticket` and `leo:watch-review` all run on this harness. "
+        "Where they name a capability the table above says is missing, take "
+        "the fallback each one documents."
     )
     return "\n".join(lines) + "\n"
 

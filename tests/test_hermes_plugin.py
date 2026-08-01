@@ -17,7 +17,7 @@ HEADROOM_FLOOR = 500
 
 # Kept as a literal so a regression that re-registers one is caught by name,
 # and checked against config below so the literal cannot go stale.
-CLAUDE_ONLY_NAMES = ("attach-pr", "review-pr", "resolve-ticket", "watch-review")
+CLAUDE_ONLY_NAMES = ("attach-pr",)
 
 
 def _load_plugin():

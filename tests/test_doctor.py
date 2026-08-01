@@ -86,8 +86,8 @@ class TestJsonReport(DoctorCase):
         done = self.run_cli("--json", env_overrides={"PLUGIN_ROOT": PAYLOAD})
         data = json.loads(done.stdout)
         self.assertEqual(data["harness"]["value"], "codex")
-        self.assertIn("review-pr", data["skills"]["excluded_here"])
-        self.assertNotIn("review-pr", data["skills"]["expected_here"])
+        self.assertIn("attach-pr", data["skills"]["excluded_here"])
+        self.assertNotIn("attach-pr", data["skills"]["expected_here"])
 
 
 class TestHarnessDetection(DoctorCase):
@@ -161,8 +161,8 @@ class TestHookessHarnessReport(DoctorCase):
         data = json.loads(done.stdout)
         self.assertEqual(data["harness"]["value"], "opencode")
         self.assertEqual(data["tiers"]["opus"]["model"], "moonshotai/kimi-k3")
-        self.assertNotIn("review-pr", data["skills"]["expected_here"])
-        self.assertIn("review-pr", data["skills"]["excluded_here"])
+        self.assertNotIn("attach-pr", data["skills"]["expected_here"])
+        self.assertIn("attach-pr", data["skills"]["excluded_here"])
 
     def test_unknown_harness_claims_no_tier_table(self):
         done = self.run_cli("--json")
@@ -170,7 +170,7 @@ class TestHookessHarnessReport(DoctorCase):
         data = json.loads(done.stdout)
         self.assertEqual(data["harness"]["value"], "unknown")
         self.assertIsNone(data["tiers"]["opus"]["model"])
-        self.assertNotIn("review-pr", data["skills"]["expected_here"])
+        self.assertNotIn("attach-pr", data["skills"]["expected_here"])
 
 
 class TestDegradation(DoctorCase):

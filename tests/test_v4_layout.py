@@ -126,7 +126,7 @@ class TestV4Layout(unittest.TestCase):
                 self.assertNotIn(excluded, data["files"])
 
     def test_operational_skills_treat_mcp_as_external(self):
-        path = os.path.join(PLUGIN, "skills-claude", "resolve-ticket", "SKILL.md")
+        path = os.path.join(PLUGIN, "skills", "resolve-ticket", "SKILL.md")
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
         self.assertRegex(text, r"does\s+not bundle MCP")

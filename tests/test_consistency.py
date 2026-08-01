@@ -69,11 +69,16 @@ EXPECTED_SKILL_DIRS = {
     "executing-plans", "brainstorming", "worktrees", "finishing-a-branch",
     "delegation", "memory", "freshness", "visual-verification", "doctor",
     "writing-skills", "setup",
+    # Operational skills: user-invoked entry points, portable since they
+    # stopped depending on Claude-only mechanics.
+    "review-pr", "resolve-ticket", "watch-review",
 }
 
-# Skill dirs under plugins/leo/skills-claude/ — the user-facing workflow
-# skills, which depend on Claude-only tools and path placeholders.
-EXPECTED_CLAUDE_SKILL_DIRS = {"attach-pr", "review-pr", "resolve-ticket", "watch-review"}
+# Skill dirs under plugins/leo/skills-claude/. attach-pr alone, and not for
+# want of effort: its entire product is a side effect in Claude Code Desktop's
+# PR-card detector, so on any other harness the same commands would succeed and
+# produce nothing observable — worse than the skill being absent.
+EXPECTED_CLAUDE_SKILL_DIRS = {"attach-pr"}
 
 # The 9 process skills the policy's "## Skill index" table must reference.
 PROCESS_SKILLS = {
@@ -777,11 +782,11 @@ class TestPolicySkillIndex(unittest.TestCase):
             with self.subTest(skill=name):
                 self.assertIn(f"leo:{name}", text)
 
-    def test_policy_names_every_claude_only_skill_and_counts_them_right(self):
+    def test_policy_names_every_claude_only_skill(self):
         """The policy said "Three operational skills" and named three of four
         — attach-pr was missing from the sentence while the generated mappings
-        listed it. Nothing asserted either the names or the count word, so the
-        body drifted from config the moment a fourth skill was added.
+        listed it. Nothing asserted the names, so the body drifted from config
+        the moment a fourth was added.
         """
         with open(POLICY_FILE, encoding="utf-8") as fh:
             text = fh.read()
@@ -791,10 +796,19 @@ class TestPolicySkillIndex(unittest.TestCase):
         for name in names:
             with self.subTest(skill=name):
                 self.assertIn(f"leo:{name}", text)
+
+    def test_policy_counts_its_by_name_skills_right(self):
+        """The count word was the half nothing checked."""
+        with open(POLICY_FILE, encoding="utf-8") as fh:
+            text = fh.read()
+        by_name = sorted(
+            (EXPECTED_SKILL_DIRS | EXPECTED_CLAUDE_SKILL_DIRS)
+            - PROCESS_SKILLS - {"using-leo"} - set(json.load(open(MODEL_CONFIG))["skills"]["claudeOnly"])
+        )
         words = {1: "One", 2: "Two", 3: "Three", 4: "Four", 5: "Five", 6: "Six"}
         self.assertIn(
-            f"{words[len(names)]} operational skills", text,
-            f"the policy must say {words[len(names)]} — there are {len(names)}",
+            f"{words[len(by_name)]} operational skills", text,
+            f"the policy must say {words[len(by_name)]} — the by-name skills are {by_name}",
         )
 
 

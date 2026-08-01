@@ -93,4 +93,4 @@ Reach for the matching skill at the decision point — each one encodes the mech
 | Policy or harness wiring in doubt | leo:doctor |
 | Authoring or editing a skill | leo:writing-skills |
 
-Four operational skills — `leo:attach-pr`, `leo:resolve-ticket`, `leo:review-pr`, `leo:watch-review` — are Claude Code only and are deliberately absent from the table above; they are invoked by name, and on any other harness they are not registered at all (the harness mapping appended below says so explicitly).
+Four operational skills — `leo:resolve-ticket`, `leo:review-pr`, `leo:watch-review`, `leo:setup` — are invoked by name rather than reached from the table above. One more, `leo:attach-pr`, is Claude Code only and is not registered on any other harness (the harness mapping appended below says so explicitly, and names what else differs here).

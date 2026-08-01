@@ -27,9 +27,6 @@ Memory projection here writes to the per-user `CLAUDE.md` in the Claude config d
 
 ## Leo skills only available here
 
-- `leo:attach-pr` — its entire purpose is Claude Code Desktop's PR-card detector, which no other harness has, and it reaches its resolver through a Claude-only skill-directory placeholder.
-- `leo:resolve-ticket` — needs plugin-path placeholders, a pinned Claude model, and Claude-only subagent, worktree, and question tools.
-- `leo:review-pr` — its whole mechanism is a script reached through a Claude-only skill-directory placeholder, plus a pinned Claude model.
-- `leo:watch-review` — pinned Claude model, and it drives review-pr through Claude Code's own skill-invocation tool.
+- `leo:attach-pr` — its entire product is a side effect in Claude Code Desktop's PR-card detector, which no other harness has — the same commands would run here, succeed, and produce nothing observable.
 
 Every other skill in the policy's Skill index is registered on every harness and behaves the same. These are not, so a procedure that leans on one of them does not transfer.
