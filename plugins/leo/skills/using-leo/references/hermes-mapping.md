@@ -16,7 +16,7 @@ This policy is NOT injected automatically here. Hermes accepts a `pre_llm_call` 
 
 Visual evidence here: no built-in renderer; Playwright driven from the shell is the only rung, and only when the project already depends on it. When no rung answers, leo:visual-verification requires the unverified-change warning in place of a done report.
 
-Memory projection here writes to nothing — this harness exposes no per-user memory file. Only global-scope facts are projected — every per-user surface loads in every repository, so repo-scoped facts would leak across projects; they reach the model through the session context block instead. Leo's block is delimited by its own markers and the rest of the file is left untouched.
+Memory projection here writes to `SOUL.md` in the Hermes home, and only once `leo:setup enable hermes-memory` turns it on — that file is the agent's own identity prompt, so it is never written to unasked and never created. Only global-scope facts are projected — every per-user surface loads in every repository, so repo-scoped facts would leak across projects; they reach the model through the session context block instead. Leo's block is delimited by its own markers and the rest of the file is left untouched.
 
 Tier collapse here: Fable≡Opus (`moonshotai/kimi-k3`), Sonnet≡Haiku (`z-ai/glm-5.2`) — routing between collapsed rungs buys role, not power. Fable is not a real rung: `expert` cannot break a deadlock a collapsed Opus already lost, so cap escalation at Opus and report.
 

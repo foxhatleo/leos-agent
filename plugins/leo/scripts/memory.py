@@ -68,6 +68,7 @@ import state  # noqa: E402
 # none of these is not a memory. Keep in sync with skills/memory/SKILL.md.
 TYPES = ("preference", "convention", "environment", "decision", "person")
 
+SETUP_STATE = "setup"
 MEMORY_CONTEXT_LIMIT = 4000
 MAX_BODY = 1200
 MAX_TITLE = 80
@@ -375,25 +376,58 @@ def _home(var, *parts):
     return os.path.join(base, *parts) if parts else base
 
 
+def hermes_home():
+    return os.environ.get("HERMES_HOME") or os.path.join(os.path.expanduser("~"), ".hermes")
+
+
+def hermes_enabled():
+    """Hermes projection is opt-in, through leo:setup.
+
+    Its only user-owned global file is SOUL.md, the agent's own identity
+    prompt and the opening section of every system prompt on that machine —
+    a blast radius the other four targets do not have. `hermes plugins
+    install` has no install-time hook (register() runs at session start), so
+    there is no moment during installation at which consent could be implied.
+    """
+    try:
+        data = state.load(state.state_file(SETUP_STATE))
+        return bool((data.get("hermes") or {}).get("projectMemory"))
+    except SystemExit:
+        # state.load() exits hard on a corrupt file. Projection must degrade
+        # to "not enabled" rather than take the whole session down with it.
+        return False
+    except Exception:
+        return False
+
+
 def projection_targets():
-    """(harness, gate_dir, file, owned) — gate_dir must already exist.
+    """(harness, gate_dir, file, owned, require_file) — gate_dir must exist.
 
     Never mkdir a harness config directory: its absence means the harness is
     not installed, and creating ~/.cursor for a non-Cursor user is exactly the
     surprise this must not cause.
+
+    require_file extends that rule one step for Hermes: SOUL.md must already
+    exist too. Hermes falls back to a built-in persona when the file is
+    absent, so creating it would silently replace the user's agent identity —
+    the same class of surprise, one level down.
     """
     claude = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
     codex = os.environ.get("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex")
     xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
     opencode = os.path.join(xdg, "opencode")
     cursor = os.path.join(os.path.expanduser("~"), ".cursor")
-    return [
-        ("claude", claude, os.path.join(claude, "CLAUDE.md"), False),
-        ("codex", codex, os.path.join(codex, "AGENTS.md"), False),
-        ("opencode", opencode, os.path.join(opencode, "AGENTS.md"), False),
+    targets = [
+        ("claude", claude, os.path.join(claude, "CLAUDE.md"), False, False),
+        ("codex", codex, os.path.join(codex, "AGENTS.md"), False, False),
+        ("opencode", opencode, os.path.join(opencode, "AGENTS.md"), False, False),
         ("cursor", os.path.join(cursor, "rules"),
-         os.path.join(cursor, "rules", "leos-agent-memory.mdc"), True),
+         os.path.join(cursor, "rules", "leos-agent-memory.mdc"), True, False),
     ]
+    if hermes_enabled():
+        home = hermes_home()
+        targets.append(("hermes", home, os.path.join(home, "SOUL.md"), False, True))
+    return targets
 
 
 def _backup_once(path):
@@ -434,11 +468,21 @@ def _wrap(body):
     return f"{BEGIN}\n{body.rstrip()}\n{END}\n" if body else ""
 
 
+def _hermes_absent(targets):
+    """Hermes always appears in the report, enabled or not — a harness that is
+    silently missing from the list reads as one that was projected."""
+    if any(t[0] == "hermes" for t in targets):
+        return []
+    return [{"harness": "hermes", "path": None, "status": "skipped:opt-in-required"}]
+
+
 def project(index=None):
     if os.environ.get("LEOS_AGENT_NO_PROJECT") == "1":
+        targets = projection_targets()
         return [{"harness": h, "path": f, "status": "skipped:disabled"}
-                for h, _, f, _ in projection_targets()] + [
-            {"harness": "hermes", "path": None, "status": "skipped:no-surface"}]
+                for h, _, f, _, _ in targets] + [
+            {"harness": t["harness"], "path": None, "status": "skipped:disabled"}
+            for t in _hermes_absent(targets)]
     if index is None:
         index = _load_index() or reindex()
     # GLOBAL facts only — see the module docstring.
@@ -446,17 +490,22 @@ def project(index=None):
                            "unreadable": index.get("unreadable", [])})
     block = _wrap(body)
     results = []
-    for harness, gate, path, owned in projection_targets():
+    targets = projection_targets()
+    for harness, gate, path, owned, require_file in targets:
         results.append({"harness": harness, "path": path,
-                        "status": _project_one(gate, path, owned, block)})
-    results.append({"harness": "hermes", "path": None, "status": "skipped:no-surface"})
+                        "status": _project_one(gate, path, owned, block, require_file)})
+    results.extend(_hermes_absent(targets))
     return results
 
 
-def _project_one(gate, path, owned, block):
+def _project_one(gate, path, owned, block, require_file=False):
     try:
         if not os.path.isdir(gate):
             return "skipped:no-dir"
+        if require_file and not os.path.exists(path):
+            # Hermes only. Creating SOUL.md would displace the built-in
+            # persona the harness uses when it is absent.
+            return "skipped:no-soul"
         target = os.path.realpath(path) if os.path.islink(path) else path
         existing = ""
         mode = 0o644

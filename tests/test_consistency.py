@@ -68,7 +68,7 @@ EXPECTED_SKILL_DIRS = {
     "debugging", "verification", "test-first", "writing-plans",
     "executing-plans", "brainstorming", "worktrees", "finishing-a-branch",
     "delegation", "memory", "freshness", "visual-verification", "doctor",
-    "writing-skills",
+    "writing-skills", "setup",
 }
 
 # Skill dirs under plugins/leo/skills-claude/ — the user-facing workflow
@@ -100,6 +100,7 @@ PER_SKILL_TOKENS = {
     "visual-verification": {"UNVERIFIED UI CHANGE", "ladder", "Playwright", "Probed:"},
     "doctor": {"verdict", "harness", "not loaded", "context"},
     "writing-skills": {"when_to_use", "closed", "~/.claude/skills"},
+    "setup": {"opt-in", "SOUL.md", "never created", "Idempotent"},
 }
 
 # The four-state return contract only works if BOTH ends declare it: the

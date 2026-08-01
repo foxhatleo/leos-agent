@@ -119,7 +119,7 @@ def _memory_report():
         targets = [
             {"harness": h, "path": f, "present": os.path.exists(f),
              "projected": os.path.exists(f) and memory.BEGIN in _slurp(f)}
-            for h, gate, f, _ in memory.projection_targets()
+            for h, gate, f, _, _ in memory.projection_targets()
             if os.path.isdir(gate)
         ]
         return {"store": root, "facts": len(index["facts"]), "present": True,

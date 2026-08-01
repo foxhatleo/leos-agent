@@ -27,7 +27,7 @@
     "claude": "the per-user `CLAUDE.md` in the Claude config directory",
     "codex": "the per-user `AGENTS.md` in the Codex home directory",
     "cursor": "a generated rules file in the per-user Cursor rules directory",
-    "hermes": "nothing — this harness exposes no per-user memory file",
+    "hermes": "`SOUL.md` in the Hermes home, and only once `leo:setup enable hermes-memory` turns it on — that file is the agent's own identity prompt, so it is never written to unasked and never created",
     "opencode": "the per-user `AGENTS.md` in the OpenCode config directory"
   },
   "roles": {

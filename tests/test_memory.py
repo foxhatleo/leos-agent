@@ -43,6 +43,7 @@ class MemoryCase(unittest.TestCase):
             "CODEX_HOME": os.path.join(base, "codex"),
             "XDG_CONFIG_HOME": os.path.join(base, "xdg"),
             "HOME": os.path.join(base, "home"),
+            "HERMES_HOME": os.path.join(base, "hermes"),
         }
         self._saved = {k: os.environ.get(k) for k in self.env}
         self._saved["LEOS_AGENT_NO_PROJECT"] = os.environ.get("LEOS_AGENT_NO_PROJECT")
@@ -217,9 +218,16 @@ class TestProjection(MemoryCase):
         statuses = {t["harness"]: t["status"] for t in self.memory.project()}
         self.assertEqual(statuses["opencode"], "skipped:no-dir")
         self.assertEqual(statuses["cursor"], "skipped:no-dir")
-        self.assertEqual(statuses["hermes"], "skipped:no-surface")
+        self.assertEqual(statuses["hermes"], "skipped:opt-in-required")
         self.assertFalse(os.path.exists(os.path.join(self.env["XDG_CONFIG_HOME"], "opencode")),
                          "projection must never create a harness config dir")
+
+    def test_hermes_is_reported_even_when_not_enabled(self):
+        """A harness silently missing from the report reads as one that was
+        projected."""
+        self.write(title="Global fact")
+        harnesses = {t["harness"] for t in self.memory.project()}
+        self.assertIn("hermes", harnesses)
 
     def test_user_content_is_preserved_byte_for_byte(self):
         with open(self.codex_file, "w") as fh:
@@ -302,6 +310,108 @@ class TestProjection(MemoryCase):
             os.chdir(cwd)
         for name, text in before.items():
             self.assertEqual(_read(os.path.join(repo_dir, name)), text)
+
+
+class TestHermesProjection(MemoryCase):
+    """Hermes is opt-in and its file is never created.
+
+    SOUL.md is the agent's identity prompt and the opening section of every
+    Hermes system prompt on the machine, and Hermes substitutes a built-in
+    persona when it is absent — so creating it would silently replace who the
+    user's agent is. Every other target gates on its directory; this one gates
+    on the file too.
+    """
+
+    @property
+    def soul(self):
+        return os.path.join(self.env["HERMES_HOME"], "SOUL.md")
+
+    def enable(self):
+        path = self.memory.state.state_file(self.memory.SETUP_STATE)
+        self.memory.state.atomic_write(path, {"hermes": {"projectMemory": True}})
+
+    def status(self):
+        self.write(title="Global fact")
+        return {t["harness"]: t["status"] for t in self.memory.project()}
+
+    def test_disabled_by_default(self):
+        self.assertFalse(self.memory.hermes_enabled())
+        self.assertEqual(self.status()["hermes"], "skipped:opt-in-required")
+
+    def test_enabled_without_hermes_home_writes_nothing(self):
+        self.enable()
+        self.assertEqual(self.status()["hermes"], "skipped:no-dir")
+        self.assertFalse(os.path.exists(self.env["HERMES_HOME"]))
+
+    def test_soul_is_never_created(self):
+        """The assertion that protects the user's agent identity."""
+        self.enable()
+        os.makedirs(self.env["HERMES_HOME"], exist_ok=True)
+        self.assertEqual(self.status()["hermes"], "skipped:no-soul")
+        self.assertFalse(os.path.exists(self.soul))
+
+    def test_existing_persona_is_preserved_and_backed_up(self):
+        original = "You are a terse assistant.\n"
+        self.enable()
+        os.makedirs(self.env["HERMES_HOME"], exist_ok=True)
+        with open(self.soul, "w") as fh:
+            fh.write(original)
+        self.assertNotIn("skipped", self.status()["hermes"])
+        text = _read(self.soul)
+        self.assertTrue(text.startswith(original))
+        self.assertIn(self.memory.BEGIN, text)
+        self.assertEqual(_read(self.soul + ".leo-backup"), original)
+
+    def test_reprojection_is_idempotent(self):
+        self.enable()
+        os.makedirs(self.env["HERMES_HOME"], exist_ok=True)
+        with open(self.soul, "w") as fh:
+            fh.write("You are a terse assistant.\n")
+        self.status()
+        first = _read(self.soul)
+        statuses = {t["harness"]: t["status"] for t in self.memory.project()}
+        self.assertEqual(statuses["hermes"], "unchanged")
+        self.assertEqual(_read(self.soul), first)
+        self.assertEqual(first.count(self.memory.BEGIN), 1)
+
+    def test_repo_facts_never_reach_the_persona_file(self):
+        self.enable()
+        os.makedirs(self.env["HERMES_HOME"], exist_ok=True)
+        with open(self.soul, "w") as fh:
+            fh.write("You are a terse assistant.\n")
+        self.write(scope="repo", title="Repo secret sauce", repo="owner/mine")
+        self.write(title="Global fact")
+        self.memory.project()
+        text = _read(self.soul)
+        self.assertIn("Global fact", text)
+        self.assertNotIn("Repo secret sauce", text)
+
+    def test_agent_owned_memory_files_are_never_touched(self):
+        """MEMORY.md and USER.md belong to Hermes' own memory tool, which
+        would overwrite Leo's markers."""
+        self.enable()
+        memories = os.path.join(self.env["HERMES_HOME"], "memories")
+        os.makedirs(memories, exist_ok=True)
+        for name in ("MEMORY.md", "USER.md"):
+            with open(os.path.join(memories, name), "w") as fh:
+                fh.write(f"agent-owned {name}\n")
+        with open(self.soul, "w") as fh:
+            fh.write("You are a terse assistant.\n")
+        self.status()
+        for name in ("MEMORY.md", "USER.md"):
+            self.assertEqual(_read(os.path.join(memories, name)), f"agent-owned {name}\n")
+
+    def test_global_no_project_still_wins(self):
+        self.enable()
+        os.makedirs(self.env["HERMES_HOME"], exist_ok=True)
+        with open(self.soul, "w") as fh:
+            fh.write("You are a terse assistant.\n")
+        os.environ["LEOS_AGENT_NO_PROJECT"] = "1"
+        self.addCleanup(os.environ.pop, "LEOS_AGENT_NO_PROJECT", None)
+        self.write(title="Global fact")
+        statuses = {t["harness"]: t["status"] for t in self.memory.project()}
+        self.assertEqual(statuses["hermes"], "skipped:disabled")
+        self.assertNotIn(self.memory.BEGIN, _read(self.soul))
 
 
 class TestDataRoot(MemoryCase):
