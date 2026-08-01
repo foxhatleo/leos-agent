@@ -42,6 +42,23 @@ def _validate(config):
     harnesses = set(config["harnesses"])
     for harness, rows in config["harnesses"].items():
         for tier in rows.get("absentTiers", ()):
+            # Two conditions, and collapse alone is not enough.
+            #
+            # Dropping a tier drops its roles. The ceiling tier is the only one
+            # whose role exists *solely* to be stronger than the rung below —
+            # `expert` cannot break a deadlock a collapsed Opus already lost, so
+            # when it collapses it has no remaining purpose. Every other role
+            # keeps its job through a collapse: "routing between collapsed rungs
+            # buys role, not power" is the policy's own line. Sonnet and Haiku
+            # share a model on two harnesses today, and declaring Sonnet absent
+            # there would silently delete `implementer` — a real rung with a
+            # real job — which is exactly the failure this whole rule replaced.
+            if tier != TIERS[0]:
+                raise ValueError(
+                    f"{harness}: tier {tier!r} is declared absent, but only the ceiling "
+                    f"tier ({TIERS[0]!r}) can be — every other rung's roles keep their "
+                    "job through a collapse"
+                )
             twins = [t for t in TIERS if t != tier and rows[t]["model"] == rows[tier]["model"]]
             if not twins:
                 raise ValueError(
@@ -215,12 +232,28 @@ def _skill_notes(config, harness):
     token appears in a non-Claude mapping.
     """
     skills = config.get("skills", {})
+    reasons = skills.get("reasons", {})
     missing = set(skills.get("exclude", {}).get(harness, ()))
     if harness != "claude":
         missing |= set(skills.get("claudeOnly", ()))
     if not missing:
-        return ""
-    reasons = skills.get("reasons", {})
+        # Claude's appendix used to end here, silent in both directions: it
+        # never listed what only it has, and the exclusion list renders only
+        # for the others. A Claude session could not tell from its own mapping
+        # which of its skills do not travel.
+        exclusive = sorted(set(skills.get("claudeOnly", ())))
+        if not exclusive:
+            return ""
+        lines = ["", "## Leo skills only available here", ""]
+        for name in exclusive:
+            lines.append(f"- `leo:{name}` — {reasons.get(name, 'not portable to other harnesses')}.")
+        lines.append("")
+        lines.append(
+            "Every other skill in the policy's Skill index is registered on every "
+            "harness and behaves the same. These are not, so a procedure that "
+            "leans on one of them does not transfer."
+        )
+        return "\n".join(lines) + "\n"
     lines = ["", "## Leo skills not available here", ""]
     for name in sorted(missing):
         lines.append(f"- `leo:{name}` — {reasons.get(name, 'not portable to this harness')}.")

@@ -24,3 +24,12 @@
 Visual evidence here: the Browser pane (start or attach a preview, then take a screenshot), an attached Chrome, or the iOS Simulator control tool; some arrive only after a tool search, so an empty tool list is not proof of absence. When no rung answers, leo:visual-verification requires the unverified-change warning in place of a done report.
 
 Memory projection here writes to the per-user `CLAUDE.md` in the Claude config directory. Only global-scope facts are projected — every per-user surface loads in every repository, so repo facts would leak across projects; they reach the model through the session context block instead. Leo's block is marker-delimited; the rest of the file is untouched.
+
+## Leo skills only available here
+
+- `leo:attach-pr` — its entire purpose is Claude Code Desktop's PR-card detector, which no other harness has, and it reaches its resolver through a Claude-only skill-directory placeholder.
+- `leo:resolve-ticket` — needs plugin-path placeholders, a pinned Claude model, and Claude-only subagent, worktree, and question tools.
+- `leo:review-pr` — its whole mechanism is a script reached through a Claude-only skill-directory placeholder, plus a pinned Claude model.
+- `leo:watch-review` — pinned Claude model, and it drives review-pr through Claude Code's own skill-invocation tool.
+
+Every other skill in the policy's Skill index is registered on every harness and behaves the same. These are not, so a procedure that leans on one of them does not transfer.

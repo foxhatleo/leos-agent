@@ -97,7 +97,7 @@ class TestV4Layout(unittest.TestCase):
 
         # The manifest is entirely hand-maintained (the renderer no longer
         # writes any part of it), and Claude alone reads both skill roots.
-        # Dropping ./skills-claude/ would silently stop shipping the three
+        # Dropping ./skills-claude/ would silently stop shipping the
         # operational skills with the rest of the suite still green.
         self.assertEqual(manifest["skills"], ["./skills/", "./skills-claude/"])
 

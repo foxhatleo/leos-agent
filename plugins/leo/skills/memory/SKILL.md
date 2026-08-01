@@ -56,7 +56,9 @@ A closed, named list. Outside it the default holds — no free pass by analogy.
 
 1. **Task state** — anything true only until this task ends. Branch names, PR
    numbers, what you are about to do next. That belongs in machine-local JSON
-   via `${CLAUDE_PLUGIN_ROOT}/scripts/state.py`, not here.
+   via `${CLAUDE_PLUGIN_ROOT}/scripts/state.py`, not here. (`${CLAUDE_PLUGIN_ROOT}`
+   is the Claude Code spelling of the plugin root and is not substituted into
+   this text; leo:delegation's ledger section gives the per-harness forms.)
 2. **Re-readable facts** — anything one search away in the working tree. The
    repository is not something to memorize.
 3. **Your own conclusions** — an analysis, a diagnosis, a plan. A memory

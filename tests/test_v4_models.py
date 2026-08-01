@@ -1,5 +1,7 @@
 """Canonical model matrix and generated adapter contracts."""
 
+import copy
+import importlib.util
 import json
 import os
 import subprocess
@@ -11,6 +13,13 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLUGIN = os.path.join(REPO, "plugins", "leo")
 MODELS = os.path.join(PLUGIN, "config", "models.json")
 RENDERER = os.path.join(PLUGIN, "scripts", "render_adapters.py")
+
+
+def _renderer():
+    spec = importlib.util.spec_from_file_location("leo_render_adapters", RENDERER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class TestModelMatrix(unittest.TestCase):
@@ -133,6 +142,51 @@ class TestModelMatrix(unittest.TestCase):
             # never interpolates plugin userConfig into agent frontmatter.
             self.assertIn(f"model: {self.data['harnesses']['claude'][tier]['model']}\n", claude)
             self.assertIn("model: inherit", cursor)
+
+    def test_validate_rejects_absenting_a_non_ceiling_tier(self):
+        """Collapse alone does not justify absence.
+
+        Sonnet and Haiku already share a model on OpenCode and Hermes, so a
+        collapse-only rule would happily accept `absentTiers: ["sonnet"]` and
+        silently delete `implementer` — a real rung with a real job. Only the
+        ceiling tier's role exists solely to be stronger than the rung below.
+        """
+        renderer = _renderer()
+        config = copy.deepcopy(self.data)
+        opencode = config["harnesses"]["opencode"]
+        self.assertEqual(opencode["sonnet"]["model"], opencode["haiku"]["model"],
+                         "precondition: sonnet is genuinely collapsed here")
+        opencode["absentTiers"] = ["sonnet"]
+        with self.assertRaises(ValueError) as caught:
+            renderer._validate(config)
+        self.assertIn("only the ceiling", str(caught.exception))
+
+    def test_validate_rejects_an_absent_tier_that_did_not_collapse(self):
+        renderer = _renderer()
+        config = copy.deepcopy(self.data)
+        config["harnesses"]["opencode"]["fable"]["model"] = "some/distinct-model"
+        with self.assertRaises(ValueError) as caught:
+            renderer._validate(config)
+        self.assertIn("has a model of its own", str(caught.exception))
+
+    def test_validate_rejects_an_unanswered_capability(self):
+        renderer = _renderer()
+        config = copy.deepcopy(self.data)
+        del config["capabilities"][0]["values"]["cursor"]
+        with self.assertRaises(ValueError) as caught:
+            renderer._validate(config)
+        self.assertIn("unanswered", str(caught.exception))
+
+    def test_validate_rejects_a_mode_outside_its_enum(self):
+        renderer = _renderer()
+        config = copy.deepcopy(self.data)
+        config["capabilities"][0]["values"]["cursor"]["mode"] = "telepathy"
+        with self.assertRaises(ValueError) as caught:
+            renderer._validate(config)
+        self.assertIn("not one of", str(caught.exception))
+
+    def test_the_shipped_config_validates(self):
+        _renderer()._validate(self.data)
 
     def test_claude_manifest_declares_no_model_user_config(self):
         manifest_path = os.path.join(PLUGIN, ".claude-plugin", "plugin.json")

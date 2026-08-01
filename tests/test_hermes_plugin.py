@@ -15,6 +15,10 @@ ENTRYPOINT = os.path.join(REPO, "__init__.py")
 # next and quietly stops being injected on Hermes.
 HEADROOM_FLOOR = 500
 
+# Kept as a literal so a regression that re-registers one is caught by name,
+# and checked against config below so the literal cannot go stale.
+CLAUDE_ONLY_NAMES = ("attach-pr", "review-pr", "resolve-ticket", "watch-review")
+
 
 def _load_plugin():
     spec = importlib.util.spec_from_file_location("leo_hermes_plugin", ENTRYPOINT)
@@ -73,9 +77,17 @@ class TestHermesPlugin(unittest.TestCase):
     def test_non_portable_skills_are_never_registered(self):
         """Asserted by name, not derived — a derived expectation would
         happily absorb a regression that re-registered all of them."""
-        for name in ("review-pr", "resolve-ticket", "watch-review"):
+        for name in CLAUDE_ONLY_NAMES:
             with self.subTest(skill=name):
                 self.assertNotIn(name, self.ctx.skills)
+
+    def test_the_named_exclusions_cover_every_claude_only_skill(self):
+        """The list above was three names when config had four: attach-pr was
+        never asserted. Keeping the by-name assertion (for the reason its own
+        docstring gives) while checking the list itself for completeness.
+        """
+        with open(os.path.join(REPO, "plugins", "leo", "config", "models.json"), encoding="utf-8") as fh:
+            self.assertEqual(set(CLAUDE_ONLY_NAMES), set(json.load(fh)["skills"]["claudeOnly"]))
 
     def test_policy_reaches_hermes_as_a_skill(self):
         """Hermes accepts a pre_llm_call hook and never invokes it (upstream

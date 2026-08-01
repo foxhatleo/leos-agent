@@ -304,6 +304,61 @@ class TestModelPerAgent(unittest.TestCase):
                 self.assertNotIn("effort", fm)
 
 
+class TestPluginRootDisclosure(unittest.TestCase):
+    """`${CLAUDE_PLUGIN_ROOT}` is substituted into the policy body only, never
+    into skill bodies — so a portable skill that spells it must also say so, or
+    point at the skill that does. delegation and doctor already carried the
+    note; memory used the token four times and said nothing.
+
+    skills-claude/ is exempt by construction: those skills only ever run where
+    the Claude spelling is literally correct.
+    """
+
+    def test_every_portable_skill_using_the_token_discloses_it(self):
+        for name in sorted(EXPECTED_SKILL_DIRS):
+            with open(os.path.join(SKILLS_DIR, name, "SKILL.md"), encoding="utf-8") as fh:
+                text = fh.read()
+            if "${CLAUDE_PLUGIN_ROOT}" not in text:
+                continue
+            with self.subTest(skill=name):
+                self.assertTrue(
+                    "Claude Code spelling" in text or "leo:delegation" in text,
+                    f"{name} spells ${{CLAUDE_PLUGIN_ROOT}} without disclosing that it "
+                    "is the Claude spelling or pointing at leo:delegation",
+                )
+
+
+class TestRoleAccess(unittest.TestCase):
+    """`access` in config drives what the renderer emits — Cursor's
+    `readonly: true` and OpenCode's `permission.edit: deny`. The role prompt's
+    `tools:` line is what Claude Code actually enforces. They describe the same
+    fact and were never checked against each other, so a role could have been
+    declared read-only in config while shipping Write and Edit on Claude.
+    """
+
+    def test_access_matches_the_prompt_tool_list(self):
+        with open(MODEL_CONFIG, encoding="utf-8") as fh:
+            config = json.load(fh)
+        for role, spec in config["roles"].items():
+            with self.subTest(role=role):
+                fm = parse_frontmatter(os.path.join(AGENTS_DIR, f"{role}.md"))
+                tools = {t.strip() for t in fm.get("tools", "").split(",")}
+                writes = bool(tools & {"Write", "Edit", "NotebookEdit"})
+                self.assertEqual(
+                    spec["access"] == "write", writes,
+                    f"{role}: config says {spec['access']}, prompt tools say "
+                    f"{'write' if writes else 'read-only'}",
+                )
+
+    def test_access_values_are_a_closed_set(self):
+        with open(MODEL_CONFIG, encoding="utf-8") as fh:
+            config = json.load(fh)
+        for role, spec in config["roles"].items():
+            with self.subTest(role=role):
+                self.assertIn(spec["access"], {"read-only", "write"})
+                self.assertIn(spec["tier"], {"fable", "opus", "sonnet", "haiku"})
+
+
 class TestAgentFrontmatterKeySubset(unittest.TestCase):
     def test_keys_subset(self):
         for f in agent_files():
@@ -676,9 +731,9 @@ class TestNoOrphanSkills(unittest.TestCase):
 
         own_skill_md = {name: skill_path(name) for name in skill_dirs()}
 
-        # Only process skills form the cross-link DAG; operational skills
-        # (review-pr, resolve-ticket, watch-review) are user-invoked entry
-        # points and legitimately have no inbound leo: reference.
+        # Only process skills form the cross-link DAG; the operational skills
+        # and setup are user-invoked entry points and legitimately have no
+        # inbound leo: reference.
         for name in sorted(PROCESS_SKILLS):
             pattern = re.compile(r"leo:" + re.escape(name) + r"(?![a-z-])")
             own_path = own_skill_md.get(name)
@@ -700,6 +755,26 @@ class TestPolicySkillIndex(unittest.TestCase):
         for name in sorted(PROCESS_SKILLS):
             with self.subTest(skill=name):
                 self.assertIn(f"leo:{name}", text)
+
+    def test_policy_names_every_claude_only_skill_and_counts_them_right(self):
+        """The policy said "Three operational skills" and named three of four
+        — attach-pr was missing from the sentence while the generated mappings
+        listed it. Nothing asserted either the names or the count word, so the
+        body drifted from config the moment a fourth skill was added.
+        """
+        with open(POLICY_FILE, encoding="utf-8") as fh:
+            text = fh.read()
+        with open(MODEL_CONFIG, encoding="utf-8") as fh:
+            names = json.load(fh)["skills"]["claudeOnly"]
+
+        for name in names:
+            with self.subTest(skill=name):
+                self.assertIn(f"leo:{name}", text)
+        words = {1: "One", 2: "Two", 3: "Three", 4: "Four", 5: "Five", 6: "Six"}
+        self.assertIn(
+            f"{words[len(names)]} operational skills", text,
+            f"the policy must say {words[len(names)]} — there are {len(names)}",
+        )
 
 
 class TestPerSkillTokens(unittest.TestCase):

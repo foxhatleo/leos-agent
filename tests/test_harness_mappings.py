@@ -45,6 +45,20 @@ LEAKED_TOKENS = ("opus[1m]", "sonnet[1m]", "CLAUDE_PLUGIN_ROOT")
 
 NON_CLAUDE_HARNESSES = tuple(h for h in HARNESSES if h != "claude")
 
+# One literal, shared by the mappings and by worktrees/SKILL.md, so renaming
+# the convention cannot leave the two describing different directories.
+WORKTREE_PATH = ".claude/worktrees/"
+
+
+MODEL_CONFIG = os.path.join(REPO, "plugins", "leo", "config", "models.json")
+
+
+def _config():
+    import json
+
+    with open(MODEL_CONFIG, encoding="utf-8") as fh:
+        return json.load(fh)
+
 
 def _path(harness):
     return os.path.join(REFERENCES_DIR, f"{harness}-mapping.md")
@@ -116,6 +130,86 @@ class TestAntiLeak(unittest.TestCase):
             for token in LEAKED_TOKENS:
                 with self.subTest(harness=harness, token=token):
                     self.assertNotIn(token, text)
+
+
+class TestCapabilityMatrix(unittest.TestCase):
+    """The generic guard. Per-harness prose is what let EnterWorktree, the
+    workflow runner and SendMessage go undisclosed on three harnesses each:
+    nothing forces a paragraph nobody wrote. A row answered by every harness
+    cannot go missing from one of them without failing here.
+    """
+
+    def test_every_capability_row_is_answered_in_every_mapping(self):
+        config = _config()
+        for harness in HARNESSES:
+            text = _read(harness)
+            for row in config["capabilities"]:
+                with self.subTest(harness=harness, row=row["key"]):
+                    self.assertIn(f"| {row['label']} |", text)
+                    self.assertIn(row["values"][harness]["note"], text)
+
+    def test_worktree_tooling_is_disclosed_everywhere(self):
+        """Was stated only in the OpenCode mapping, while worktrees/SKILL.md
+        names the Claude tools and the path convention to all five."""
+        self.assertIn("EnterWorktree", _read("claude"))
+        for harness in NON_CLAUDE_HARNESSES:
+            with self.subTest(harness=harness):
+                text = _read(harness)
+                self.assertNotIn("EnterWorktree", text)
+                self.assertIn(WORKTREE_PATH, text)
+
+    def test_the_worktree_path_convention_matches_the_skill(self):
+        """One shared literal, so renaming the convention breaks loudly."""
+        with open(os.path.join(SKILLS_DIR, "worktrees", "SKILL.md"), encoding="utf-8") as fh:
+            self.assertIn(WORKTREE_PATH, fh.read())
+
+    def test_workflow_runner_is_disclosed_everywhere(self):
+        self.assertIn("cost-tiered-fix.js", _read("claude"))
+        for harness in NON_CLAUDE_HARNESSES:
+            with self.subTest(harness=harness):
+                self.assertIn("Workflow runner", _read(harness))
+
+    def test_follow_up_tool_is_disclosed_everywhere(self):
+        """SendMessage sits in the portable delegation skill; before the
+        matrix, no mapping said whether it existed on any harness."""
+        self.assertIn("SendMessage", _read("claude"))
+        for harness in NON_CLAUDE_HARNESSES:
+            with self.subTest(harness=harness):
+                self.assertIn("none established", _read(harness))
+
+    def test_opencode_workflow_note_matches_what_the_package_ships(self):
+        """The tarball and the claim have to agree in whichever direction."""
+        import json
+
+        with open(os.path.join(REPO, "plugins", "leo", "package.json"), encoding="utf-8") as fh:
+            files = json.load(fh)["files"]
+        text = _read("opencode")
+        if any(entry.rstrip("/") == "workflows" for entry in files):
+            self.assertIn("nothing here executes it", text)
+            self.assertNotIn("no `cost-tiered-fix.js` here", text)
+        else:
+            self.assertIn("no `cost-tiered-fix.js` here", text)
+
+
+class TestClaudeExclusiveSkills(unittest.TestCase):
+    """Claude's appendix used to have no skills section in either direction:
+    it never named what only it has, and the exclusion list is rendered only
+    for the others. A Claude session could not tell from its own mapping which
+    skills do not travel."""
+
+    def test_claude_mapping_enumerates_its_exclusive_skills(self):
+        text = _read("claude")
+        for name in _config()["skills"]["claudeOnly"]:
+            with self.subTest(skill=name):
+                self.assertIn(f"`leo:{name}`", text)
+
+    def test_other_mappings_list_them_as_unavailable(self):
+        for harness in NON_CLAUDE_HARNESSES:
+            text = _read(harness)
+            self.assertIn("## Leo skills not available here", text)
+            for name in _config()["skills"]["claudeOnly"]:
+                with self.subTest(harness=harness, skill=name):
+                    self.assertIn(f"`leo:{name}`", text)
 
 
 class TestCrossReferences(unittest.TestCase):

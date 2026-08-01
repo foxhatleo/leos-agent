@@ -53,7 +53,7 @@ a report that hedges across two of them.
 |---|---|---|
 | `done` | Work finished, matches the brief | Verify against artifacts — see leo:verification — never take the self-report at face value |
 | `concerns` | Finished, but flags something worth a second look | Read the concerns before accepting; they're often the real finding |
-| `needs-context` | Blocked on missing information you can supply | Send the missing piece to the same agent (SendMessage) so it keeps the context it already built; cold re-dispatch only if that agent is gone. Either way **once** — a second needs-context on the same gap means the brief itself is broken, escalate the tier |
+| `needs-context` | Blocked on missing information you can supply | Send the missing piece to the same agent (`SendMessage` on Claude Code — elsewhere see the *Follow-up to a live agent* row of your mapping, and where none is established, cold re-dispatch with the context restated is the whole mechanism) so it keeps the context it already built. Either way **once** — a second needs-context on the same gap means the brief itself is broken, escalate the tier |
 | `blocked` | Blocked on something you can't hand over inline | Resolve the blocker, or escalate per the ladder — never a silent same-tier retry |
 
 `needs-context` and `blocked` look similar; the test is whether the missing

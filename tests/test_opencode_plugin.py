@@ -6,6 +6,7 @@ statically, in the style of tests/test_workflow_static.py.
 Run: python3 -m unittest tests.test_opencode_plugin -v
 """
 
+import copy
 import json
 import os
 import shutil
@@ -24,8 +25,18 @@ AGENTS_JSON = os.path.join(PAYLOAD, "adapters", "opencode", "agents.json")
 PLUGIN_JS = os.path.join(PAYLOAD, "adapters", "opencode", "plugin.js")
 PACKAGE_JSON = os.path.join(PAYLOAD, "package.json")
 
-READ_ONLY = {"expert", "explore", "investigator", "planner", "reviewer"}
 DENIED_RM = {"rm -rf ~", "rm -rf ~/*", "rm -rf /", "rm -rf /*"}
+
+
+def _read_only_roles():
+    """Derived from config, not restated here.
+
+    A literal set in this file was one of three independent copies of the same
+    fact (the renderer held another; the role prompts' tools: lines are the
+    third and only enforceable one). test_consistency ties access to the
+    prompts; this ties the generated roster to access.
+    """
+    return {r for r, s in _load_config()["roles"].items() if s["access"] == "read-only"}
 
 
 def _load_config():
@@ -56,10 +67,36 @@ def _read_plugin_js_code():
 
 
 class TestOpenCodeAgentsJson(unittest.TestCase):
-    def test_exactly_six_roles_no_expert(self):
-        agents = _load_agents()
-        self.assertEqual(len(agents), 6)
-        self.assertNotIn("expert", agents)
+    def test_roster_is_every_role_whose_tier_is_not_declared_absent(self):
+        """Intent-derived, not a magic count.
+
+        The old assertion was `len(agents) == 6`, which does fail if a role
+        goes missing — but with the message "6 != 5", which reads as an
+        off-by-one and invites the next person to edit the 6 to a 5.
+        """
+        config = _load_config()
+        absent = set(config["harnesses"]["opencode"].get("absentTiers", ()))
+        expected = {r for r, s in config["roles"].items() if s["tier"] not in absent}
+        self.assertEqual(set(_load_agents()), expected)
+        self.assertNotIn("expert", _load_agents())
+
+    def test_a_tier_collapse_cannot_silently_drop_a_role(self):
+        """The regression the old model-identity rule would have shipped.
+
+        Point sonnet at the opus model and `implementer` used to vanish from
+        the roster, because the rule dropped any role whose tier resolved to
+        the opus model rather than any role whose tier was declared absent.
+        """
+        sys.path.insert(0, os.path.join(PAYLOAD, "scripts"))
+        import render_adapters
+
+        config = copy.deepcopy(_load_config())
+        opencode = config["harnesses"]["opencode"]
+        opencode["sonnet"]["model"] = opencode["opus"]["model"]
+        agents = json.loads(render_adapters._opencode_agents(config))
+        self.assertIn("implementer", agents)
+        self.assertIn("executor", agents)
+        self.assertNotIn("expert", agents, "fable is still the only declared-absent tier")
 
     def test_every_model_openrouter_prefixed_and_matches_config(self):
         config = _load_config()
@@ -75,7 +112,7 @@ class TestOpenCodeAgentsJson(unittest.TestCase):
         agents = _load_agents()
         for role, agent in agents.items():
             with self.subTest(role=role):
-                if role in READ_ONLY:
+                if role in _read_only_roles():
                     self.assertEqual(agent["permission"], {"edit": "deny"})
                 else:
                     self.assertEqual(
