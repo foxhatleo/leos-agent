@@ -16,13 +16,16 @@ Exit code is 0 for "ok" and 1 otherwise, so callers can branch on it directly.
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
+from hashlib import sha256
 
 PR_NUM_RE = re.compile(r"^#?(\d+)$")
-PR_URL_RE = re.compile(r"^https?://[^/]*github\.com/([^/]+)/([^/]+)/pull/(\d+)")
+PR_URL_RE = re.compile(r"^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull/([1-9]\d*)$")
 TICKET_RE = re.compile(r"^([A-Za-z][A-Za-z0-9]*)-(\d+)$")
+SAFE_REF_RE = re.compile(r"^(?!-)[A-Za-z0-9][A-Za-z0-9._/-]*$")
 
 PR_FIELDS = "number,url,headRefName,baseRefName,state,title"
 
@@ -46,6 +49,36 @@ def die(message):
 def emit(payload):
     print(json.dumps(payload, indent=2))
     sys.exit(0 if payload.get("status") == "ok" else 1)
+
+
+def is_safe_pr_url(url):
+    """Accept only a canonical public GitHub pull-request URL."""
+    return isinstance(url, str) and bool(PR_URL_RE.fullmatch(url))
+
+
+def is_safe_ref(ref):
+    """Keep refs shell-safe *and* ask Git to enforce its ref grammar."""
+    if not isinstance(ref, str) or not SAFE_REF_RE.fullmatch(ref):
+        return False
+    rc, _, _ = run(["git", "check-ref-format", "--branch", ref])
+    return rc == 0
+
+
+def suggested_worktree(root, branch):
+    """A readable name with a stable digest prevents slash-to-dash collisions."""
+    readable = branch.replace("/", "-")
+    digest = sha256(branch.encode("utf-8")).hexdigest()[:10]
+    return os.path.join(root, ".claude", "worktrees", f"{readable}-{digest}")
+
+
+def build_attach_command(workdir, pr_url, base_ref, branch):
+    """Build the intentional compound attach command with every value quoted."""
+    return (
+        'gh() { echo "$PR_URL"; }; '
+        f"cd {shlex.quote(workdir)}; "
+        f"PR_URL={shlex.quote(pr_url)} gh pr create --draft "
+        f"--base {shlex.quote(base_ref)} --head {shlex.quote(branch)}"
+    )
 
 
 # --- environment checks ----------------------------------------------------
@@ -194,7 +227,7 @@ def resolve(identifier, repo):
     """Return (pr_dict, note) or emit an error/ambiguous payload and exit."""
     ident = identifier.strip()
 
-    url_match = PR_URL_RE.match(ident)
+    url_match = PR_URL_RE.fullmatch(ident)
     if url_match:
         owner, name, number = url_match.groups()
         if f"{owner}/{name}".lower() != repo.lower():
@@ -321,8 +354,14 @@ def main():
 
     pr, note = resolve(sys.argv[1], repo)
     branch = pr.get("headRefName")
+    base_ref = pr.get("baseRefName") or "main"
+    pr_url = pr.get("url")
     if not branch:
         die(f"PR #{pr.get('number')} has no head branch recorded; cannot attach")
+    if not is_safe_ref(branch) or not is_safe_ref(base_ref):
+        die("PR branch or base ref contains unsupported shell-unsafe characters")
+    if not is_safe_pr_url(pr_url):
+        die("PR URL is not a canonical https://github.com/<owner>/<repo>/pull/<number> URL")
 
     workdir, kind = resolve_workdir(branch, root)
 
@@ -332,24 +371,17 @@ def main():
         "repo": repo,
         "branch": branch,
         "pr_number": pr.get("number"),
-        "pr_url": pr.get("url"),
-        "base_ref": pr.get("baseRefName") or "main",
+        "pr_url": pr_url,
+        "base_ref": base_ref,
         "pr_state": pr.get("state"),
         "pr_title": pr.get("title"),
         "workdir": workdir,
         "workdir_kind": kind,
         "repo_root": root,
-        "suggested_worktree": os.path.join(
-            root, ".claude", "worktrees", branch.replace("/", "-")
-        ),
+        "suggested_worktree": suggested_worktree(root, branch),
     }
     if workdir:
-        payload["attach_command"] = (
-            'gh() { echo "$PR_URL"; }; '
-            f"cd {workdir}; "
-            f"PR_URL={pr.get('url')} gh pr create --draft "
-            f"--base {payload['base_ref']} --head {branch}"
-        )
+        payload["attach_command"] = build_attach_command(workdir, pr_url, base_ref, branch)
     emit(payload)
 
 

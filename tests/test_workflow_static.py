@@ -136,6 +136,19 @@ class TestCallerTaskValidation(unittest.TestCase):
         # TestWorkflowBehavioral.test_invalid_tier_throws below (node-gated).
 
 
+class TestWorkflowUntrustedBoundaries(unittest.TestCase):
+    def test_run_id_has_a_small_safe_grammar(self):
+        text = _read()
+        self.assertIn("RUN_ID_RE", text)
+        self.assertIn("^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$", text)
+
+    def test_executor_branch_must_match_the_generated_name(self):
+        text = _read()
+        self.assertIn("isGeneratedBranch", text)
+        self.assertIn("refs/heads/", text)
+        self.assertIn("untrusted", text.lower())
+
+
 class TestNoUnreachableStage3NullGuard(unittest.TestCase):
     def test_stage3_no_longer_null_guards_run(self):
         text = _read()

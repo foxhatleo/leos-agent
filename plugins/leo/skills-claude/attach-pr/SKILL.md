@@ -146,9 +146,12 @@ Read `workdir_kind`:
   which errors on an existing branch). For a branch that exists only on origin, track it:
 
   ```bash
-  git -C <repo_root> fetch origin
-  git -C <repo_root> worktree add <suggested_worktree> <branch> \
-    || git -C <repo_root> worktree add <suggested_worktree> -b <branch> --track origin/<branch>
+  git -C '<repo_root>' check-ignore -q -- '<suggested_worktree>' || {
+    echo 'Refusing: worktree path must be gitignored'; exit 1;
+  }
+  git -C '<repo_root>' fetch origin
+  git -C '<repo_root>' worktree add '<suggested_worktree>' '<branch>' \
+    || git -C '<repo_root>' worktree add '<suggested_worktree>' -b '<branch>' --track 'origin/<branch>'
   ```
 
   Use that path as `workdir`. Do **not** bootstrap it — attaching runs nothing. If Leo wants
@@ -160,7 +163,7 @@ Run the resolver's `attach_command` as a **single** Bash call, substituting a wo
 created in step 3 if applicable:
 
 ```bash
-gh() { echo "$PR_URL"; }; cd <workdir>; PR_URL=<pr_url> gh pr create --draft --base <base_ref> --head <branch>
+gh() { echo "$PR_URL"; }; cd '<workdir>'; PR_URL='<pr_url>' gh pr create --draft --base '<base_ref>' --head '<branch>'
 ```
 
 Expected output is exactly the PR URL. Whether the card rendered is visible only to Leo, so

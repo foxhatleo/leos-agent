@@ -28,6 +28,10 @@ if (!args || (!args.goal && !Array.isArray(args.tasks))) {
   throw new Error('cost-tiered-fix needs args: { goal: "..." } or { tasks: [...] }')
 }
 
+const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/
+if (args.runId !== undefined && (typeof args.runId !== 'string' || !RUN_ID_RE.test(args.runId))) {
+  throw new Error('cost-tiered-fix: runId must match ^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$')
+}
 const BRANCH_PREFIX = args.runId ? `leos/fix-${args.runId}` : 'leos/fix'
 
 // Bare model aliases only — this is the documented subagent `model:` shape.
@@ -78,6 +82,30 @@ const VERDICT_SCHEMA = {
     issues: { type: 'array', items: { type: 'string' } },
   },
   required: ['approved', 'issues'],
+}
+
+function isGeneratedBranch(branch, expected) {
+  return typeof branch === 'string' && (branch === expected || new RegExp(`^${expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-[1-9]\\d*$`).test(branch))
+}
+
+function boundExecutorOutput(untrusted, expectedBranch) {
+  // Agent output is untrusted: keep only a bounded, typed report and never
+  // let it point verification at an arbitrary refs/heads/* branch.
+  if (!untrusted || typeof untrusted !== 'object') return null
+  const result = {
+    summary: typeof untrusted.summary === 'string' ? untrusted.summary.slice(0, 2000) : 'untrusted executor output omitted summary',
+    checks: typeof untrusted.checks === 'string' ? untrusted.checks.slice(0, 2000) : undefined,
+    confidence: ['high', 'medium', 'low'].includes(untrusted.confidence) ? untrusted.confidence : 'low',
+  }
+  if (untrusted.branch !== undefined) {
+    if (!isGeneratedBranch(untrusted.branch, expectedBranch)) {
+      result.summary = `${result.summary}\n[untrusted executor output: rejected unexpected branch]`.slice(0, 2000)
+      result.confidence = 'low'
+    } else {
+      result.branch = untrusted.branch
+    }
+  }
+  return result
 }
 
 function execPrompt(task, branch) {
@@ -155,7 +183,7 @@ const results = await pipeline(
       effort: 'low',
       isolation: 'worktree',
       schema: EXEC_SCHEMA,
-    }),
+    }).then(result => boundExecutorOutput(result, `${BRANCH_PREFIX}-${i}`)),
 
   // Stage 2 — escalation ladder:
   //   - confident result (non-null, confidence !== 'low') -> return as-is, no escalation.
@@ -176,7 +204,7 @@ const results = await pipeline(
         execPrompt(item.task, branch) +
           `\n\nA cheaper model already attempted this and reported: "${priorSummary}". Start from the task itself on a fresh branch off the same base as mainline — do NOT build on the earlier attempt's branch.`,
         { label: `escalate-${i}-${suffix}`, phase: 'Execute', model: tier, effort: effortFor(tier), isolation: 'worktree', schema: EXEC_SCHEMA },
-      )
+      ).then(result => boundExecutorOutput(result, branch))
     }
 
     let result
@@ -226,8 +254,8 @@ const results = await pipeline(
     const verdict = await agent(
       [
         `Review branch ${run.branch} against this task: "${item.task}".`,
-        `Diff scope: git diff $(git merge-base HEAD ${run.branch}) ${run.branch}`,
-        `First check the branch is reviewable: git rev-parse --verify ${run.branch} and git diff --stat $(git merge-base HEAD ${run.branch}) ${run.branch}. If the branch is missing or the diff is empty, return approved: false with issue "no reviewable diff".`,
+        `Diff scope: git diff $(git merge-base HEAD refs/heads/${run.branch}) refs/heads/${run.branch}`,
+        `First check the branch is reviewable: git rev-parse --verify refs/heads/${run.branch} and git diff --stat $(git merge-base HEAD refs/heads/${run.branch}) refs/heads/${run.branch}. If the branch is missing or the diff is empty, return approved: false with issue "no reviewable diff".`,
         `Executor self-report (do not trust it, verify it): ${run.summary} — checks: ${run.checks || 'none reported'}`,
       ].join('\n'),
       { label: `verify-${i}`, phase: 'Verify', agentType: 'leo:reviewer', model: TIERS.judge, effort: 'medium', schema: VERDICT_SCHEMA },

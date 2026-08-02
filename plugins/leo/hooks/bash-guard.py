@@ -54,6 +54,12 @@ def _norm_case(text):
     return text.casefold() if CASE_INSENSITIVE else text
 
 
+def _command_name(token):
+    """Filesystem case rules apply to executable lookup as well as paths."""
+    name = os.path.basename(token)
+    return name.casefold() if CASE_INSENSITIVE else name
+
+
 WRAPPERS = {"sudo", "command", "env", "nice", "nohup", "time", "doas", "exec"}
 CONTROL_PREFIXES = {"if", "then", "elif", "else", "while", "until", "for", "select", "do", "case"}
 RECURSIVE_SHORT = re.compile(r"^-[a-zA-Z]*[rR]")
@@ -140,11 +146,12 @@ def strip_wrappers(tokens):
     tokens = tokens[i:]
     if not tokens:
         return []
-    first = os.path.basename(tokens[0])
+    first = _command_name(tokens[0])
     function_prefix = bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*\(\)\{?", tokens[0]))
     if first in WRAPPERS or first in CONTROL_PREFIXES or function_prefix:
         for j in range(1, len(tokens)):
-            if os.path.basename(tokens[j]) in WATCHED or tokens[j].startswith("mkfs"):
+            watched = _command_name(tokens[j])
+            if watched in WATCHED or watched.startswith("mkfs"):
                 return tokens[j:]
         return []
     return tokens
@@ -193,7 +200,13 @@ def expand(target, cwd, cd_context):
         base = None
     if t and not t.startswith("/") and base:
         t = os.path.join(base, t)
-    return os.path.realpath(t) if t.startswith("/") else t
+    # POSIX permits an implementation-defined meaning for exactly `//...`.
+    # This guard treats every repeated-root spelling as the ordinary root so
+    # `//etc` cannot sidestep its critical-path classification.
+    if t.startswith("/"):
+        t = "/" + t.lstrip("/")
+        return os.path.realpath(t)
+    return t
 
 
 def brace_variants(path):
@@ -347,11 +360,40 @@ def check_git_clean(tokens, cwd, cd_context):
     as recursive rm. Block only when a force flag is present AND the resolved target (an
     explicit path argument, or the cwd/cd-context when none is given) is critical; reuses
     is_critical/expand rather than new path logic."""
-    if len(tokens) < 2 or tokens[1] != "clean":
+    # Git accepts global options before its subcommand. Parse their operands so
+    # `git -C / clean -fd` is treated as a clean rooted at `/`, not harmless git.
+    i = 1
+    git_cwd = cd_context
+    while i < len(tokens):
+        t = tokens[i]
+        if t == "--":
+            i += 1
+            break
+        if t == "-C":
+            if i + 1 >= len(tokens):
+                return None
+            git_cwd = expand(tokens[i + 1], cwd, cd_context)
+            i += 2
+            continue
+        if t.startswith("-C") and len(t) > 2:
+            git_cwd = expand(t[2:], cwd, cd_context)
+            i += 1
+            continue
+        if t in ("-c", "--config", "--exec-path", "--git-dir", "--work-tree", "--namespace"):
+            i += 2
+            continue
+        if t.startswith(("-c", "--config=", "--exec-path=", "--git-dir=", "--work-tree=", "--namespace=")):
+            i += 1
+            continue
+        if t.startswith("-"):
+            i += 1
+            continue
+        break
+    if i >= len(tokens) or tokens[i] != "clean":
         return None
     force = False
     targets = []
-    for t in tokens[2:]:
+    for t in tokens[i + 1:]:
         if t in ("-f", "--force"):
             force = True
         elif t.startswith("--"):
@@ -369,7 +411,7 @@ def check_git_clean(tokens, cwd, cd_context):
                 if candidate == UNKNOWN_PATH or is_critical(candidate):
                     return f"git clean with a force flag targeting '{raw}'"
         return None
-    base = cd_context or cwd
+    base = git_cwd or cwd
     if base and base not in (UNKNOWN_DIR, UNKNOWN_PATH) and is_critical(base):
         return "git clean with a force flag in a critical working directory"
     return None
@@ -394,7 +436,7 @@ def check_statement(statement, cwd, cd_context, depth=0):
         tokens = strip_wrappers(tokenize(stage))
         if not tokens:
             continue
-        cmd = os.path.basename(tokens[0])
+        cmd = _command_name(tokens[0])
 
         if cmd == "cd":
             cd_context = handle_cd(tokens, cwd, cd_context)

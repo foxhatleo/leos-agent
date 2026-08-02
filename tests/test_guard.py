@@ -79,6 +79,7 @@ BLOCK = [
     # --- root-level glob: strips to empty; `/*` survives coreutils --preserve-root (unlike `/`) ---
     "rm -rf /*",
     "rm -rf /.*",
+    "rm -rf //etc",                 # repeated-root spelling must not bypass critical-path checks
     "rm -fr /*",
     "chmod -R 777 /*",
     # --- IFS / metacharacter word-split evasion: glued to the flag, hides the target from shlex ---
@@ -94,6 +95,8 @@ BLOCK = [
     # --- bundled short-option cluster containing `c` (`-ec`/`-ce`/...) is still script mode ---
     'sh -ec "rm -rf /"',
     'bash -ce "rm -rf ~"',
+    "git -C / clean -fd",           # global git option precedes the destructive subcommand
+    "git --git-dir /tmp/any -C / clean -fd",
 ]
 
 ALLOW = [
@@ -179,6 +182,14 @@ class TestCaseInsensitiveFs(unittest.TestCase):
         cwd = os.path.join(HOME, "project")
         expected = 2 if _fs_case_insensitive(HOME) else 0
         for cmd in ("rm -rf /users", "rm -rf /USERS", "rm -rf /users/someoneelse/stuff"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(run(cmd, cwd), expected)
+
+    def test_executable_case_variants(self):
+        """On a case-insensitive filesystem, command names are case-insensitive too."""
+        cwd = os.path.join(HOME, "project")
+        expected = 2 if _fs_case_insensitive(HOME) else 0
+        for cmd in ("RM -rf /", "/bin/RM -rf /"):
             with self.subTest(cmd=cmd):
                 self.assertEqual(run(cmd, cwd), expected)
 
