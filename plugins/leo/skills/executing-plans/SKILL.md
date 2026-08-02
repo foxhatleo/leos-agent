@@ -5,7 +5,8 @@ description: >
   with a check at every batch boundary, plan-intent-wins-on-architecture /
   reality-wins-on-mechanics arbitration, and one fix-then-re-review cycle
   before stopping to report. Used by the implementer agent, or the main loop
-  when it executes a plan directly.
+  when it executes a plan directly. Use when a written plan is about to become
+  code. Do not use for open-ended work without a plan or for reviewing a diff.
 when_to_use: >
   A written plan (from planner, an issue, or Leo's own outline) is about to
   be turned into code. NOT for open-ended implementation with no plan

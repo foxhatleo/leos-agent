@@ -113,7 +113,8 @@ class TestOpenCodeAgentsJson(unittest.TestCase):
         for role, agent in agents.items():
             with self.subTest(role=role):
                 if role in _read_only_roles():
-                    self.assertEqual(agent["permission"], {"edit": "deny"})
+                    self.assertEqual(agent["permission"].get("edit"), "deny")
+                    self.assertEqual(set(agent["permission"].get("bash", {})), DENIED_RM)
                 else:
                     self.assertEqual(
                         set(agent["permission"].get("bash", {})), DENIED_RM

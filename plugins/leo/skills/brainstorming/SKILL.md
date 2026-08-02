@@ -7,7 +7,9 @@ description: >
   wide blast radius, hard to reverse, or that introduce new surface need
   genuine, viable alternatives with trade-offs weighed before any code gets
   written. Produces the chosen approach and its trade-offs, sized to the gate,
-  handed off to leo:writing-plans.
+  handed off to leo:writing-plans. Use when choosing an approach before
+  non-trivial code. Do not use for contained reversible tweaks, investigation,
+  or writing the plan itself.
 when_to_use: >
   Before starting non-trivial code: a new feature, a new integration surface,
   a schema or data-model change, anything that's expensive or awkward to

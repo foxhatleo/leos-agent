@@ -29,7 +29,7 @@ class TestModelMatrix(unittest.TestCase):
             cls.data = json.load(fh)
 
     def test_exact_defaults(self):
-        self.assertEqual(self.data["schemaVersion"], 3)
+        self.assertEqual(self.data["schemaVersion"], 4)
         self.assertEqual(
             self.data["roles"],
             {
@@ -37,6 +37,7 @@ class TestModelMatrix(unittest.TestCase):
                 "planner": {"tier": "opus", "access": "read-only"},
                 "investigator": {"tier": "opus", "access": "read-only"},
                 "reviewer": {"tier": "opus", "access": "read-only"},
+                "review-lens": {"tier": "sonnet", "access": "read-only"},
                 "implementer": {"tier": "sonnet", "access": "write"},
                 "executor": {"tier": "haiku", "access": "write"},
                 "explore": {"tier": "haiku", "access": "read-only"},
@@ -70,7 +71,7 @@ class TestModelMatrix(unittest.TestCase):
                 "fable": {"model": "gpt-5.6-sol", "effort": "max"},
                 "opus": {"model": "gpt-5.6-sol", "effort": "high"},
                 "sonnet": {"model": "gpt-5.6-terra", "effort": "medium"},
-                "haiku": {"model": "gpt-5.6-luna", "effort": "low"},
+                "haiku": {"model": "gpt-5.6-terra", "effort": "low"},
             },
         )
         self.assertEqual(harnesses["hermes"]["provider"], "openrouter")
@@ -168,6 +169,18 @@ class TestModelMatrix(unittest.TestCase):
         with self.assertRaises(ValueError) as caught:
             renderer._validate(config)
         self.assertIn("has a model of its own", str(caught.exception))
+
+    def test_collapse_uses_model_and_effort_identity(self):
+        """Codex's Fable and Opus share a model name but are distinct rungs."""
+        renderer = _renderer()
+        self.assertEqual(renderer._collapse_note(self.data["harnesses"]["codex"]), "")
+
+    def test_codex_live_agent_capabilities_are_recorded(self):
+        rows = {row["key"]: row["values"]["codex"] for row in self.data["capabilities"]}
+        self.assertEqual(rows["followUp"]["mode"], "tool")
+        self.assertIn("followup_task", rows["followUp"]["note"])
+        self.assertEqual(rows["askQuestion"]["mode"], "tool")
+        self.assertIn("Plan mode", rows["askQuestion"]["note"])
 
     def test_validate_rejects_an_unanswered_capability(self):
         renderer = _renderer()

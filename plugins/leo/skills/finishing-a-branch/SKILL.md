@@ -6,7 +6,9 @@ description: >
   a closed set of next steps — merge / PR / keep / discard — routes the
   chosen path through the right ordering (land the work before removing the
   worktree, remove the worktree before deleting the branch), and leaves the
-  repo clean.
+  repo clean. Use when reviewed implementation on a branch/worktree needs a
+  terminal disposition. Do not use to manage a worktree mid-task or replace
+  the review cycle.
 when_to_use: >
   A branch or worktree has reached "implementation done" and Leo needs to
   decide what happens to it. Fires after execute-then-review completes, or

@@ -6,7 +6,9 @@ description: >
   correctly, the closed-exemption-list structure the existing skills share,
   and where a personal skill file goes on each harness so it loads beside
   the plugin's own. Covers both skills that ship with the plugin and
-  personal ones kept outside it.
+  personal ones kept outside it. Use when authoring a skill or choosing its
+  personal load path. Do not use to decide whether a process needs a skill or
+  to change plugin packaging or loaders.
 when_to_use: >
   Writing a new skill, revising an existing one's frontmatter, or deciding
   where to put a personal skill so a harness picks it up. NOT for deciding
@@ -110,7 +112,12 @@ not obviously point at the omission:
 2. A row in the policy's skill index — keep it short, since that table is
    injected into every session on every harness and the smallest budget wins.
 3. At least one `leo:<name>` reference from some file other than its own body.
-4. The roster constants in the test suite, and the skill list in the README.
+4. The roster constants and metadata tests in the test suite, plus the
+   appropriate registration class: portable skills in `skills/`, Claude-only
+   skills in `skills-claude/`, and harness metadata under `agents/openai.yaml`
+   only when that skill needs Codex invocation policy. Keep the `leo:`
+   namespace in portable policy prose; OpenCode's generated copy uses
+   `leo-<name>` because it has no namespace.
 
 Write example tokens as `leo:<name>` with the angle brackets. A literal
 placeholder like a made-up skill name is scanned as a real reference and fails

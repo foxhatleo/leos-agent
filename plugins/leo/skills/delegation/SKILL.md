@@ -4,7 +4,8 @@ description: >
   Operational mechanics for dispatching subagents — a single spawn or a large
   fan-out — the companion to the policy's "Delegate the labor" section.
   Covers brief construction, model/effort pinning, the four-state return
-  contract, and ledger-backed progress tracking for long multi-agent runs.
+  contract, and ledger-backed progress tracking for long multi-agent runs. Use
+  when dispatching any subagent or fan-out. Do not use to choose a task's tier.
 when_to_use: >
   Any time work is routed to a subagent (explore, investigator, executor,
   implementer, reviewer, expert) rather than done inline — single dispatch or
@@ -36,8 +37,8 @@ version needs no follow-up question; the first invites three.
 ## Pin model and effort
 
 Every dispatch pins **model AND effort** from the routing table — opus for
-judges (reviewer, investigator), sonnet for execution (implementer, executor
-on normal work), haiku for mechanical work (executor on boilerplate). expert
+judges (reviewer, investigator), sonnet for normal implementation
+(implementer), haiku for mechanical work (executor). expert
 never appears in a fan-out — one at a time, never fanned. An unpinned call
 silently inherits the session's tier: in an opus session that means every
 executor spawn quietly runs at opus, and a ten-item fan-out burns
@@ -53,7 +54,7 @@ a report that hedges across two of them.
 |---|---|---|
 | `done` | Work finished, matches the brief | Verify against artifacts — see leo:verification — never take the self-report at face value |
 | `concerns` | Finished, but flags something worth a second look | Read the concerns before accepting; they're often the real finding |
-| `needs-context` | Blocked on missing information you can supply | Send the missing piece to the same agent (`SendMessage` on Claude Code — elsewhere see the *Follow-up to a live agent* row of your mapping, and where none is established, cold re-dispatch with the context restated is the whole mechanism) so it keeps the context it already built. Either way **once** — a second needs-context on the same gap means the brief itself is broken, escalate the tier |
+| `needs-context` | Blocked on missing information you can supply | Send the missing piece to the same agent (`SendMessage` on Claude Code, `followup_task` on Codex — elsewhere see the *Follow-up to a live agent* row of your mapping, and where none is established, cold re-dispatch with the context restated is the whole mechanism) so it keeps the context it already built. Either way **once** — a second needs-context on the same gap means the brief itself is broken, escalate the tier |
 | `blocked` | Blocked on something you can't hand over inline | Resolve the blocker, or escalate per the ladder — never a silent same-tier retry |
 
 `needs-context` and `blocked` look similar; the test is whether the missing
@@ -89,10 +90,11 @@ between "agent finished" and "ledger written" is exactly the gap this
 exists to close.
 
 `${CLAUDE_PLUGIN_ROOT}` above is the Claude Code spelling of the plugin root,
-and it is substituted into this text only there. On another harness, read the
-plugin-root form from that harness's appendix in the injected policy (Codex
-uses a real `$PLUGIN_ROOT` env var, Cursor `$CURSOR_PLUGIN_ROOT`) — the path
-after the root is identical everywhere.
+and it is substituted into this text only there. Codex exposes `$PLUGIN_ROOT`
+and Cursor `$CURSOR_PLUGIN_ROOT`. Hermes and OpenCode expose no root variable;
+their injected policy substitutes an absolute payload path into the `state.py`
+and `memory.py` commands, which is the discoverable source to reuse. Do not
+invent an environment variable where the harness exposes none.
 
 For a batch of independent, well-scoped fixes, don't hand-roll this loop —
 the reusable workflow at `${CLAUDE_PLUGIN_ROOT}/workflows/cost-tiered-fix.js`

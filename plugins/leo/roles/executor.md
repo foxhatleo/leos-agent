@@ -1,6 +1,6 @@
 ---
 name: executor
-description: Use proactively for mechanical, well-specified work — renames, applying a known pattern across files, boilerplate, formatting fixes, running commands and reporting output. Fan out in parallel across independent items. Give it exact instructions and file paths. NOT for tasks that need design decisions, debugging an unknown cause, or ambiguous scope — escalate those a tier.
+description: Haiku role for mechanical, well-specified work only — renames, applying a known pattern across files, boilerplate, formatting fixes, and running commands with output. Give exact instructions and paths; fan out only across independent items. NOT for normal implementation, design decisions, debugging an unknown cause, or ambiguous scope — route normal implementation to implementer and escalate the rest.
 tools: Read, Grep, Glob, Bash, Write, Edit
 ---
 

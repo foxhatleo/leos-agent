@@ -6,7 +6,7 @@
 | Fable | `gpt-5.6-sol` | max |
 | Opus | `gpt-5.6-sol` | high |
 | Sonnet | `gpt-5.6-terra` | medium |
-| Haiku | `gpt-5.6-luna` | low |
+| Haiku | `gpt-5.6-terra` | low |
 
 ## Capabilities here
 
@@ -18,17 +18,16 @@
 | Read-only roles | prompt only — a convention, never a guarantee; never route work here that depends on it |
 | Worktrees | no native tool — raw `git worktree` at `.claude/worktrees/<name>` |
 | Workflow runner | none — fan out by hand and keep the ledger in `<plugin-root>/scripts/state.py` |
-| Follow-up to a live agent | none established — re-dispatch cold with the context restated |
+| Follow-up to a live agent | `followup_task` to the same live agent; it retains the context it already built |
 | Skill names | `leo:<name>` |
+| Structured question to the user | Plan mode `request_user_input` — structured multiple-choice questions; outside Plan mode ask in plain text and default to changing nothing |
 
 Visual evidence here: the bundled browser plugin, else computer-use, else Playwright driven from the shell. When no rung answers, leo:visual-verification requires the unverified-change warning in place of a done report.
 
 Memory projection here writes to the per-user `AGENTS.md` in the Codex home directory. Only global-scope facts are projected — every per-user surface loads in every repository, so repo facts would leak across projects; they reach the model through the session context block instead. Leo's block is marker-delimited; the rest of the file is untouched.
 
-Tier collapse here: Fable≡Opus (`gpt-5.6-sol`) — routing between collapsed rungs buys role, not power. Fable is not a real rung: `expert` cannot break a deadlock a collapsed Opus already lost, so cap escalation at Opus and report.
-
 ## Leo skills not available here
 
 - `leo:attach-pr` — its entire product is a side effect in Claude Code Desktop's PR-card detector, which no other harness has — the same commands would run here, succeed, and produce nothing observable.
 
-Every other skill in the policy's Skill index is registered here and behaves the same, and so are the operational skills — `leo:review-pr`, `leo:resolve-ticket` and `leo:watch-review` all run on this harness. Where they name a capability the table above says is missing, take the fallback each one documents.
+Every other skill in the policy's Skill index is registered here and behaves the same, and so are the operational skills — `leo:resolve-ticket`, `leo:review-pr`, `leo:watch-review`, `leo:setup` all run on this harness. Where they name a capability the table above says is missing, take the fallback each one documents.

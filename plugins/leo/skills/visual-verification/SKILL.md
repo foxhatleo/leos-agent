@@ -6,7 +6,8 @@ description: >
   Detection walks a ranked ladder of whatever browser, preview, or simulator
   tooling this harness exposes; when nothing on the ladder answers, the change
   is reported with an explicit unverified warning instead of a completion
-  claim.
+  claim. Use when a person can see the changed result. Do not use for
+  non-rendered logic, an off feature flag, or as a replacement for tests.
 when_to_use: >
   A change whose result someone would notice by looking — layout, styling,
   on-screen text, a new view or route, a chart, a generated image or rendered

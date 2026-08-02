@@ -5,7 +5,9 @@ description: >
   behavior. Five named phases — Reproduce, Localize, Hypothesize, Prove, Fix —
   each with an exit criterion, so a fix never lands before the cause is
   pinned to file:line. Diagnosis is read-only judge work (investigator); the
-  fix happens separately, at the routed tier.
+  fix happens separately, at the routed tier. Use when a bug, failure, crash,
+  or surprising behavior needs diagnosis. Do not use for planned features,
+  reviewing a diff, or post-fix completion verification.
 when_to_use: >
   Any bug report, failing test, crash, stack trace, or "why does X happen"
   before proposing a fix — used by the investigator agent and by the main
@@ -61,7 +63,7 @@ you, and go again.
 
 After two failures on the same cause (two hypotheses tried and reverted, still
 no Prove), step up one tier rather than retrying at the same one — investigator
-haiku-assist steps to full investigator, investigator itself steps to a
+explore findings feed a full investigator, and investigator itself steps to a
 second, more evidence-fed pass, capped at Opus. A genuine deadlock, or two
 Opus verdicts on the same cause that disagree → `expert`, announced in one
 line ("escalating to expert: <question>") before it's invoked, never silent.

@@ -6,7 +6,9 @@ description: >
   machine-local state and the memory store live, and which skills shipped
   versus which this session can actually invoke. Disk facts come from a
   helper script; the context facts only the running session can answer, and
-  a disagreement between the two columns is the diagnosis.
+  a disagreement between the two columns is the diagnosis. Use when Leo asks
+  about Leo's loading, routing, or skill wiring. Do not use for project health
+  checks, project-code debugging, or unprompted inspection.
 when_to_use: >
   Leo asks whether the policy loaded, why routing or a skill is misbehaving,
   or invokes doctor by name after installing, updating, or switching harness.
@@ -37,9 +39,9 @@ argument, not a fault.
 
 `${CLAUDE_PLUGIN_ROOT}` is the Claude Code spelling. Codex exports
 `$PLUGIN_ROOT` and Cursor `$CURSOR_PLUGIN_ROOT`. On Hermes and OpenCode no
-plugin-root variable exists at all — but the policy already in your context had
-its placeholders substituted before injection, so the absolute path appears in
-its machine-local state paragraph. Read it from there. Being unable to locate
+plugin-root variable exists at all — the injected policy instead substitutes an
+absolute payload path into its `state.py` and `memory.py` commands. Read that
+command path from the policy as the discoverable source. Being unable to locate
 the payload at all is itself the first finding: the harness is not looking where
 the plugin was installed.
 
@@ -56,9 +58,11 @@ prove the policy arrived. Only you can see your own context.
    then points at models that do not exist here.
 2. **Which skills are actually invocable?** Compare your own skill list against
    the script's shipped roster. Mind the naming rule: most harnesses namespace
-   them as `leo:<name>`, while OpenCode registers the directory by path and
-   names each skill from its own frontmatter, so they appear bare there. A
-   skill that looks missing on OpenCode may simply be listed without a prefix.
+   them as `leo:<name>`, while OpenCode has no namespace and requires a
+   skill's frontmatter name to match its directory, so the plugin registers a
+   generated shadow copy with every skill renamed `leo-<name>`. A skill that
+   looks missing on OpenCode may simply be listed as `leo-<name>` rather than
+   `leo:<name>`.
 3. **Is memory present and delivered?** The script reports whether the store
    exists and whether each native surface received its generated copy. Whether
    those facts are in front of you right now is something only you can confirm.
@@ -85,7 +89,7 @@ useful, but never conclude "the hook failed this session" from it.
 | Policy present, mapping names another harness | detection resolved wrong, usually a stray plugin-root variable exported in an unrelated shell | unset it, restart the session |
 | Harness reported as `unknown` | no `--harness`, and this harness exports no plugin-root variable | re-run with `--harness <name>` read off your mapping heading |
 | Shipped roster exceeds what you can invoke | the harness cached an older payload, or the skills directory is not registered | update the plugin; on OpenCode check `opencode debug skill` for each skill's `location` |
-| Skills listed without the `leo:` prefix | OpenCode, working as designed | invoke them bare; not a fault |
+| Skills listed as `leo-<name>` instead of `leo:<name>` | OpenCode, working as designed | invoke them as `leo-<name>`; not a fault |
 | Tier names resolve to models this harness cannot run | mapping and harness disagree | same as row 2 |
 | Machine-local state not writable | the path override points somewhere unwritable | fix or unset it |
 | A skill is genuinely absent from disk | it was never added | see leo:writing-skills |

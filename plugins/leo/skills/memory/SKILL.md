@@ -5,7 +5,9 @@ description: >
   session and every plugin update. Covers what earns a place in the store,
   how a fact is written and revised, how to read one before acting on it,
   and when to throw one away. The store is canonical; each harness's own
-  memory surface receives a generated copy of the global facts.
+  memory surface receives a generated copy of the global facts. Use when a
+  durable preference, repo rule, decision, or machine quirk surfaces. Do not
+  use for current-task state or facts already recorded in the repository.
 when_to_use: >
   A fact surfaces that will still be true next month — a stated preference,
   a repo rule the code does not spell out, a settled decision, a machine

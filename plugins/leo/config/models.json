@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "capabilities": [
     {
       "key": "policyInjection",
@@ -106,7 +106,7 @@
       "values": {
         "claude": {
           "mode": "tools",
-          "note": "harness-enforced — the tool allowlist omits Write and Edit"
+          "note": "native edit denial — the tool allowlist omits Write and Edit; Bash remains shell-capable, so the read-only prompt and permission constraints are not a hard sandbox"
         },
         "codex": {
           "mode": "prompt",
@@ -122,7 +122,7 @@
         },
         "opencode": {
           "mode": "permission",
-          "note": "harness-enforced — generated `permission.edit: deny`, refused by OpenCode itself"
+          "note": "native edit denial — generated `permission.edit: deny`, refused by OpenCode itself; Bash remains shell-capable, so the read-only prompt and permissions are not a hard sandbox"
         }
       }
     },
@@ -200,8 +200,8 @@
           "note": "`SendMessage` to the same agent, which keeps the context it already built"
         },
         "codex": {
-          "mode": "unknown",
-          "note": "none established — re-dispatch cold with the context restated"
+          "mode": "tool",
+          "note": "`followup_task` to the same live agent; it retains the context it already built"
         },
         "cursor": {
           "mode": "unknown",
@@ -222,6 +222,7 @@
       "label": "Skill names",
       "modes": [
         "prefixed",
+        "hyphenated",
         "bare"
       ],
       "values": {
@@ -242,13 +243,50 @@
           "note": "`leo:<name>`"
         },
         "opencode": {
-          "mode": "bare",
-          "note": "bare `<name>` — read every `leo:<x>` above as `<x>`"
+          "mode": "hyphenated",
+          "note": "`leo-<name>` — OpenCode has no skill namespace, so the adapter registers a renamed copy; read every `leo:<x>` above as `leo-<x>`"
+        }
+      }
+    },
+    {
+      "key": "askQuestion",
+      "label": "Structured question to the user",
+      "modes": [
+        "tool",
+        "none",
+        "unknown"
+      ],
+      "values": {
+        "claude": {
+          "mode": "tool",
+          "note": "`AskUserQuestion` — multi-choice, optional multi-select"
+        },
+        "codex": {
+          "mode": "tool",
+          "note": "Plan mode `request_user_input` — structured multiple-choice questions; outside Plan mode ask in plain text and default to changing nothing"
+        },
+        "cursor": {
+          "mode": "unknown",
+          "note": "none established — ask in plain text and default to changing nothing"
+        },
+        "hermes": {
+          "mode": "unknown",
+          "note": "none established — ask in plain text and default to changing nothing"
+        },
+        "opencode": {
+          "mode": "tool",
+          "note": "native `question` tool — multi-choice, single or multi-select"
         }
       }
     }
   ],
   "skills": {
+    "operational": [
+      "resolve-ticket",
+      "review-pr",
+      "watch-review",
+      "setup"
+    ],
     "claudeOnly": [
       "attach-pr"
     ],
@@ -262,6 +300,198 @@
     "reasons": {
       "attach-pr": "its entire product is a side effect in Claude Code Desktop's PR-card detector, which no other harness has — the same commands would run here, succeed, and produce nothing observable"
     }
+  },
+  "mcp": {
+    "_comment": "Servers leo:setup installs, and the vendor connectors it can offer. Every connector endpoint was confirmed against a vendor-owned documentation page; an endpoint nobody could confirm does not belong here.",
+    "servers": {
+      "context7": {
+        "label": "Context7 — library documentation",
+        "transport": "stdio",
+        "command": [
+          "npx",
+          "-y",
+          "@upstash/context7-mcp"
+        ],
+        "auth": "none",
+        "authNote": "keyless; set CONTEXT7_API_KEY for higher rate limits"
+      },
+      "playwright": {
+        "label": "Playwright — browser automation",
+        "transport": "stdio",
+        "command": [
+          "npx",
+          "-y",
+          "@playwright/mcp@latest"
+        ],
+        "auth": "none",
+        "authNote": "browsers may need `npx playwright install chromium` on first use"
+      },
+      "chrome-devtools": {
+        "label": "Chrome DevTools — live page inspection",
+        "transport": "stdio",
+        "command": [
+          "npx",
+          "-y",
+          "chrome-devtools-mcp@latest"
+        ],
+        "auth": "none",
+        "authNote": ""
+      },
+      "duckduckgo": {
+        "label": "DuckDuckGo — web search",
+        "transport": "stdio",
+        "command": [
+          "uvx",
+          "duckduckgo-mcp-server"
+        ],
+        "auth": "none",
+        "authNote": "needs uvx on PATH"
+      }
+    },
+    "core": {
+      "_comment": "Browser and search servers only where the harness has no native equivalent. Claude Code has Claude_Browser + WebSearch/WebFetch; Codex has browser_use/in_app_browser/computer_use and a native web_search; Cursor has Browser Preview.",
+      "claude": [
+        "context7"
+      ],
+      "codex": [
+        "context7"
+      ],
+      "cursor": [
+        "context7"
+      ],
+      "hermes": [
+        "context7",
+        "playwright",
+        "chrome-devtools",
+        "duckduckgo"
+      ],
+      "opencode": [
+        "context7",
+        "playwright",
+        "chrome-devtools",
+        "duckduckgo"
+      ]
+    },
+    "gating": {
+      "_comment": "OpenCode alone can gate MCP tools per agent. Heavy servers off globally, on only for the roles whose prompts actually reach for them.",
+      "opencode": {
+        "off": [
+          "context7",
+          "playwright",
+          "chrome-devtools"
+        ],
+        "agents": {
+          "build": [
+            "context7",
+            "playwright",
+            "chrome-devtools"
+          ],
+          "investigator": [
+            "context7",
+            "chrome-devtools"
+          ],
+          "planner": [
+            "context7"
+          ],
+          "implementer": [
+            "context7",
+            "playwright",
+            "chrome-devtools"
+          ]
+        }
+      }
+    },
+    "connectors": [
+      {
+        "key": "slack",
+        "label": "Slack",
+        "url": "https://mcp.slack.com/mcp",
+        "transport": "http",
+        "auth": "oauth",
+        "authNote": "a workspace admin must approve the MCP client for the workspace first"
+      },
+      {
+        "key": "sentry",
+        "label": "Sentry",
+        "url": "https://mcp.sentry.dev/mcp",
+        "transport": "http",
+        "auth": "oauth",
+        "authNote": "browser consent against your Sentry org, or a user auth token"
+      },
+      {
+        "key": "honeycomb",
+        "label": "Honeycomb",
+        "url": "https://mcp.honeycomb.io/mcp",
+        "transport": "http",
+        "auth": "oauth",
+        "authNote": "the team must be enrolled in Honeycomb Intelligence"
+      },
+      {
+        "key": "snowflake",
+        "label": "Snowflake",
+        "url": "",
+        "urlTemplate": "https://<org>-<account>.snowflakecomputing.com/api/v2/databases/<database>/schemas/<schema>/mcp-servers/<name>",
+        "transport": "http",
+        "auth": "oauth",
+        "authNote": "account-specific URL — must be supplied, never guessed; OAuth or a programmatic access token"
+      },
+      {
+        "key": "launchdarkly",
+        "label": "LaunchDarkly",
+        "url": "https://mcp.launchdarkly.com/mcp/launchdarkly",
+        "transport": "http",
+        "auth": "oauth",
+        "authNote": "browser consent on first connect"
+      },
+      {
+        "key": "linear",
+        "label": "Linear",
+        "url": "https://mcp.linear.app/mcp",
+        "transport": "http",
+        "auth": "oauth",
+        "authNote": "OAuth 2.1 with dynamic client registration"
+      },
+      {
+        "key": "atlassian",
+        "label": "Jira + Confluence (Atlassian Rovo)",
+        "url": "https://mcp.atlassian.com/v1/mcp/authv2",
+        "transport": "http",
+        "auth": "oauth",
+        "authNote": "one server covers Jira, Confluence, JSM, Bitbucket and Compass"
+      },
+      {
+        "key": "gmail",
+        "label": "Gmail",
+        "url": "https://gmailmcp.googleapis.com/mcp/v1",
+        "transport": "http",
+        "auth": "oauth",
+        "authNote": "Google OAuth consent"
+      },
+      {
+        "key": "gdrive",
+        "label": "Google Drive",
+        "url": "https://drivemcp.googleapis.com/mcp/v1",
+        "transport": "http",
+        "auth": "oauth",
+        "authNote": "Google OAuth consent"
+      },
+      {
+        "key": "granola",
+        "label": "Granola",
+        "url": "https://mcp.granola.ai/mcp",
+        "transport": "http",
+        "auth": "oauth",
+        "authNote": "browser consent on first connect"
+      },
+      {
+        "key": "vercel",
+        "label": "Vercel",
+        "url": "https://mcp.vercel.com",
+        "transport": "http",
+        "auth": "oauth",
+        "authNote": "browser consent on first connect"
+      }
+    ]
   },
   "visual": {
     "claude": "the Browser pane (start or attach a preview, then take a screenshot), an attached Chrome, or the iOS Simulator control tool; some arrive only after a tool search, so an empty tool list is not proof of absence",
@@ -292,6 +522,10 @@
     },
     "reviewer": {
       "tier": "opus",
+      "access": "read-only"
+    },
+    "review-lens": {
+      "tier": "sonnet",
       "access": "read-only"
     },
     "implementer": {
@@ -354,7 +588,7 @@
         "effort": "medium"
       },
       "haiku": {
-        "model": "gpt-5.6-luna",
+        "model": "gpt-5.6-terra",
         "effort": "low"
       }
     },

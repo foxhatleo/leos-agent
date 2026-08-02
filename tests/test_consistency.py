@@ -46,9 +46,14 @@ ALLOWED_AGENT_MODELS = {"haiku", "sonnet", "opus", "fable", "inherit"}
 # extended-context suffix IS valid. Same doc date.
 ALLOWED_SKILL_MODELS = ALLOWED_AGENT_MODELS | {"sonnet[1m]", "opus[1m]"}
 
+# review-lens is a canonical Sonnet prompt. Its literal model pin
+# is part of that reviewed prompt contract; the renderer still derives every
+# harness adapter from models.json.
+CANONICAL_ROLE_MODEL_PINS = {"review-lens": "sonnet"}
+
 EXPECTED_AGENT_STEMS = {
     "explore", "executor", "implementer", "investigator", "reviewer",
-    "expert", "planner",
+    "review-lens", "expert", "planner",
 }
 
 ALLOWED_FRONTMATTER_KEYS = {"name", "description", "model", "effort", "tools", "color", "skills"}
@@ -121,6 +126,7 @@ PER_ROLE_STATUS_LINE = {
     # reviewer: `concerns` is a non-blocking finding and `blocked` is a
     # needs-changes verdict, so both would collide with existing vocabulary.
     "reviewer": "status: done | needs-context",
+    "review-lens": "\"status\":\"done\"|\"needs-context\"",
     # expert: it is the ceiling, so `blocked` has nowhere to escalate to.
     "expert": "status: done | concerns | needs-context",
 }
@@ -305,7 +311,10 @@ class TestModelPerAgent(unittest.TestCase):
             fm = parse_frontmatter(os.path.join(AGENTS_DIR, f))
             with self.subTest(agent=stem):
                 self.assertIn(stem, config["roles"])
-                self.assertNotIn("model", fm)
+                if stem in CANONICAL_ROLE_MODEL_PINS:
+                    self.assertEqual(fm.get("model"), CANONICAL_ROLE_MODEL_PINS[stem])
+                else:
+                    self.assertNotIn("model", fm)
                 self.assertNotIn("effort", fm)
 
 
@@ -683,6 +692,18 @@ class TestSkillFrontmatter(unittest.TestCase):
                 )
 
 
+class TestPortableSkillDescriptionRouting(unittest.TestCase):
+    """Portable descriptions are the routing surface every harness receives."""
+
+    def test_when_to_use_skills_embed_positive_and_negative_routing(self):
+        for name in sorted(EXPECTED_SKILL_DIRS - {"using-leo"}):
+            with self.subTest(skill=name):
+                fm = parse_frontmatter(skill_path(name))
+                self.assertIn("when_to_use", fm)
+                self.assertIn("Use when", fm["description"])
+                self.assertIn("Do not use", fm["description"])
+
+
 class TestSkillRoster(unittest.TestCase):
     def test_skill_dir_set(self):
         self.assertEqual(skill_dirs(), EXPECTED_SKILL_DIRS | EXPECTED_CLAUDE_SKILL_DIRS)
@@ -801,15 +822,16 @@ class TestPolicySkillIndex(unittest.TestCase):
         """The count word was the half nothing checked."""
         with open(POLICY_FILE, encoding="utf-8") as fh:
             text = fh.read()
-        by_name = sorted(
-            (EXPECTED_SKILL_DIRS | EXPECTED_CLAUDE_SKILL_DIRS)
-            - PROCESS_SKILLS - {"using-leo"} - set(json.load(open(MODEL_CONFIG))["skills"]["claudeOnly"])
-        )
+        with open(MODEL_CONFIG, encoding="utf-8") as fh:
+            by_name = json.load(fh)["skills"]["operational"]
         words = {1: "One", 2: "Two", 3: "Three", 4: "Four", 5: "Five", 6: "Six"}
         self.assertIn(
             f"{words[len(by_name)]} operational skills", text,
             f"the policy must say {words[len(by_name)]} — the by-name skills are {by_name}",
         )
+        for name in by_name:
+            with self.subTest(skill=name):
+                self.assertIn(f"leo:{name}", text)
 
 
 class TestPerSkillTokens(unittest.TestCase):
@@ -838,7 +860,8 @@ class TestFourStateContractIsDeclaredByRoles(unittest.TestCase):
                 with open(os.path.join(AGENTS_DIR, f"{role}.md"), encoding="utf-8") as fh:
                     text = fh.read()
                 self.assertIn(line, text)
-                self.assertIn("leo:delegation", text)
+                if role != "review-lens":
+                    self.assertIn("leo:delegation", text)
 
     def test_delegation_documents_the_narrowed_roles(self):
         path = skill_path("delegation")
@@ -947,6 +970,10 @@ class TestReadmeRoster(unittest.TestCase):
 
         for f in agent_files():
             stem = os.path.splitext(f)[0]
+            if stem == "review-lens":
+                # The public README deliberately documents the seven routed
+                # roles, not this internal review-pr lens.
+                continue
             with self.subTest(agent=stem):
                 self.assertIn(stem, text)
 

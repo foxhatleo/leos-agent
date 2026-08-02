@@ -5,7 +5,9 @@ description: >
   non-draft PRs where Leo's GitHub user is DIRECTLY requested as reviewer,
   carry out the review-pr procedure on each new one, and record it in
   machine-local state so it is never auto-reviewed again. Meant to be
-  re-invoked on an interval by whatever schedules recurring work here.
+  re-invoked on an interval by whatever schedules recurring work here. Use
+  when Leo explicitly invokes the watcher only. Do not use because a PR or
+  review was merely mentioned.
 when_to_use: >
   ONLY when Leo explicitly invokes watch-review (usually on a repeating
   interval). Never trigger it because a PR or review was merely mentioned —

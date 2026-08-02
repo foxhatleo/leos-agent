@@ -5,7 +5,10 @@ description: >
   Every harness installs Leo through its own plugin system, and none of them
   offers an install-time hook, so anything that writes into a file the user
   already owns is asked for once, here, and recorded in machine-local state.
-  Idempotent and reversible: running it twice changes nothing the second time.
+  Idempotent, but not generally reversible: running it twice changes nothing
+  the second time, while removal is harness-specific and manual. Use when Leo
+  explicitly requests opt-in setup after installation. Do not use for
+  diagnosis or unprompted writes outside the repository.
 when_to_use: >
   Leo asks to enable Hermes memory projection, or invokes setup by name after
   installing on a new machine. NOT for diagnosing whether the plugin loaded
@@ -29,9 +32,9 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup.py"
 
 `${CLAUDE_PLUGIN_ROOT}` is the Claude Code spelling of the plugin root; Codex
 exports `$PLUGIN_ROOT`, Cursor `$CURSOR_PLUGIN_ROOT`, and on Hermes and
-OpenCode no such variable exists — read the absolute path out of the
-machine-local state paragraph in the policy already in your context, which had
-its placeholders substituted before injection.
+OpenCode no such variable exists — read the absolute payload path from the
+injected policy's `state.py` or `memory.py` command, which was substituted
+before injection.
 
 With no arguments it reports what is on, what is available, and what each
 feature would actually do right now. It changes nothing. Add `--json` for the

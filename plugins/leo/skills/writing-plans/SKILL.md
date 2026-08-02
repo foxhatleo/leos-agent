@@ -5,7 +5,8 @@ description: >
   plan is done when a Sonnet implementer can execute it without making a
   single design decision — every step names exact files, shows literal
   code or commands, and states how to verify it, anchored to a recorded
-  base ref.
+  base ref. Use when writing or reviewing a multi-step implementation plan.
+  Do not use to choose an approach or to implement or review the plan's diff.
 when_to_use: >
   Writing or reviewing a plan before handoff to leo:executing-plans —
   planner-agent output, plan-mode output, or any multi-step change spec.

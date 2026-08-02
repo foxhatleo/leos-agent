@@ -4,7 +4,9 @@ description: >
   Worktree lifecycle mechanics for isolated branch work — detect, create,
   and clean up a git worktree so implementation happens off the main
   checkout. Shared by resolve-ticket, executing-plans, and delegation
-  fan-outs; not itself a workflow, just the plumbing they all call into.
+  fan-outs; not itself a workflow, just the plumbing they all call into. Use
+  when creating or tearing down isolated branch work. Do not use to decide
+  whether isolation is needed or to dispose of a finished branch.
 when_to_use: >
   Any skill or agent about to create or tear down a worktree for isolated
   branch work. NOT for choosing whether isolation is needed in the first

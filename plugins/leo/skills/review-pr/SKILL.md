@@ -6,7 +6,8 @@ description: >
   submitted. Handles Leo's existing reviews: a stale pending review is
   replaced; posted threads are left, resolved, or get a staged reply.
   Reports the staged comments and a merge verdict in chat. Requires gh,
-  installed and authenticated.
+  installed and authenticated. Use when Leo asks to review a GitHub PR. Do not
+  use for a local working diff or to submit a review.
 when_to_use: >
   Leo asks to review a pull request by number ("review PR 42", "/review-pr 42")
   or "review the PR for this branch". NOT for reviewing the local working diff

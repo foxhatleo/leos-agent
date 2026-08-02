@@ -10,7 +10,12 @@ description: >
 
 # Leo's global agent directives
 
-These apply in every session on every machine and every harness. Canonical copy: `skills/using-leo/SKILL.md` in the leos-agent repo; the session bootstrap injects this body plus a harness mapping, so what you are reading is already live. Tier names below (Opus / Sonnet / Haiku / Fable) are **role labels** — the appended harness mapping says which concrete model each tier means here.
+These apply in every session on every machine and every harness. Canonical copy: [`plugins/leo/skills/using-leo/SKILL.md`](https://github.com/foxhatleo/leos-agent/blob/main/plugins/leo/skills/using-leo/SKILL.md); the session bootstrap injects this body plus a harness mapping, so what you are reading is already live. Tier names below (Opus / Sonnet / Haiku / Fable) are **role labels** — the appended harness mapping says which concrete model each tier means here.
+
+Claude Code's `allowed-tools` are Claude grants only; they do not enforce
+anything on another harness. Portable safety rules therefore belong in role and
+skill prompts, generated adapters, and each harness's native permissions — not
+in a Claude-only allowlist treated as a cross-harness sandbox.
 
 ## Model routing
 
@@ -20,7 +25,7 @@ Tier every task by the kind of work, not per session. When a request spans phase
 |---|---|---|---|
 | Investigation | investigate, diagnose, debug, root-cause, "why does…" | Opus | the `investigator` role |
 | Planning / design | plan, design, architect, decide | Opus | the `planner` role (or the harness's native plan flow at the Opus tier) |
-| Implementation | implement, fix, build, refactor, execute | Sonnet | main loop if the session runs at the Sonnet tier, else the `implementer` role |
+| Implementation | implement, fix, build, refactor, execute | Sonnet | the `implementer` role |
 | Mechanical | rename, codemod, apply known pattern, boilerplate, format | Haiku | the `executor` role |
 | Review / verification | review, verify, audit, judge | Opus | the `reviewer` role on the real diff |
 | Hardest problems / arbitration | "use expert", "deep thinking", "deep investigate", Fable by name | Fable | the `expert` role |
@@ -35,7 +40,7 @@ Every implementation request — "fix", "implement", "execute the plan", anythin
 
 1. Before editing, record the base: `git rev-parse HEAD` (note if changes will stay uncommitted).
 2. Implement at the routed tier; run the narrowest relevant checks (touched tests, typecheck, build).
-3. Have the `reviewer` role judge the actual diff, passing the base ref (or "uncommitted working tree") and the original request/plan text. Never self-review instead. Review runs at the Opus tier by default. Downscale to a Sonnet-tier review ONLY for a clearly-trivial diff — ALL of: ≤ 2 files, ≤ ~60 changed lines, mechanical/boilerplate class (rename, format, comment, constant/string tweak, dependency-version bump, test-data edit), and no risky-path match (auth, payments/billing, crypto/secrets, DB migration or schema, CI/CD config, access control). If any condition fails or you are unsure, keep the full Opus-tier review — the default bucket is today's behavior. Never skip review because the change "is small". Only exemptions (no review at all): docs/comment-only diffs, and edits Leo dictated verbatim — and "verbatim" means I gave you the literal text or the literal command, so claiming this exemption requires quoting what I said back in the done report. A paraphrase, an interpretation, or "this is what he meant" is not dictation and gets the normal review.
+3. Have the `reviewer` role judge the actual diff, passing the base ref (or "uncommitted working tree") and the original request/plan text. Never self-review instead. Review runs at the Opus tier by default. Downscale to a Sonnet-tier review ONLY for a clearly-trivial diff — ALL of: ≤ 2 files, ≤ ~60 changed lines, mechanical/boilerplate class (rename, format, comment, constant/string tweak, dependency-version bump, test-data edit), and no risky-path match (auth, payments/billing, crypto/secrets, DB migration or schema, CI/CD config, access control). This downscale is available only on Codex, where each spawn can select the model and effort; on other harnesses keep the full Opus-tier review. If any condition fails or you are unsure, keep the full Opus-tier review — the default bucket is today's behavior. Never skip review because the change "is small". Only exemptions (no review at all): docs/comment-only diffs, and edits Leo dictated verbatim — and "verbatim" means I gave you the literal text or the literal command, so claiming this exemption requires quoting what I said back in the done report. A paraphrase, an interpretation, or "this is what he meant" is not dictation and gets the normal review.
 4. Blocking findings: fix at the executing tier, re-review the fix only. ONE cycle — if the second review still blocks, stop and report the findings to Leo instead of looping, offering `expert` arbitration as one of the options (where the Fable rung exists).
 5. Report done as three lines: what changed / checks run / review verdict.
 
@@ -46,7 +51,7 @@ The main loop orchestrates; delegated roles do the volume. In an expensive-tier 
 - Locating code, mapping structure → `explore` (Haiku tier), in parallel when questions are independent.
 - Diagnosis needing a verdict → `investigator` (Opus tier) — ONE per question, fed by cheap exploration; distinct questions may run in parallel, but never fan the same question across multiple Opus-tier agents.
 - Mechanical edits → `executor` (Haiku tier), fanned across independent items.
-- Executing a written plan → `implementer` (Sonnet tier).
+- Normal implementation and executing a written plan → `implementer` (Sonnet tier); `executor` is mechanical work only.
 - Judging a diff → `reviewer` (Opus tier).
 - Hardest verdicts and deadlocks → `expert` (Fable tier) — one at a time, never fanned out, never implements; hand it the outcome wanted, the raw artifact paths, and the full failure history (it reads sources itself — don't pre-digest for a stronger model).
 
@@ -70,7 +75,7 @@ Durable facts are a different thing and do not belong in those JSON files: a pre
 
 ## Cost discipline
 
-Spend expensive tokens on planning, verification, and synthesis (low volume, high leverage); spend cheap tokens on execution volume. When dispatching delegated work, pin the tier per task — the `executor` role runs at the Haiku tier for mechanical and boilerplate work and at the Sonnet tier at low effort for ordinary implementation, judges/verifiers at the Opus tier. The Fable tier is the most expensive per call and cheap as a policy only because it fires rarely and only on verdicts — batch fan-outs never auto-use it (that is exactly where a Fable jump silently multiplies cost).
+Spend expensive tokens on planning, verification, and synthesis (low volume, high leverage); spend cheap tokens on mechanical execution volume. When dispatching delegated work, pin the tier per task — `implementer` runs normal implementation at Sonnet, `executor` runs only mechanical and boilerplate work at Haiku, and judges/verifiers run at Opus. The Fable tier is the most expensive per call and cheap as a policy only because it fires rarely and only on verdicts — batch fan-outs never auto-use it (that is exactly where a Fable jump silently multiplies cost).
 
 ## Skill index
 
@@ -93,4 +98,4 @@ Reach for the matching skill at the decision point — each one encodes the mech
 | Policy or harness wiring in doubt | leo:doctor |
 | Authoring or editing a skill | leo:writing-skills |
 
-Four operational skills — `leo:resolve-ticket`, `leo:review-pr`, `leo:watch-review`, `leo:setup` — are invoked by name rather than reached from the table above. One more, `leo:attach-pr`, is Claude Code only and is not registered on any other harness (the harness mapping appended below says so explicitly, and names what else differs here).
+Four operational skills in the canonical roster (`config/models.json`) are invoked by name rather than reached from the table above: `leo:resolve-ticket`, `leo:review-pr`, `leo:watch-review`, and `leo:setup`. Only `setup` and `watch-review` opt out of implicit invocation in Codex metadata; `review-pr`, `resolve-ticket`, and `doctor` remain natural-language routable. One more, `leo:attach-pr`, is Claude Code only and is not registered on any other harness (the harness mapping appended below says so explicitly, and names what else differs here).

@@ -6,7 +6,9 @@ description: >
   it fail, then make it pass with the change — the red-to-green transition is
   the evidence a real guard exists, not a rubber stamp added after the fact.
   Applies to implementer and executor during implementation; reviewer checks
-  the resulting coverage as a rubric line.
+  the resulting coverage as a rubric line. Use when an implementation changes
+  runtime behavior. Do not use for throwaway spikes, docs/config/dependency
+  work, or pure UI copy and styling.
 when_to_use: >
   Any implementation task that changes runtime behavior — fix, feature,
   refactor with observable effect — routed through implementer or executor.

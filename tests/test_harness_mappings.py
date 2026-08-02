@@ -23,7 +23,7 @@ HARNESSES = ("claude", "codex", "cursor", "hermes", "opencode")
 REQUIRED_SUBSTRINGS = {
     "claude": ("opus", "sonnet", "fable", "haiku"),
     "codex": (
-        "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+        "gpt-5.6-sol", "gpt-5.6-terra",
         "reasoning_effort", "generic subagent",
     ),
     "cursor": ("GPT-5.6 Sol", "Grok 4.5", "Composer 2.5", "model: inherit"),
@@ -173,9 +173,14 @@ class TestCapabilityMatrix(unittest.TestCase):
         """SendMessage sits in the portable delegation skill; before the
         matrix, no mapping said whether it existed on any harness."""
         self.assertIn("SendMessage", _read("claude"))
-        for harness in NON_CLAUDE_HARNESSES:
+        self.assertIn("followup_task", _read("codex"))
+        for harness in ("cursor", "hermes", "opencode"):
             with self.subTest(harness=harness):
                 self.assertIn("none established", _read(harness))
+
+    def test_opencode_discloses_its_absent_expert_role(self):
+        text = _read("opencode")
+        self.assertIn("`expert` is not registered as an agent", text)
 
     def test_opencode_workflow_note_matches_what_the_package_ships(self):
         """The tarball and the claim have to agree in whichever direction."""

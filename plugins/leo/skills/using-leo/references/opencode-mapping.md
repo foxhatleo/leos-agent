@@ -17,11 +17,12 @@ Provider: `openrouter`
 | Policy injection | `config.instructions`, with a system-prompt transform as backstop |
 | Subagent spawn | registered agent from `agents.json`, spawned via the task tool |
 | Per-spawn model | no — each agent always runs its registered model, so `reviewer` never downscales on a trivial diff |
-| Read-only roles | harness-enforced — generated `permission.edit: deny`, refused by OpenCode itself |
+| Read-only roles | native edit denial — generated `permission.edit: deny`, refused by OpenCode itself; Bash remains shell-capable, so the read-only prompt and permissions are not a hard sandbox |
 | Worktrees | no native tool — raw `git worktree` at `.claude/worktrees/<name>` |
 | Workflow runner | no runner — `cost-tiered-fix.js` ships in the package but nothing here executes it; fan out by hand and keep the ledger in `<plugin-root>/scripts/state.py` |
 | Follow-up to a live agent | none established — re-dispatch cold with the context restated |
-| Skill names | bare `<name>` — read every `leo:<x>` above as `<x>` |
+| Skill names | `leo-<name>` — OpenCode has no skill namespace, so the adapter registers a renamed copy; read every `leo:<x>` above as `leo-<x>` |
+| Structured question to the user | native `question` tool — multi-choice, single or multi-select |
 
 Visual evidence here: no built-in renderer; a registered Playwright server or the Playwright CLI. When no rung answers, leo:visual-verification requires the unverified-change warning in place of a done report.
 
@@ -29,8 +30,10 @@ Memory projection here writes to the per-user `AGENTS.md` in the OpenCode config
 
 Tier collapse here: Fable≡Opus (`moonshotai/kimi-k3`), Sonnet≡Haiku (`z-ai/glm-5.2`) — routing between collapsed rungs buys role, not power. Fable is not a real rung: `expert` cannot break a deadlock a collapsed Opus already lost, so cap escalation at Opus and report.
 
+Fable is not a real rung here, so `expert` is not registered as an agent and escalation caps at Opus.
+
 ## Leo skills not available here
 
 - `leo:attach-pr` — its entire product is a side effect in Claude Code Desktop's PR-card detector, which no other harness has — the same commands would run here, succeed, and produce nothing observable.
 
-Every other skill in the policy's Skill index is registered here and behaves the same, and so are the operational skills — `leo:review-pr`, `leo:resolve-ticket` and `leo:watch-review` all run on this harness. Where they name a capability the table above says is missing, take the fallback each one documents.
+Every other skill in the policy's Skill index is registered here and behaves the same, and so are the operational skills — `leo:resolve-ticket`, `leo:review-pr`, `leo:watch-review`, `leo:setup` all run on this harness. Where they name a capability the table above says is missing, take the fallback each one documents.

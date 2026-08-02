@@ -15,11 +15,12 @@
 | Policy injection | `SessionStart` hook, on every startup / resume / clear / compact |
 | Subagent spawn | spawn the named native agent; its generated frontmatter pins the model |
 | Per-spawn model | yes — the agent's own frontmatter |
-| Read-only roles | harness-enforced — the tool allowlist omits Write and Edit |
+| Read-only roles | native edit denial — the tool allowlist omits Write and Edit; Bash remains shell-capable, so the read-only prompt and permission constraints are not a hard sandbox |
 | Worktrees | `EnterWorktree` / `ExitWorktree`, session-tracked and auto-cleaned; pair every Enter with an Exit |
 | Workflow runner | the Workflow tool runs `workflows/cost-tiered-fix.js` by `scriptPath` |
 | Follow-up to a live agent | `SendMessage` to the same agent, which keeps the context it already built |
 | Skill names | `leo:<name>` |
+| Structured question to the user | `AskUserQuestion` — multi-choice, optional multi-select |
 
 Visual evidence here: the Browser pane (start or attach a preview, then take a screenshot), an attached Chrome, or the iOS Simulator control tool; some arrive only after a tool search, so an empty tool list is not proof of absence. When no rung answers, leo:visual-verification requires the unverified-change warning in place of a done report.
 

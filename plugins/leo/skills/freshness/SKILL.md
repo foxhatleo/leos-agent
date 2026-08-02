@@ -6,7 +6,9 @@ description: >
   committed to, its shape is confirmed against a source that reflects the
   version this project actually runs — the installed package, the lockfile
   pin, or documentation fetched this turn. Each check is recorded by symbol
-  and source in the report.
+  and source in the report. Use when writing, reviewing, or asserting a
+  third-party surface. Do not use for first-party code, pinned standard
+  libraries, or as a substitute for verification.
 when_to_use: >
   About to write, review, or assert the shape of a third-party surface — an
   import path, an argument list, a config key, an HTTP field, an auth
@@ -46,14 +48,25 @@ Outside these five, write the code.
 
 ## What counts as a source
 
-Ranked by closeness to the bytes that will actually execute.
+Two different questions — which to reach for, and which one wins.
 
-| Rank | Source | Why it counts |
-|---|---|---|
-| 1 | The installed package read on disk — `node_modules`, `site-packages`, `vendor` | It is the version this project runs; it cannot be out of date |
-| 2 | The lockfile pin plus that version's changelog or docs, fetched this turn | Right version, second-hand text |
-| 3 | Official documentation fetched this turn, version confirmed against the pin | Fetching without checking which version the page describes buys nothing |
-| 4 | A documentation tool the harness exposes for that vendor | Vendor-maintained, still confirm which version answered |
+**Lookup order.** Cheapest first; stop at the first that answers.
+
+1. A documentation tool the harness exposes for that vendor (Context7 and
+   the like) — one call, cheap.
+2. Official documentation fetched this turn — cheap.
+3. The lockfile pin plus that version's changelog — a narrow read.
+4. The installed package read on disk — `node_modules`, `site-packages`,
+   `vendor` — expensive; grep for the specific symbol, never read whole
+   files.
+
+Rungs 1 and 2 answer for whichever version they happen to describe, which is
+not always yours. Note the version each one reports and compare it to the pin;
+a cheap answer that cannot say which version it describes has not answered.
+
+**Authority.** When two sources disagree, the installed package wins — it
+is the version that will execute. A cheap source that contradicts it is
+wrong.
 
 Not sources: your recollection; an older file in this repo calling the same API,
 which may be the stale thing you are about to copy; a blog post; a search
@@ -97,8 +110,8 @@ to the lockfile without rerunning anything.
   case where they do not is the entire reason for the step.
 - "Another file here calls it this way" — that file may be what you are about
   to propagate.
-- "The typechecker will catch it" — a typechecker reads installed stubs, which
-  is a rank-1 source. Say so and cite it, rather than skipping and hoping.
+- "The typechecker will catch it" — a typechecker reads installed stubs, the
+  authority source. Say so and cite it, rather than skipping and hoping.
 - "It's one argument" — argument names are exactly what moves between majors.
 
 ## Reviewable finding

@@ -18,7 +18,7 @@ On builds without the `plugin` subcommand, add it to `~/.config/opencode/opencod
 { "$schema": "https://opencode.ai/config.json", "plugin": ["leos-agent"] }
 ```
 
-Start a new OpenCode session. The plugin registers the skills directory, the 6 subagent roles, and the operating policy, and installs the bash deletion tripwire.
+Start a new OpenCode session. The plugin registers the skills directory, the 7 subagent roles, and the operating policy, and installs the bash deletion tripwire.
 
 If the skills do not appear, run `opencode debug skill` — each one should list a `location` inside this package. The plugin resolves its own install path and registers it, so none needs to be written by hand.
 

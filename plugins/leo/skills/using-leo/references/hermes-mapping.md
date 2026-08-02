@@ -22,6 +22,7 @@ Provider: `openrouter`
 | Workflow runner | none — fan out by hand and keep the ledger in `<plugin-root>/scripts/state.py` |
 | Follow-up to a live agent | none established — re-dispatch cold with the context restated |
 | Skill names | `leo:<name>` |
+| Structured question to the user | none established — ask in plain text and default to changing nothing |
 
 Visual evidence here: no built-in renderer; Playwright driven from the shell is the only rung, and only when the project already depends on it. When no rung answers, leo:visual-verification requires the unverified-change warning in place of a done report.
 
@@ -33,4 +34,4 @@ Tier collapse here: Fable≡Opus (`moonshotai/kimi-k3`), Sonnet≡Haiku (`z-ai/g
 
 - `leo:attach-pr` — its entire product is a side effect in Claude Code Desktop's PR-card detector, which no other harness has — the same commands would run here, succeed, and produce nothing observable.
 
-Every other skill in the policy's Skill index is registered here and behaves the same, and so are the operational skills — `leo:review-pr`, `leo:resolve-ticket` and `leo:watch-review` all run on this harness. Where they name a capability the table above says is missing, take the fallback each one documents.
+Every other skill in the policy's Skill index is registered here and behaves the same, and so are the operational skills — `leo:resolve-ticket`, `leo:review-pr`, `leo:watch-review`, `leo:setup` all run on this harness. Where they name a capability the table above says is missing, take the fallback each one documents.

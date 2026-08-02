@@ -5,7 +5,8 @@ description: >
   context (Confluence, Slack, GitHub), investigate and plan at Opus tier, get
   Leo's explicit sign-off, implement on a worktree branch with sonnet/haiku
   executors, Opus-review the diff, then push and open a DRAFT pull request in
-  the browser.
+  the browser. Use when Leo names a tracked ticket to fix or implement. Do not
+  use for ad-hoc fixes without a ticket or independent-item batches.
 when_to_use: >
   Leo asks to fix or implement a specific tracked ticket by ID ("fix ENG-123",
   "/resolve-ticket PLAT-42"). NOT for ad-hoc fixes with no ticket (normal

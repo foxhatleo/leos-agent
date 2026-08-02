@@ -59,7 +59,9 @@ def _validate(config):
                     f"tier ({TIERS[0]!r}) can be — every other rung's roles keep their "
                     "job through a collapse"
                 )
-            twins = [t for t in TIERS if t != tier and rows[t]["model"] == rows[tier]["model"]]
+            twins = [
+                t for t in TIERS if t != tier and _tier_identity(rows[t]) == _tier_identity(rows[tier])
+            ]
             if not twins:
                 raise ValueError(
                     f"{harness}: tier {tier!r} is declared absent but has a model of its own — "
@@ -89,6 +91,15 @@ def _split_role(text):
     except ValueError as exc:
         raise ValueError("role prompt has unterminated YAML frontmatter") from exc
     return lines[1:end], "\n".join(lines[end + 1 :]).strip() + "\n"
+
+
+def _tier_identity(row):
+    """A tier is a model *and* its requested reasoning effort.
+
+    Codex deliberately maps Fable and Opus to the same model at different
+    efforts. Treating a model id alone as identity falsely removes Fable.
+    """
+    return row["model"], row.get("effort")
 
 
 def _without(frontmatter, keys):
@@ -177,6 +188,12 @@ def _opencode_agents(config):
             # on the catastrophic rm class for write-capable agents. The
             # precise tripwire stays hooks/bash-guard.py.
             permission = {"bash": {cmd: "deny" for cmd in adapter["writeBashDeny"]}}
+        # `permission.edit: deny` prevents native edits, not destructive shell
+        # commands. Apply the narrow catastrophic Bash denial to every role,
+        # including shell-capable read-only agents.
+        permission.setdefault("bash", {}).update(
+            {cmd: "deny" for cmd in adapter["writeBashDeny"]}
+        )
         agents[role] = {
             "description": fm.get("description", ""),
             "mode": "subagent",
@@ -205,7 +222,7 @@ def _collapse_note(rows):
     """
     by_model = {}
     for tier in ("fable", "opus", "sonnet", "haiku"):
-        by_model.setdefault(rows[tier]["model"], []).append(tier)
+        by_model.setdefault(_tier_identity(rows[tier]), []).append(tier)
     collapsed = [tiers for tiers in by_model.values() if len(tiers) > 1]
     if not collapsed:
         return ""
@@ -260,8 +277,9 @@ def _skill_notes(config, harness):
     lines.append("")
     lines.append(
         "Every other skill in the policy's Skill index is registered here and "
-        "behaves the same, and so are the operational skills — `leo:review-pr`, "
-        "`leo:resolve-ticket` and `leo:watch-review` all run on this harness. "
+        "behaves the same, and so are the operational skills — "
+        + ", ".join(f"`leo:{name}`" for name in config["skills"].get("operational", ()))
+        + " all run on this harness. "
         "Where they name a capability the table above says is missing, take "
         "the fallback each one documents."
     )
@@ -333,6 +351,8 @@ def _mapping_docs(config):
         parts.append(_capability_table(config, harness))
         parts.append(_capability_notes(config, harness))
         parts.append(_collapse_note(rows))
+        if harness == "opencode":
+            parts.append("\n" + _absent_tier_sentence(config) + "\n")
         parts.append(_skill_notes(config, harness))
         out[harness] = "".join(parts)
     return out
