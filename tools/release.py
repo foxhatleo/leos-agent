@@ -152,7 +152,9 @@ def publish_npm(package, version, npm="npm"):
         return "already-published"
     if not _npm_not_found(output):
         raise ValueError(f"npm version lookup failed without a confirmed not-found: {output}")
-    published = _run([npm, "publish", str(package), "--access", "public"])
+    # Path("./npm-stage") stringifies to "npm-stage", which npm interprets as
+    # a registry package spec.  An absolute path is unambiguously a local tree.
+    published = _run([npm, "publish", str(package.resolve()), "--access", "public"])
     if published.returncode:
         raise ValueError(f"npm publish failed: {(published.stdout + published.stderr).strip()}")
     return "published"

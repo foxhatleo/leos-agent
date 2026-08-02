@@ -230,7 +230,13 @@ class TestRelease(unittest.TestCase):
             npm = self._fake_cli(directory, "npm", 'echo "$@" >> "' + str(log) + '"\ncase "$1" in\nview) echo "npm ERR! code E404" >&2; exit 1 ;;\npublish) exit 0 ;;\nesac\n')
             result = subprocess.run([sys.executable, SCRIPT, "--publish-npm", "plugins/leo", "7.0.0", "--npm-bin", npm], cwd=REPO, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("publish plugins/leo --access public", log.read_text(encoding="utf-8"))
+            self.assertIn(f"publish {Path(REPO, 'plugins/leo').resolve()} --access public", log.read_text(encoding="utf-8"))
+
+            relative_stage = Path(REPO, "npm-stage")
+            npm = self._fake_cli(directory, "npm", 'echo "$@" >> "' + str(log) + '"\ncase "$1" in\nview) echo "npm ERR! code E404" >&2; exit 1 ;;\npublish) exit 0 ;;\nesac\n')
+            result = subprocess.run([sys.executable, SCRIPT, "--publish-npm", "./npm-stage", "7.0.0", "--npm-bin", npm], cwd=REPO, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(f"publish {relative_stage.resolve()} --access public", log.read_text(encoding="utf-8"))
 
             npm = self._fake_cli(directory, "npm", 'echo "network unavailable" >&2\nexit 1\n')
             result = subprocess.run([sys.executable, SCRIPT, "--publish-npm", "plugins/leo", "7.0.0", "--npm-bin", npm], cwd=REPO, capture_output=True, text=True)
