@@ -149,6 +149,9 @@ class TestRelease(unittest.TestCase):
                 self.assertEqual(packed.returncode, 0, packed.stdout + packed.stderr)
                 files = {entry["path"] for entry in json.loads(packed.stdout)[0]["files"]}
                 self.assertIn("LICENSE", files)
+                self.assertIn("vendor/jsonc-parser-3.3.1/LICENSE.md", files)
+                self.assertIn("vendor/jsonc-parser-3.3.1/README.md", files)
+                self.assertIn("vendor/jsonc-parser-3.3.1/lib/umd/main.js", files)
                 self.assertFalse(any(path.endswith((".pyc", ".log")) for path in files))
 
     def test_release_licenses_and_vendor_provenance_are_shipped(self):

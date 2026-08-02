@@ -48,6 +48,103 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup.py" disable hermes-memory
 Enabling something already on prints that and exits 0 — re-running is always
 safe, and never a reason to check first.
 
+## `apply`: bootstrap this harness's MCP servers
+
+```sh
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup.py" apply
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup.py" apply --dry-run
+```
+
+Idempotent, and read-modify-write: `config/models.json`'s `mcp.core` list names
+the servers each harness gets, `apply` detects which harness is actually
+running this script (the same detection `doctor.py` already does —
+never a second, divergent copy of it) and writes only that harness's own
+config, never another one's, even when another harness's config file also
+exists on the machine. `--dry-run` prints the exact commands or diffs and
+touches nothing. An unsupported or undetectable harness refuses outright —
+nothing is touched, and the exit code is non-zero.
+
+"Already installed" is always answered by re-reading the harness's own
+config, never by a flag Leo remembers — so removing a server by hand and
+re-running `apply` sees the removal, and running `apply` twice in a row
+writes nothing the second time either way. OpenCode edits are lossless JSONC
+additions: comments, trailing commas, indentation, symlinks and modes survive;
+existing `opencode.jsonc` and `opencode.json` together make setup refuse rather
+than choose. `OPENCODE_CONFIG` wins, otherwise the sole existing global file
+wins, otherwise a new `.jsonc` is used.
+
+`apply` is idempotent, **not generally reversible**. It never removes an MCP
+server or tool gate. Remove an automatic CLI registration with that harness's
+exact command (for example `claude mcp remove context7 --scope user` or
+`codex mcp remove context7`); remove file-backed entries by editing the named
+config yourself. A `.leo-backup` is one pre-first-write snapshot, not a
+transaction log and not a promise that a later user edit can be undone.
+
+`apply` also reports (never flips) two Codex toggles: its `computer_use`
+feature flag and `web_search` mode (offering, never forcing, the upgrade to
+`"live"`), plus one manual Claude in Chrome toggle, which has no config key.
+
+Vendor connectors (Slack, Sentry, Linear, ...) live in the same `mcp` config
+under `connectors` — `apply` never installs those; that is the next section.
+Core executable packages are exact reviewed pins. Their maintainer update
+procedure is recorded in `config/MCP_PINS.md`; never substitute `@latest`, a
+range, or an unqualified package name during setup.
+
+## Vendor connectors: `connectors` and `connect`
+
+`config/models.json`'s `mcp.connectors` names eleven vendor MCP servers
+(Slack, Sentry, Honeycomb, Snowflake, LaunchDarkly, Linear, Jira +
+Confluence, Gmail, Google Drive, Granola, Vercel) — every one OAuth, every
+one remote HTTP. Unlike `apply`'s core servers, these are never installed
+without a name chosen explicitly. After `apply`, run:
+
+```sh
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup.py" connectors --json
+```
+
+Read-only, and it exits 0 even on a harness `apply` would refuse — it just
+has nothing installable to report. Each entry's `installed` is answered by
+re-reading the harness's own config the same way `apply` does — matching the
+endpoint URL first, a name second, because a claude.ai connector such as
+Gmail or Vercel is registered against the account and never written to
+`~/.claude.json` at all. Never offer one already `installed: true`.
+
+For every connector still `installed: false`, see the *Structured question
+to the user* row of your mapping:
+
+- **A question tool** (Claude Code, OpenCode): present the not-installed
+  connectors as a multi-select, one entry per `label`, and install only what
+  is chosen:
+
+  ```sh
+  python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup.py" connect <key> [<key> ...]
+  ```
+
+- **No question tool** (Codex, Cursor, Hermes): list them in plain text —
+  `key`, `label`, and `authNote` — and **install nothing** unless the user
+  names one or more by key in reply. The same default as everywhere else in
+  this skill: asking is never itself consent.
+
+`snowflake` always needs `needsUrl: true` handled first — its endpoint
+embeds org, account, database and schema, and cannot be guessed from
+anything on the machine. Ask for the account-specific URL before offering it
+in the multi-select (or before accepting it in a plain-text reply), then:
+
+```sh
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup.py" connect snowflake --url <URL>
+```
+
+`connect` refuses outright, writing nothing, on an unsupported harness, an
+unknown registry state, or on `snowflake` with no URL on hand. Slack, Gmail,
+Google Drive, and account-specific providers are manual-only: report their
+prerequisites and never attempt dynamic registration. On Hermes, providers
+that support dynamic registration use `hermes mcp add <key> --url <url> --auth oauth`
+followed by `hermes mcp login <key>`; providers without it remain manual.
+Every successful install reports
+`needs-auth`: setup registers the endpoint and stops there — it never
+handles a credential. Report back to the user, by `label`, which connectors
+now need them to complete a browser OAuth flow on first use.
+
 ## Features
 
 ### `hermes-memory`
@@ -81,8 +178,12 @@ Leo's markers.
 
 ## What setup never does
 
-It does not install, update, or repair the plugin, and it does not diagnose —
-if the question is "did the policy load" or "why can't I invoke this skill",
-that is leo:doctor, which reads and never writes. setup only records consent
-and flips flags; the projection itself happens at the next session start,
-through the same `memory.py` helper every harness already uses.
+It does not install, update, or repair the plugin, handle credentials, or
+diagnose — if the question is "did the policy load" or "why can't I invoke
+this skill", that is leo:doctor, which reads and never writes. Its write
+boundary is explicit consent state, the current harness's automatic core MCP
+registration/config additions, and an explicitly named automatic connector;
+manual providers only print their prerequisites. Hermes projection is applied
+at the next session start through `memory.py`; removing Leo's balanced marker
+block is the only safely reversible projection action. Config additions and
+their one-time backups are not a general rollback mechanism.

@@ -310,8 +310,11 @@
         "command": [
           "npx",
           "-y",
-          "@upstash/context7-mcp"
+          "@upstash/context7-mcp@3.2.5"
         ],
+        "exactVersion": "@upstash/context7-mcp@3.2.5",
+        "registration": "automatic",
+        "prerequisites": ["Node.js", "npx available on PATH"],
         "auth": "none",
         "authNote": "keyless; set CONTEXT7_API_KEY for higher rate limits"
       },
@@ -321,8 +324,11 @@
         "command": [
           "npx",
           "-y",
-          "@playwright/mcp@latest"
+          "@playwright/mcp@0.0.78"
         ],
+        "exactVersion": "@playwright/mcp@0.0.78",
+        "registration": "automatic",
+        "prerequisites": ["Node.js", "npx available on PATH"],
         "auth": "none",
         "authNote": "browsers may need `npx playwright install chromium` on first use"
       },
@@ -332,8 +338,11 @@
         "command": [
           "npx",
           "-y",
-          "chrome-devtools-mcp@latest"
+          "chrome-devtools-mcp@1.6.0"
         ],
+        "exactVersion": "chrome-devtools-mcp@1.6.0",
+        "registration": "automatic",
+        "prerequisites": ["Node.js", "npx available on PATH"],
         "auth": "none",
         "authNote": ""
       },
@@ -342,8 +351,11 @@
         "transport": "stdio",
         "command": [
           "uvx",
-          "duckduckgo-mcp-server"
+          "duckduckgo-mcp-server==0.5.0"
         ],
+        "exactVersion": "duckduckgo-mcp-server==0.5.0",
+        "registration": "automatic",
+        "prerequisites": ["uv or uvx available on PATH"],
         "auth": "none",
         "authNote": "needs uvx on PATH"
       }
@@ -386,14 +398,14 @@
             "playwright",
             "chrome-devtools"
           ],
-          "investigator": [
+          "leo-investigator": [
             "context7",
             "chrome-devtools"
           ],
-          "planner": [
+          "leo-planner": [
             "context7"
           ],
-          "implementer": [
+          "leo-implementer": [
             "context7",
             "playwright",
             "chrome-devtools"
@@ -407,7 +419,9 @@
         "label": "Slack",
         "url": "https://mcp.slack.com/mcp",
         "transport": "http",
-        "auth": "oauth",
+        "auth": "manual-oauth",
+        "registration": "manual",
+        "prerequisites": ["Slack workspace admin approval for the MCP client", "a Slack account authorized for the workspace"],
         "authNote": "a workspace admin must approve the MCP client for the workspace first"
       },
       {
@@ -416,6 +430,8 @@
         "url": "https://mcp.sentry.dev/mcp",
         "transport": "http",
         "auth": "oauth",
+        "registration": "automatic",
+        "prerequisites": ["Sentry organization access"],
         "authNote": "browser consent against your Sentry org, or a user auth token"
       },
       {
@@ -424,6 +440,8 @@
         "url": "https://mcp.honeycomb.io/mcp",
         "transport": "http",
         "auth": "oauth",
+        "registration": "automatic",
+        "prerequisites": ["Honeycomb Intelligence enrollment"],
         "authNote": "the team must be enrolled in Honeycomb Intelligence"
       },
       {
@@ -432,7 +450,9 @@
         "url": "",
         "urlTemplate": "https://<org>-<account>.snowflakecomputing.com/api/v2/databases/<database>/schemas/<schema>/mcp-servers/<name>",
         "transport": "http",
-        "auth": "oauth",
+        "auth": "manual-oauth",
+        "registration": "manual",
+        "prerequisites": ["account-specific server URL", "Snowflake OAuth or programmatic access token"],
         "authNote": "account-specific URL — must be supplied, never guessed; OAuth or a programmatic access token"
       },
       {
@@ -441,6 +461,8 @@
         "url": "https://mcp.launchdarkly.com/mcp/launchdarkly",
         "transport": "http",
         "auth": "oauth",
+        "registration": "automatic",
+        "prerequisites": ["LaunchDarkly project access"],
         "authNote": "browser consent on first connect"
       },
       {
@@ -449,6 +471,8 @@
         "url": "https://mcp.linear.app/mcp",
         "transport": "http",
         "auth": "oauth",
+        "registration": "automatic",
+        "prerequisites": ["Linear workspace access"],
         "authNote": "OAuth 2.1 with dynamic client registration"
       },
       {
@@ -456,7 +480,9 @@
         "label": "Jira + Confluence (Atlassian Rovo)",
         "url": "https://mcp.atlassian.com/v1/mcp/authv2",
         "transport": "http",
-        "auth": "oauth",
+        "auth": "manual-oauth",
+        "registration": "manual",
+        "prerequisites": ["Atlassian organization access"],
         "authNote": "one server covers Jira, Confluence, JSM, Bitbucket and Compass"
       },
       {
@@ -464,7 +490,9 @@
         "label": "Gmail",
         "url": "https://gmailmcp.googleapis.com/mcp/v1",
         "transport": "http",
-        "auth": "oauth",
+        "auth": "manual-oauth",
+        "registration": "manual",
+        "prerequisites": ["Google Cloud project with Gmail MCP enabled", "Google OAuth consent and Gmail account authorization"],
         "authNote": "Google OAuth consent"
       },
       {
@@ -472,7 +500,9 @@
         "label": "Google Drive",
         "url": "https://drivemcp.googleapis.com/mcp/v1",
         "transport": "http",
-        "auth": "oauth",
+        "auth": "manual-oauth",
+        "registration": "manual",
+        "prerequisites": ["Google Cloud project with Drive MCP enabled", "Google OAuth consent and Drive account authorization"],
         "authNote": "Google OAuth consent"
       },
       {
@@ -481,6 +511,8 @@
         "url": "https://mcp.granola.ai/mcp",
         "transport": "http",
         "auth": "oauth",
+        "registration": "automatic",
+        "prerequisites": ["Granola account access"],
         "authNote": "browser consent on first connect"
       },
       {
@@ -489,6 +521,8 @@
         "url": "https://mcp.vercel.com",
         "transport": "http",
         "auth": "oauth",
+        "registration": "automatic",
+        "prerequisites": ["Vercel account access"],
         "authNote": "browser consent on first connect"
       }
     ]
