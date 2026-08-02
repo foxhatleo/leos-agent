@@ -85,6 +85,51 @@ class TestGraphqlArgs(unittest.TestCase):
         self.assertNotIn("flag=False", args)
 
 
+class TestThreadQueryContract(unittest.TestCase):
+    """Thread output must preserve GitHub's original anchor separately from
+    the current anchor, including the null used for file-level comments."""
+
+    def test_query_requests_original_line(self):
+        self.assertIn("originalLine", ghreview.THREADS_QUERY)
+
+    def test_file_level_and_outdated_line_threads_are_reported_without_gh(self):
+        original_login = ghreview.current_login
+        original_fetch = ghreview.fetch_threads
+        ghreview.current_login = lambda: "leo"
+        ghreview.fetch_threads = lambda repo, pr: [{
+            "id": "PRRT_file", "isResolved": False, "isOutdated": False,
+            "path": "src/a.py", "line": None, "originalLine": None,
+            "comments": {"nodes": [{
+                "author": {"login": "leo"}, "body": "file finding",
+                "createdAt": "2026-01-01T00:00:00Z",
+                "pullRequestReview": {"id": "r1", "state": "COMMENTED"},
+            }]},
+        }, {
+            "id": "PRRT_outdated", "isResolved": False, "isOutdated": True,
+            "path": "src/b.py", "line": None, "originalLine": 12,
+            "comments": {"nodes": [{
+                "author": {"login": "leo"}, "body": "old line finding",
+                "createdAt": "2026-01-01T00:00:00Z",
+                "pullRequestReview": {"id": "r2", "state": "COMMENTED"},
+            }]},
+        }]
+        try:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                ghreview.cmd_threads(types.SimpleNamespace(repo="o/r", pr=1, all=False))
+        finally:
+            ghreview.current_login = original_login
+            ghreview.fetch_threads = original_fetch
+
+        file_level, outdated = json.loads(output.getvalue())["threads"]
+        self.assertIsNone(file_level["line"])
+        self.assertIsNone(file_level["original_line"])
+        self.assertFalse(file_level["is_outdated"])
+        self.assertIsNone(outdated["line"])
+        self.assertEqual(outdated["original_line"], 12)
+        self.assertTrue(outdated["is_outdated"])
+
+
 class TestParsePatch(unittest.TestCase):
     """parse_patch is the actual unified-diff parser — every other test in
     this file exercises snap_line/validate_comments against a hand-built
@@ -379,7 +424,7 @@ class TestStageRetryRevalidation(unittest.TestCase):
         self.assertEqual(post_review_calls["n"], 2)
         # The retry's snap must be reported against the ORIGINAL line (22),
         # not against the first pass's already-snapped output (20).
-        self.assertEqual(report["snapped"][-1], {"path": "a.py", "from": 22, "to": 18})
+        self.assertEqual(report["snapped"], [{"path": "a.py", "from": 22, "to": 18}])
 
 
 if __name__ == "__main__":

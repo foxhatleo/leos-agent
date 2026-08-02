@@ -27,13 +27,12 @@ whatever this harness offers, or from a shell (`while :; do …; sleep 60; done`
 or cron). Claude Code's `/loop` is a separate skill that this plugin does not
 ship, so the scheduler is external on every harness including that one.
 
-A tick is cheap by design: on an idle tick, read the preflight and say one
-line. Only a match escalates. Run the idle tick at the Haiku tier and the
-review itself at the Opus tier — your harness mapping names the concrete
-models, and where those two tiers collapse onto one model there is no cheap
-rung to tick at, which is worth knowing before running this on a short
-interval. If you cannot raise the tier for the review, say so in one line and
-let Leo run review-pr directly rather than reviewing a PR at the wrong tier.
+A tick is cheap discovery only: on an idle tick, read the preflight and say one
+line; never load a PR body or diff. Only a match escalates. Run the idle tick
+at the Haiku tier, then hand each match to a **fresh Opus** `review-pr` run
+where the harness supports it. Where it cannot preserve a fresh high-tier
+handoff, emit a cold handoff (PR number, owner/repo, discovered reviewer
+login) and let Leo invoke `review-pr`; do not review at the wrong tier.
 
 On Claude Code specifically: do NOT set `disable-model-invocation` in this
 file — skills marked that way do not execute under `/loop`.
@@ -61,7 +60,7 @@ leo:delegation for the per-harness forms.
 ```bash
 gh repo view --json nameWithOwner
 gh api user --jq .login
-gh pr list --state open --search "user-review-requested:@me" \
+gh pr list --state open --search "user-review-requested:<login-from-gh-api>" \
   --json number,title,isDraft,reviewRequests
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/state.py" get review-watcher
 ```
@@ -71,7 +70,8 @@ one-line diagnosis; touch nothing.
 
 ## Filter
 
-`user-review-requested:@me` already matches only PRs where I am **directly**
+Substitute the literal login returned by `gh api user --jq .login`; never rely
+on `@me`. `user-review-requested:<login>` already matches only PRs where I am **directly**
 requested — a request for a team I belong to does not count and must never
 trigger a review. Belt and braces, from the preflight list keep only PRs
 where ALL hold:
@@ -90,10 +90,11 @@ requests for <owner/repo>` — and end the turn. The next tick re-checks.
 
 For each remaining PR, in ascending number order, strictly sequentially:
 
-1. Carry out the **review-pr** procedure for that PR number. Where the harness
-   has a skill-invocation tool, use it (`leo:review-pr` with the number); where
-   it does not, read that skill and follow it. Do not improvise a review — the
-   staged-comment mechanics and the verdict rubric live there.
+1. Hand off the PR number, `owner/repo`, and literal login to a **fresh Opus**
+   **review-pr** run where the harness supports it. Otherwise make a cold
+   handoff to Leo and stop before any review action. Do not improvise a review
+   in this cheap tick — the staged-comment mechanics and verdict rubric live
+   in review-pr.
 2. **Only after the review completes** (verdict delivered), record it:
 
    ```bash

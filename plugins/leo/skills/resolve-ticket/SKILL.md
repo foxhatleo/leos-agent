@@ -23,6 +23,7 @@ allowed-tools:
   - Bash(git fetch *)
   - Bash(git rev-parse *)
   - Bash(git merge-base *)
+  - Bash(git check-ignore *)
   - Bash(git checkout *)
   - Bash(git switch *)
   - Bash(git add *)
@@ -137,8 +138,8 @@ Collect URLs from the ticket body, comments, attachments, and (Jira)
   tell Leo explicitly** that Slack must be configured independently in the
   current harness, then continue without it.
 - **GitHub PR/issue/commit** → `gh` view commands.
-- **Anything else** → whatever fetch tool this harness offers, one attempt;
-  `curl` is the fallback.
+- **Anything else** → use an available connector or fetch tool once. If none
+  is connected, report that context gap to Leo; do not use a shell HTTP fallback.
 
 Every failure or skip goes into a **context-gaps list** shown at the sign-off
 gate — Leo sees exactly what wasn't read before approving.
@@ -182,7 +183,8 @@ Only after Approve: `git fetch origin`, then create branch
 `fix/<TICKET-ID>-<slug>` off `origin/<defaultBranch>` in a worktree. Where the
 harness has a native worktree tool (see the *Worktrees* row of your mapping),
 use it and pair every enter with an exit. Otherwise, and on every harness that
-does not: `git worktree add -b fix/<id>-<slug> ../<repo>-fix-<id>
+does not: first prove `git check-ignore .claude/worktrees/fix-<id>` succeeds,
+then `git worktree add -b fix/<id>-<slug> .claude/worktrees/fix-<id>
 origin/<default>` and work by absolute paths.
 
 Executors in Step 6 must **NOT** be given their own worktree — this is one
@@ -202,8 +204,9 @@ Per plan step:
   specs, so the executor contract (do exactly this, stop on ambiguity) fits
   better than implementer's wider latitude. Anywhere the plan is thinner than
   that, use `implementer` as the policy says.
-- Steps touching disjoint files run as parallel spawns; dependent steps
-  sequential. Executors commit as they go.
+- Parallel spawns are read-only investigation only. All edits, test writes,
+  staging, commits, and other mutations are strictly sequential in the one
+  canonical `.claude/worktrees/fix-<id>` worktree. Executors commit as they go.
 - This loop implements directly only for trivial diffs (< ~10 lines) where
   writing the spec would cost more than the change.
 - Escalate, don't struggle: an executor reporting ambiguity or failing twice →
@@ -248,9 +251,11 @@ ticket, the approved plan, and the diff scope
    Same voice rules as /review-pr: no filler, no emoji, no self-praise.
    If a PR already exists for the branch, open that one instead and say so.
 3. `gh pr view --web` to open it in the browser.
-4. Leave the worktree (native tool where there is one, otherwise `git worktree
-   remove` once the branch is pushed). Do **not** write back to the ticket (no comment, no status
-   transition) — deliberate non-action; Leo asks separately if he wants it.
+4. Retain the worktree through PR merge. After merge, hand cleanup to
+   `leo:finishing-a-branch` / `leo:worktrees`; do not remove it merely because
+   the draft PR was opened. Do **not** write back to the ticket (no comment,
+   no status transition) — deliberate non-action; Leo asks separately if he
+   wants it.
 5. Final report: branch, PR URL, worktree path (left in place for follow-ups),
    checks run, review rounds used, remaining non-blocking notes.
 

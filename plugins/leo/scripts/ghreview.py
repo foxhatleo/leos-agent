@@ -265,7 +265,7 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
       reviewThreads(first: 50, after: $cursor) {
         pageInfo { hasNextPage endCursor }
         nodes {
-          id isResolved isOutdated path line
+          id isResolved isOutdated path line originalLine
           comments(first: 100) {
             # 100 covers the overwhelming majority of threads without inner
             # pagination; a thread with >100 comments truncates here, so
@@ -387,6 +387,7 @@ def cmd_threads(a):
             "thread_id": node["id"],
             "path": node["path"],
             "line": node["line"],
+            "original_line": node.get("originalLine"),
             "is_resolved": node["isResolved"],
             "is_outdated": node["isOutdated"],
             "replies_after_mine": (last.get("author") or {}).get("login") != login,
@@ -483,8 +484,11 @@ def cmd_stage(a):
         # reflects the first pass's snapped output) so the reported snap is
         # the real one-hop mapping, not a fictitious second hop.
         staged, snapped2, dropped2 = validate_comments(comments, build_maps(files))
-        report["snapped"] += snapped2
-        report["dropped"] += dropped2
+        # The retry replaces the first attempt's outcome.  Reporting both
+        # attempts as one result makes a comment appear both snapped and
+        # dropped even though only the final revalidation is stageable.
+        report["snapped"] = snapped2
+        report["dropped"] = dropped2
         if not staged:
             print(json.dumps({**report, "note": "nothing left to stage after revalidation"}))
             sys.exit(1)

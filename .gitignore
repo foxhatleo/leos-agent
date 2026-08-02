@@ -45,3 +45,6 @@ ENV/
 local/*
 !local/.gitkeep
 *.bak
+
+# Raw-git worktrees created by Leo workflow skills
+.claude/worktrees/

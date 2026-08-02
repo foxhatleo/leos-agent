@@ -10,7 +10,7 @@ description: >
 when_to_use: >
   Leo asks to review a pull request by number ("review PR 42", "/review-pr 42")
   or "review the PR for this branch". NOT for reviewing the local working diff
-  (that is /code-review or the reviewer subagent) and NOT for submitting a
+  (that is the local reviewer subagent) and NOT for submitting a
   review — this only stages draft comments.
 argument-hint: "[pr-number]"
 allowed-tools:
@@ -26,6 +26,7 @@ allowed-tools:
   - Bash(git merge-base *)
   - Bash(git status *)
   - Bash(python3 */ghreview.py *)
+  - Bash(python3 "*/ghreview.py" *)
   - Agent
 ---
 
@@ -39,8 +40,8 @@ Run this at the **Opus tier** — it ends in a merge verdict, which is judge
 work. Tier map: Sonnet reads (the lens agents), Opus judges (this main loop).
 Your harness mapping names the concrete model for each, and says whether a
 per-spawn model override exists here at all; where it does not, the lenses run
-at whatever their registered agent runs. The staged
-review is created by `${CLAUDE_PLUGIN_ROOT}/scripts/ghreview.py` in ONE API call
+at whatever their registered agent runs. The staged review is created by
+`"${CLAUDE_PLUGIN_ROOT}/scripts/ghreview.py"` in ONE API call
 with no `event` field — that is what keeps it PENDING. Never use `gh pr review`
 (it always submits) and never set an `event` value.
 
@@ -97,7 +98,7 @@ Two kinds of prior review state, handled differently:
 it carries the script's own marker (it embeds one in everything it stages):
 
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ghreview.py clear-pending -R OWNER/REPO -n N
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ghreview.py" clear-pending -R OWNER/REPO -n N
 ```
 
 If it exits 0, note what was deleted in the final report. If it exits 3, it
@@ -110,13 +111,17 @@ stage step, `--replace-pending --force`) once he confirms. Still pass
 **Posted (submitted) review threads of mine** — fetch them:
 
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ghreview.py threads -R OWNER/REPO -n N
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ghreview.py" threads -R OWNER/REPO -n N
 ```
 
 Returns unresolved threads whose root comment is mine (threads from pending
-reviews are excluded automatically; `line` is null for file-level threads).
+reviews are excluded automatically). A true file-level thread has both
+`line: null` and `original_line: null`; report it as `path:file-level`. An
+outdated line thread can have `line: null`, `original_line: <N>`, and
+`is_outdated: true`; report it at `path:<N>` with an `outdated` label, not as
+file-level.
 For each thread, judge the original comment against the **current** diff
-(`ghreview.py extract` for that path — `is_outdated` means the nearby code
+(`ghreview.py extract` for that path — `is_outdated: true` means the nearby code
 changed, which is a hint, not a verdict) and pick one action, defaulting to
 *leave* when torn:
 
@@ -132,7 +137,7 @@ adjudication is complete.
 ## Step 2 — Map the diff and pick a route
 
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ghreview.py map -R OWNER/REPO -n N
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ghreview.py" map -R OWNER/REPO -n N
 ```
 
 Returns per-file addressable-line ranges, `generated` flags (lockfiles, dist,
@@ -149,7 +154,7 @@ the post-exclusion size:
 
 Spawn three subagents at once using this harness's spawn mechanism — leo:delegation
 and the *Subagent spawn* row of your mapping name it. Use the read-only
-**explore** role, never a general-purpose agent: a lens is the agent that
+**review-lens** role, never a general-purpose agent: a lens is the agent that
 actually ingests the attacker-authored diff, and a general-purpose agent
 carries the full tool set including Write, Edit, and unrestricted Bash. This
 skill's `allowed-tools` govern this loop's turn, not the agents it spawns, so
@@ -166,7 +171,7 @@ sharded review that hits the agent cap.
 Do NOT ingest the full diff in this main loop on the standard
 path — the lenses read, you judge. Each lens gets: PR number, `OWNER/REPO`,
 title/body, its file list, and instructions to fetch its own diff slice via
-`gh pr diff N` or `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ghreview.py extract -R OWNER/REPO -n N <paths…>`
+`gh pr diff N` or `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ghreview.py" extract -R OWNER/REPO -n N <paths…>`
 (resolve the plugin root and pass the absolute path into the prompt — a
 subagent does not inherit your placeholder).
 
@@ -185,8 +190,10 @@ Charters:
    behavior, dead code, misleading names, genuine style nits worth a human's
    comment.
 
-Each lens returns findings as JSON only:
-`[{path, line, side: "RIGHT"|"LEFT", severity: "blocking"|"major"|"minor"|"nit", confidence: 0-100, note, fix?}]`
+Each lens returns JSON only:
+`{"status":"done"|"needs-context","findings":[{path, line, side:
+"RIGHT"|"LEFT", severity: "blocking"|"major"|"minor"|"nit", confidence:
+0-100, note, fix?}]}`
 with `line` as the absolute new-file line (RIGHT) it verified against the
 patch, and an instruction to cite the exact diff line — unverifiable findings
 get dropped in Step 4, so guessing wastes the lens's own work.
@@ -234,7 +241,7 @@ resolutions are public and go last, only once staging has succeeded):
    (`{"comments": [{path, line, side, body, start_line?, start_side?}]}`), then:
 
    ```
-   python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ghreview.py stage -R OWNER/REPO -n N \
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ghreview.py" stage -R OWNER/REPO -n N \
      --commit <headRefOid> --input comments.json --replace-pending
    ```
 
@@ -255,7 +262,7 @@ resolutions are public and go last, only once staging has succeeded):
    scratchpad file:
 
    ```
-   python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ghreview.py reply -R OWNER/REPO -n N \
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ghreview.py" reply -R OWNER/REPO -n N \
      --thread-id PRRT_… --body-file reply.txt
    ```
 
@@ -266,7 +273,7 @@ resolutions are public and go last, only once staging has succeeded):
 3. **Resolve stale threads** — one call per Step 1 resolve action:
 
    ```
-   python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ghreview.py resolve-thread -R OWNER/REPO -n N \
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ghreview.py" resolve-thread -R OWNER/REPO -n N \
      --thread-id PRRT_…
    ```
 
@@ -283,6 +290,8 @@ error.
 
 1. Staged comments as a table: `path:line — comment`.
 2. Existing threads as a table: `path:line — left / resolved / reply staged`
+   (use `path:file-level` only when both anchors are null; otherwise use
+   `path:original_line` with an `outdated` label when the current line is null)
    (+ what was said in staged replies; note if a stale pending review was
    replaced, and that resolutions are already live).
 3. Unstaged findings (dropped anchors, overflow past the cap) — clearly marked.

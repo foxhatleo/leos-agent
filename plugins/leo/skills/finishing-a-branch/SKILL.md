@@ -71,7 +71,7 @@ Per option:
 | Option | Sequence |
 |---|---|
 | merge | merge locally or `gh pr merge` → remove worktree (`leo:worktrees`) → delete local branch |
-| PR | push branch → open PR → **stop** (worktree and branch stay; nothing is unmerged yet) |
+| PR | push branch → open PR → **stop** (worktree and branch stay; nothing is merged yet.) |
 | keep | do nothing destructive; leave worktree and branch as-is |
 | discard | typed confirmation (below) → remove worktree (`leo:worktrees`) → force-delete branch |
 
