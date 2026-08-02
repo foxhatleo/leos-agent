@@ -100,7 +100,15 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/memory.py" write repo convention "Generat
 ```
 
 Writing the same title again revises that file in place and keeps its original
-creation date. `list` shows what is stored; `read <ref>` returns one fact whole.
+creation date only when both title and type match exactly. A slug collision with
+a different title or type receives the next `-N` suffix; a corrupt occupied
+slot is never overwritten. `list` shows what is stored; `read <ref>` returns
+one fact whole.
+
+Leo-owned memory directories use mode `0700`; fact files and the generated
+`index.json` and `MEMORY.md` use `0600`. A newly generated projection is also
+private, while an existing user-owned projection target retains the mode the
+user chose.
 
 ## Read path
 

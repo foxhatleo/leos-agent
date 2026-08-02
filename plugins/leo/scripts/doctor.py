@@ -7,16 +7,20 @@ and correctly listed, and still have failed open this session. Only the running
 agent can see its own context, so leo:doctor pairs this output with three
 questions the model answers itself.
 
-The breadcrumb logs are reported as history with unknown provenance, never as a
-verdict about this session. They carry no timestamps and the test suite drives
-the failure paths deliberately, so "the log has errors" proves nothing on its
-own.
+Most breadcrumb logs are reported as history with unknown provenance, never as
+a verdict about this session. Some legacy entries carry no timestamps and the
+test suite drives failure paths deliberately, so "the log has errors" usually
+proves nothing on its own. `opencode-skills.log` is the capability exception:
+its presence records a namespaced-skill registration failure and is reported
+as degraded until it is intentionally cleared after repair.
 
   doctor.py                    human-readable report
   doctor.py --json             the same facts as JSON
   doctor.py --harness <name>   state the harness instead of detecting it
 
-Exit code is 0 unless the payload itself cannot be found.
+Exit code is nonzero when required payload/bootstrap artifacts are missing or
+invalid, or the running Python is unsupported. Degraded historical warnings
+remain report-only.
 """
 import importlib.util
 import json
@@ -26,6 +30,7 @@ import sys
 _HERE = os.path.dirname(os.path.abspath(__file__))
 PAYLOAD = os.path.dirname(_HERE)
 TIERS = ("fable", "opus", "sonnet", "haiku")
+MIN_PYTHON = (3, 9)
 
 
 HARNESS_ENV = ("CURSOR_PLUGIN_ROOT", "CURSOR_VERSION", "PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT")
@@ -113,8 +118,21 @@ def _memory_report():
         import memory
 
         root = memory.memory_root()
+        hermes_enabled = memory.hermes_enabled()
+        hermes_target = os.path.join(memory.hermes_home(), "SOUL.md")
+        hermes_projection = {
+            "enabled": hermes_enabled,
+            "path": hermes_target,
+            "status": (
+                "disabled" if not hermes_enabled else
+                "projected" if (os.path.isfile(hermes_target) and
+                                memory.BEGIN in _slurp(hermes_target)) else
+                "not projected"
+            ),
+        }
         if not os.path.isdir(root):
-            return {"store": root, "facts": 0, "present": False, "targets": []}
+            return {"store": root, "facts": 0, "present": False, "targets": [],
+                    "hermes_projection": hermes_projection}
         index = memory._load_index() or {"facts": []}
         targets = [
             {"harness": h, "path": f, "present": os.path.exists(f),
@@ -123,7 +141,7 @@ def _memory_report():
             if os.path.isdir(gate)
         ]
         return {"store": root, "facts": len(index["facts"]), "present": True,
-                "targets": targets}
+                "targets": targets, "hermes_projection": hermes_projection}
     except Exception as exc:
         return {"store": _local_root(), "error": f"{type(exc).__name__}: {exc}"}
 
@@ -138,7 +156,8 @@ def _slurp(path):
 
 def _breadcrumbs():
     out = {}
-    for name in ("session-start.log", "hermes-policy.log", "opencode-guard.log"):
+    for name in ("session-start.log", "hermes-policy.log", "opencode-guard.log",
+                 "opencode-skills.log"):
         path = os.path.join(_local_root(), name)
         if not os.path.exists(path):
             continue
@@ -146,6 +165,78 @@ def _breadcrumbs():
         if lines:
             out[name] = {"entries": len(lines), "newest": lines[-1][:120]}
     return out
+
+
+def _contains(path, needle):
+    return needle in _slurp(path)
+
+
+def _hook_manifest_valid(data, harness):
+    """Validate the session-start registration, not a stray filename mention."""
+    if not isinstance(data, dict) or not isinstance(data.get("hooks"), dict):
+        return False
+    event = "sessionStart" if harness == "cursor" else "SessionStart"
+    groups = data["hooks"].get(event)
+    if not isinstance(groups, list):
+        return False
+    hooks = groups if harness == "cursor" else [
+        hook
+        for group in groups if isinstance(group, dict)
+        for hook in (group.get("hooks") or []) if isinstance(hook, dict)
+    ]
+    return any(
+        isinstance(hook, dict)
+        and isinstance(hook.get("command"), str)
+        and "hooks/session-start.py" in hook["command"]
+        for hook in hooks
+    )
+
+
+def _bootstrap(harness):
+    """Describe the harness's actual policy delivery mechanism.
+
+    Presence is intentionally a payload check, not a claim that the host ran
+    it. Codex hook trust is visible only in its `/hooks` UI, and neither
+    Hermes nor OpenCode exposes a host-side registration ledger to inspect.
+    """
+    hook = os.path.join(PAYLOAD, "hooks", "session-start.py")
+    if harness in ("claude", "codex", "cursor"):
+        manifest = os.path.join(
+            PAYLOAD, "hooks", "hooks-cursor.json" if harness == "cursor" else "hooks.json"
+        )
+        manifest_data = _read_json(manifest)
+        data = {"kind": "session hook", "hook": hook,
+                "present": os.path.isfile(hook),
+                "executable": os.access(hook, os.X_OK),
+                "manifest": manifest,
+                "manifest_valid": _hook_manifest_valid(manifest_data, harness),
+                "required": ("present", "executable", "manifest_valid")}
+        if harness == "codex":
+            data["trust_instruction"] = (
+                "Codex cannot be verified from disk; run /hooks and confirm this plugin is trusted."
+            )
+        return data
+    if harness == "opencode":
+        plugin = os.path.join(PAYLOAD, "adapters", "opencode", "plugin.js")
+        return {"kind": "config.instructions", "plugin": plugin,
+                "present": os.path.isfile(plugin),
+                "instructions": _contains(plugin, "config.instructions"),
+                "required": ("present", "instructions")}
+    if harness == "hermes":
+        entry = os.path.join(os.path.dirname(PAYLOAD), "..", "__init__.py")
+        entry = os.path.abspath(entry)
+        return {"kind": "registration + first-tool-result fallback", "entrypoint": entry,
+                "present": os.path.isfile(entry),
+                "registration": _contains(entry, "def register(ctx)"),
+                "fallback": _contains(
+                    entry, 'register_hook("transform_tool_result", _on_transform_tool_result)'
+                ),
+                "required": ("present", "registration", "fallback")}
+    return {"kind": "unknown", "present": True, "required": ()}
+
+
+def _bootstrap_valid(bootstrap):
+    return all(bootstrap.get(key) for key in bootstrap.get("required", ("present",)))
 
 
 def _skills():
@@ -161,10 +252,14 @@ def _skills():
 
 def collect(argv=()):
     harness, source = _detect_harness(argv)
-    manifest = _read_json(os.path.join(PAYLOAD, ".claude-plugin", "plugin.json")) or {}
-    models = _read_json(os.path.join(PAYLOAD, "config", "models.json")) or {}
+    manifest_path = os.path.join(PAYLOAD, ".claude-plugin", "plugin.json")
+    models_path = os.path.join(PAYLOAD, "config", "models.json")
+    manifest_raw = _read_json(manifest_path)
+    models_raw = _read_json(models_path)
+    manifest = manifest_raw if isinstance(manifest_raw, dict) else {}
+    models = models_raw if isinstance(models_raw, dict) else {}
     config = (models.get("harnesses") or {}).get(harness) or {}
-    hook = os.path.join(PAYLOAD, "hooks", "session-start.py")
+    bootstrap = _bootstrap(harness)
     local = _local_root()
     skills = _skills()
     claude_only = set((models.get("skills") or {}).get("claudeOnly") or ())
@@ -173,20 +268,47 @@ def collect(argv=()):
     registered = [n for n in skills["skills"] if n not in excluded]
     if harness == "claude":
         registered += skills["skills-claude"]
+    tiers = {
+        tier: {"model": (config.get(tier) or {}).get("model"),
+               "effort": (config.get(tier) or {}).get("effort")}
+        for tier in TIERS
+    }
+    manifest_valid = isinstance(manifest.get("version"), str) and bool(manifest["version"])
+    models_valid = isinstance(models.get("harnesses"), dict)
+    tier_mapping_valid = harness == "unknown" or all(
+        isinstance(value["model"], str) and bool(value["model"])
+        for value in tiers.values()
+    )
+    python_report = {
+        "running": ".".join(str(v) for v in sys.version_info[:3]),
+        "minimum": ".".join(str(v) for v in MIN_PYTHON),
+        "supported": sys.version_info[:2] >= MIN_PYTHON,
+    }
+    breadcrumbs = _breadcrumbs()
+    degraded_reasons = []
+    if harness == "unknown":
+        degraded_reasons.append("unknown harness")
+    if "opencode-skills.log" in breadcrumbs:
+        degraded_reasons.append("OpenCode namespaced skills previously failed to register")
+    if not python_report["supported"]:
+        degraded_reasons.append("unsupported Python")
+    if not (manifest_valid and models_valid and tier_mapping_valid):
+        degraded_reasons.append("invalid required payload")
+    if harness != "unknown" and not _bootstrap_valid(bootstrap):
+        degraded_reasons.append("missing or invalid required bootstrap")
 
     return {
         "harness": {"value": harness, "source": source},
-        "payload": {"path": PAYLOAD, "version": manifest.get("version")},
-        "bootstrap": {
-            "hook": hook,
-            "present": os.path.isfile(hook),
-            "executable": os.access(hook, os.X_OK),
+        "payload": {
+            "path": PAYLOAD,
+            "version": manifest.get("version"),
+            "manifest": manifest_path,
+            "models": models_path,
+            "valid": manifest_valid and models_valid and tier_mapping_valid,
         },
-        "tiers": {
-            tier: {"model": (config.get(tier) or {}).get("model"),
-                   "effort": (config.get(tier) or {}).get("effort")}
-            for tier in TIERS
-        },
+        "bootstrap": bootstrap,
+        "python": python_report,
+        "tiers": tiers,
         "local_state": {
             "path": local,
             "present": os.path.isdir(local),
@@ -199,7 +321,13 @@ def collect(argv=()):
             "expected_here": sorted(registered),
             "excluded_here": sorted(excluded | (set() if harness == "claude" else claude_only)),
         },
-        "breadcrumbs": _breadcrumbs(),
+        "breadcrumbs": breadcrumbs,
+        # Most breadcrumbs are deliberately untrusted history. The OpenCode
+        # shadow-skills log is different: it means this payload could not
+        # register the namespaced skill tree, so its presence is a durable
+        # degraded capability signal even though it cannot timestamp a turn.
+        "status": "degraded" if degraded_reasons else "healthy",
+        "degraded_reasons": degraded_reasons,
     }
 
 
@@ -222,10 +350,13 @@ def _render(data):
     row("version", data["payload"]["version"] or "unknown", "disk")
 
     boot = data["bootstrap"]
-    state = "present" if boot["present"] else "MISSING"
-    if boot["present"] and not boot["executable"]:
-        state += ", not executable"
-    row("bootstrap", state, "disk")
+    state = "present" if _bootstrap_valid(boot) else "MISSING or invalid"
+    row("bootstrap", f"{boot['kind']}: {state}", "disk")
+    if boot.get("trust_instruction"):
+        row("Codex hooks", boot["trust_instruction"], "manual check")
+    python = data["python"]
+    row("python", f"{python['running']} (minimum {python['minimum']})",
+        "supported" if python["supported"] else "UNSUPPORTED")
 
     tiers = " · ".join(
         f"{t.capitalize()} {v['model']}" + (f"/{v['effort']}" if v["effort"] else "")
@@ -248,6 +379,9 @@ def _render(data):
         for target in mem["targets"]:
             mark = "projected" if target["projected"] else "not projected"
             row("", f"  {target['harness']}: {mark}", target["path"])
+    hermes = mem.get("hermes_projection")
+    if hermes:
+        row("Hermes memory", hermes["status"], hermes["path"])
 
     skills = data["skills"]
     row("skills shipped",
@@ -271,13 +405,21 @@ def _render(data):
     return "\n".join(lines)
 
 
+def _exit_code(data):
+    if not data["payload"].get("valid") or not data["python"].get("supported"):
+        return 1
+    if data["harness"]["value"] != "unknown" and not _bootstrap_valid(data["bootstrap"]):
+        return 1
+    return 0
+
+
 def main(argv):
     data = collect(argv)
     if "--json" in argv:
         print(json.dumps(data, indent=1, sort_keys=True))
     else:
         print(_render(data))
-    return 0
+    return _exit_code(data)
 
 
 if __name__ == "__main__":

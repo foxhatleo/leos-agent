@@ -47,6 +47,14 @@ the plugin was installed.
 
 Add `--json` when you want the same facts as data.
 
+Doctor validates the bootstrap that actually belongs to the named harness:
+the session hook and manifest for Claude, Codex, and Cursor;
+`config.instructions` in OpenCode's plugin; and Hermes registration plus its
+first-tool-result fallback. It also reports the running Python version against
+the supported 3.9+ floor. Codex hook trust is not provable from disk: review
+the plugin in `/hooks` and confirm it is trusted before treating the on-disk
+hook as active.
+
 ## Then answer the three it cannot
 
 A script can prove the hook is installed and that the policy renders. It cannot
@@ -66,7 +74,9 @@ prove the policy arrived. Only you can see your own context.
 3. **Is memory present and delivered?** The script reports whether the store
    exists and whether each native surface received its generated copy. Whether
    those facts are in front of you right now is something only you can confirm.
-   Report the two separately; they disagree more often than expected.
+   Report the two separately; they disagree more often than expected. Hermes's
+   projection is opt-in, so doctor reports it explicitly as disabled rather
+   than silently omitting it.
 
 ## Reading the report
 
@@ -76,10 +86,13 @@ three: **healthy**, **degraded**, or **not loaded**. Never free prose. `not
 loaded` outranks everything else: if the policy did not arrive, nothing else in
 the report describes how this session will actually behave.
 
-**Breadcrumb logs are history, not a verdict.** They carry no timestamps, and
-the test suite drives the failure paths deliberately, so entries accumulate on
-any machine where the tests have ever run. Quote the newest line if it is
-useful, but never conclude "the hook failed this session" from it.
+**Most breadcrumb logs are history, not a verdict.** Some older logs carry no
+timestamps, and the test suite drives failure paths deliberately, so entries
+can accumulate on a development machine. Quote the newest line if useful, but
+never conclude "the hook failed this session" from history alone. The one
+capability exception is `opencode-skills.log`: its presence means namespaced
+OpenCode skill registration degraded and doctor reports that state until the
+breadcrumb is cleared after the underlying problem is understood.
 
 ## Failure modes
 
@@ -87,7 +100,9 @@ useful, but never conclude "the hook failed this session" from it.
 |---|---|---|
 | Policy absent, bootstrap installed | the hook fired and failed open | read the newest breadcrumb, then confirm it describes this session before believing it |
 | Policy present, mapping names another harness | detection resolved wrong, usually a stray plugin-root variable exported in an unrelated shell | unset it, restart the session |
-| Harness reported as `unknown` | no `--harness`, and this harness exports no plugin-root variable | re-run with `--harness <name>` read off your mapping heading |
+| Harness reported as `unknown` | no `--harness`, and this harness exports no plugin-root variable | degraded until re-run with `--harness <name>` read off your mapping heading; a still-unknown explicit run is invalid wiring |
+| Codex hook is on disk but policy is absent | the new or changed hook may not be trusted | open `/hooks`, review the hook, and explicitly trust it |
+| OpenCode reports `opencode-skills.log` | the namespaced shadow tree failed and no bare-name fallback was registered | inspect the newest breadcrumb, fix the path/permission failure, and restart OpenCode |
 | Shipped roster exceeds what you can invoke | the harness cached an older payload, or the skills directory is not registered | update the plugin; on OpenCode check `opencode debug skill` for each skill's `location` |
 | Skills listed as `leo-<name>` instead of `leo:<name>` | OpenCode, working as designed | invoke them as `leo-<name>`; not a fault |
 | Tier names resolve to models this harness cannot run | mapping and harness disagree | same as row 2 |

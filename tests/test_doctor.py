@@ -89,6 +89,47 @@ class TestJsonReport(DoctorCase):
         self.assertIn("attach-pr", data["skills"]["excluded_here"])
         self.assertNotIn("attach-pr", data["skills"]["expected_here"])
 
+    def test_reports_python_support_and_harness_specific_bootstrap(self):
+        done = self.run_cli("--json", "--harness", "hermes")
+        data = json.loads(done.stdout)
+        self.assertTrue(data["python"]["supported"])
+        self.assertEqual(data["python"]["minimum"], "3.9")
+        self.assertIn("registration", data["bootstrap"])
+        self.assertIn("fallback", data["bootstrap"])
+
+    def test_reports_hermes_projection_when_it_is_disabled(self):
+        done = self.run_cli("--json", "--harness", "codex")
+        data = json.loads(done.stdout)
+        self.assertFalse(data["memory"]["hermes_projection"]["enabled"])
+        self.assertEqual(data["memory"]["hermes_projection"]["status"], "disabled")
+
+    def test_codex_report_explains_that_hook_trust_needs_hooks_ui(self):
+        done = self.run_cli("--json", "--harness", "codex")
+        data = json.loads(done.stdout)
+        self.assertIn("/hooks", data["bootstrap"]["trust_instruction"])
+
+    def test_opencode_skills_breadcrumb_is_reported_as_degraded_history(self):
+        local = os.environ["LEOS_AGENT_LOCAL_PATH"]
+        os.makedirs(local, exist_ok=True)
+        with open(os.path.join(local, "opencode-skills.log"), "w", encoding="utf-8") as fh:
+            fh.write("shadow generation failed\n")
+        done = self.run_cli("--json", "--harness", "opencode")
+        data = json.loads(done.stdout)
+        self.assertIn("opencode-skills.log", data["breadcrumbs"])
+        self.assertEqual(data["status"], "degraded")
+
+    def test_hook_manifest_validation_checks_the_real_event_and_command(self):
+        doctor = _load(DOCTOR_PY, "leo_doctor_manifest_shape")
+        real = doctor._read_json(os.path.join(PAYLOAD, "hooks", "hooks.json"))
+        self.assertTrue(doctor._hook_manifest_valid(real, "codex"))
+        self.assertFalse(doctor._hook_manifest_valid(
+            {"note": "session-start.py is mentioned but not registered"}, "codex"
+        ))
+        self.assertFalse(doctor._hook_manifest_valid(
+            {"hooks": {"PreToolUse": [{"hooks": [{"command": "session-start.py"}]}]}},
+            "codex",
+        ))
+
 
 class TestHarnessDetection(DoctorCase):
     def test_agrees_with_the_bootstrap_for_every_harness(self):
@@ -195,6 +236,24 @@ class TestDegradation(DoctorCase):
         done = self.run_cli(env_overrides={"CLAUDE_PLUGIN_ROOT": PAYLOAD})
         self.assertIn("provenance unknown", done.stdout)
         self.assertIn("not this session", done.stdout)
+
+    def test_missing_required_bootstrap_returns_nonzero(self):
+        doctor = _load(DOCTOR_PY, "leo_doctor_bad_bootstrap")
+        data = doctor.collect(["--harness", "codex"])
+        data["bootstrap"]["present"] = False
+        self.assertEqual(doctor._exit_code(data), 1)
+
+    def test_invalid_required_payload_returns_nonzero(self):
+        doctor = _load(DOCTOR_PY, "leo_doctor_bad_payload")
+        data = doctor.collect(["--harness", "codex"])
+        data["payload"]["valid"] = False
+        self.assertEqual(doctor._exit_code(data), 1)
+
+    def test_unknown_detection_is_degraded_but_report_only(self):
+        doctor = _load(DOCTOR_PY, "leo_doctor_unknown")
+        data = doctor.collect([])
+        self.assertEqual(data["status"], "degraded")
+        self.assertEqual(doctor._exit_code(data), 0)
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MEMORY_PY = os.path.join(REPO, "plugins", "leo", "scripts", "memory.py")
@@ -129,6 +130,41 @@ class TestWriteAndRead(MemoryCase):
         first = self.write(title="T", type_="preference")
         second = self.write(title="T", type_="convention")
         self.assertNotEqual(first["path"], second["path"])
+
+    def test_slug_collision_with_a_different_title_never_reuses_the_fact(self):
+        first = self.write(title="Build system", type_="convention", body="first")
+        second = self.write(title="Build-system", type_="convention", body="second")
+        self.assertNotEqual(first["path"], second["path"])
+        self.assertEqual(self.memory.parse_fact(first["path"])[1], "first")
+
+    def test_corrupt_occupied_slot_is_left_byte_for_byte_unchanged(self):
+        directory = os.path.join(self.memory.memory_root(), "global")
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(directory, "same.md")
+        original = b"not a memory\x00and not ours\n"
+        with open(path, "wb") as fh:
+            fh.write(original)
+        result = self.write(title="Same", body="new fact")
+        self.assertNotEqual(result["path"], path)
+        with open(path, "rb") as fh:
+            self.assertEqual(fh.read(), original)
+
+    def test_memory_store_and_generated_files_are_private(self):
+        result = self.write(title="Private")
+        root = self.memory.memory_root()
+        for directory in (root, os.path.join(root, "global")):
+            self.assertEqual(os.stat(directory).st_mode & 0o777, 0o700)
+        for path in (result["path"], os.path.join(root, "index.json"),
+                     os.path.join(root, "MEMORY.md")):
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+
+    def test_exact_update_is_allowed_when_the_scope_is_at_capacity(self):
+        first = self.write(title="At capacity", body="old")
+        with mock.patch.object(self.memory, "MAX_FACTS_PER_SCOPE", 1):
+            second = self.write(title="At capacity", body="new")
+        self.assertEqual(second["action"], "updated")
+        self.assertEqual(second["path"], first["path"])
+        self.assertEqual(self.memory.parse_fact(first["path"])[1], "new")
 
     def test_repo_scope_requires_a_key(self):
         with self.assertRaises(SystemExit):
@@ -283,6 +319,22 @@ class TestProjection(MemoryCase):
         os.chmod(self.codex_file, 0o644)
         self.write(title="Global fact")
         self.assertEqual(os.stat(self.codex_file).st_mode & 0o777, 0o644)
+
+    def test_new_generated_projection_is_private(self):
+        self.write(title="Global fact")
+        self.assertEqual(os.stat(self.codex_file).st_mode & 0o777, 0o600)
+
+    def test_existing_leo_owned_projection_is_tightened_to_private(self):
+        cursor_rules = os.path.join(self.env["HOME"], ".cursor", "rules")
+        os.makedirs(cursor_rules, exist_ok=True)
+        cursor_file = os.path.join(cursor_rules, "leos-agent-memory.mdc")
+        with open(cursor_file, "w", encoding="utf-8") as fh:
+            fh.write("old generated content\n")
+        os.chmod(cursor_file, 0o644)
+
+        self.write(title="Global fact")
+
+        self.assertEqual(os.stat(cursor_file).st_mode & 0o777, 0o600)
 
     def test_kill_switch_writes_nothing(self):
         os.environ["LEOS_AGENT_NO_PROJECT"] = "1"

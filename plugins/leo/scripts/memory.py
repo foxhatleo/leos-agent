@@ -45,6 +45,7 @@ Set LEOS_AGENT_NO_PROJECT=1 to disable writing to native surfaces entirely.
 Exit codes: 0 ok, non-zero on error (except context/session, which never fail).
 """
 import datetime
+import contextlib
 import hashlib
 import json
 import os
@@ -150,14 +151,39 @@ def ref_path(ref):
 # fact files
 # --------------------------------------------------------------------------
 
-def _atomic_text(path, text, mode=0o644):
+def _private_dir(path):
+    """Create a canonical Leo-owned directory with private permissions."""
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    os.chmod(path, 0o700)
+    return path
+
+
+def _memory_dirs(scope=None, repo=None):
+    root = _private_dir(memory_root())
+    if scope == "global":
+        return _private_dir(os.path.join(root, "global"))
+    if scope == "repo":
+        repo_root = _private_dir(os.path.join(root, "repo"))
+        return _private_dir(os.path.join(repo_root, repo_slug(repo)))
+    return root
+
+
+@contextlib.contextmanager
+def _memory_lock():
+    """The one lock boundary for every memory read-modify-write operation."""
+    _memory_dirs()
+    with state._locked(_lock_path()):
+        yield
+
+
+def _atomic_text(path, text, mode=0o600):
     """Markdown twin of state.atomic_write, which json-dumps its argument."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
-        os.chmod(tmp, mode)  # mkstemp is 0600; these are readable config files
+        os.chmod(tmp, mode)  # mkstemp is 0600; callers choose the final contract.
         os.replace(tmp, path)
     except BaseException:
         try:
@@ -254,7 +280,7 @@ def _listdir(path):
 # index
 # --------------------------------------------------------------------------
 
-def reindex():
+def _reindex_unlocked():
     facts, unreadable = _iter_facts()
     entries = []
     repos = {}
@@ -277,9 +303,15 @@ def reindex():
         "repos": repos,
         "unreadable": unreadable,
     }
-    state.atomic_write(os.path.join(memory_root(), "index.json"), index)
+    _atomic_text(os.path.join(memory_root(), "index.json"),
+                 json.dumps(index, indent=1, sort_keys=True) + "\n")
     _atomic_text(os.path.join(memory_root(), "MEMORY.md"), _render_memory_md(index))
     return index
+
+
+def reindex():
+    with _memory_lock():
+        return _reindex_unlocked()
 
 
 def _load_index():
@@ -367,14 +399,6 @@ def render_context(index, repo=None, limit=MEMORY_CONTEXT_LIMIT):
 # --------------------------------------------------------------------------
 # projection
 # --------------------------------------------------------------------------
-
-def _home(var, *parts):
-    base = os.environ.get(var)
-    if not base:
-        base = os.path.join(os.path.expanduser("~"), parts[0])
-        parts = parts[1:]
-    return os.path.join(base, *parts) if parts else base
-
 
 def hermes_home():
     return os.environ.get("HERMES_HOME") or os.path.join(os.path.expanduser("~"), ".hermes")
@@ -476,7 +500,7 @@ def _hermes_absent(targets):
     return [{"harness": "hermes", "path": None, "status": "skipped:opt-in-required"}]
 
 
-def project(index=None):
+def _project_unlocked(index=None):
     if os.environ.get("LEOS_AGENT_NO_PROJECT") == "1":
         targets = projection_targets()
         return [{"harness": h, "path": f, "status": "skipped:disabled"}
@@ -484,7 +508,7 @@ def project(index=None):
             {"harness": t["harness"], "path": None, "status": "skipped:disabled"}
             for t in _hermes_absent(targets)]
     if index is None:
-        index = _load_index() or reindex()
+        index = _load_index() or _reindex_unlocked()
     # GLOBAL facts only — see the module docstring.
     body = render_context({"facts": [e for e in index["facts"] if e["scope"] == "global"],
                            "unreadable": index.get("unreadable", [])})
@@ -498,6 +522,11 @@ def project(index=None):
     return results
 
 
+def project(index=None):
+    with _memory_lock():
+        return _project_unlocked(index)
+
+
 def _project_one(gate, path, owned, block, require_file=False):
     try:
         if not os.path.isdir(gate):
@@ -508,9 +537,13 @@ def _project_one(gate, path, owned, block, require_file=False):
             return "skipped:no-soul"
         target = os.path.realpath(path) if os.path.islink(path) else path
         existing = ""
-        mode = 0o644
+        # New generated projections are private. If the user already owns the
+        # target, retain its existing mode exactly instead of tightening it
+        # behind their back.
+        mode = 0o600
         if os.path.exists(target):
-            mode = os.stat(target).st_mode & 0o777
+            if not owned:
+                mode = os.stat(target).st_mode & 0o777
             with open(target, encoding="utf-8", errors="replace") as fh:
                 existing = fh.read()
         if owned:
@@ -560,11 +593,11 @@ def write_fact(scope, type_, title, body, repo=None):
 
     directory = _scope_dir(scope, repo)
     slug = fact_slug(title)
-    with state._locked(_lock_path()):
-        os.makedirs(directory, exist_ok=True)
-        if len(_listdir(directory)) >= MAX_FACTS_PER_SCOPE:
+    with _memory_lock():
+        _memory_dirs(scope, repo)
+        path, action, created = _resolve_slot(directory, slug, type_, title)
+        if action == "created" and len(_listdir(directory)) >= MAX_FACTS_PER_SCOPE:
             sys.exit(f"memory: this scope is full ({MAX_FACTS_PER_SCOPE} facts) — consolidate or forget first")
-        path, action, created = _resolve_slot(directory, slug, type_)
         now = _now()
         meta = {
             "title": title,
@@ -577,25 +610,27 @@ def write_fact(scope, type_, title, body, repo=None):
         if scope == "repo":
             meta["repo"] = repo
         _atomic_text(path, render_fact(meta, body))
-        index = reindex()
-        projection = project(index)
+        index = _reindex_unlocked()
+        projection = _project_unlocked(index)
     rel = os.path.relpath(path, memory_root())[:-3]
     return {"action": action, "ref": rel, "path": path,
             "description": meta["description"], "projection": projection}
 
 
-def _resolve_slot(directory, slug, type_):
-    """Same title+type updates in place; same title, different type gets -2."""
+def _resolve_slot(directory, slug, type_, title):
+    """Only an exact title-and-type identity updates; collisions get -N."""
     candidate = os.path.join(directory, f"{slug}.md")
     parsed = parse_fact(candidate) if os.path.exists(candidate) else None
-    if parsed is None:
-        return candidate, ("created" if not os.path.exists(candidate) else "created"), None
-    if parsed[0].get("type") == type_:
+    if not os.path.exists(candidate):
+        return candidate, "created", None
+    if (parsed and parsed[0].get("type") == type_
+            and parsed[0].get("title") == title):
         return candidate, "updated", parsed[0].get("created")
     suffix = 2
     while os.path.exists(os.path.join(directory, f"{slug}-{suffix}.md")):
         existing = parse_fact(os.path.join(directory, f"{slug}-{suffix}.md"))
-        if existing and existing[0].get("type") == type_:
+        if (existing and existing[0].get("type") == type_
+                and existing[0].get("title") == title):
             return (os.path.join(directory, f"{slug}-{suffix}.md"), "updated",
                     existing[0].get("created"))
         suffix += 1
@@ -608,22 +643,26 @@ def forget(ref):
         sys.exit(f"memory: no such memory {ref!r}")
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d%H%M%S")
     trash = os.path.join(memory_root(), ".trash", os.path.dirname(ref))
-    with state._locked(_lock_path()):
-        os.makedirs(trash, exist_ok=True)
+    with _memory_lock():
+        trash_root = _private_dir(os.path.join(memory_root(), ".trash"))
+        current = trash_root
+        for part in os.path.dirname(ref).split("/"):
+            current = _private_dir(os.path.join(current, part))
         # Move, never unlink: automatic capture plus hard delete on the model's
         # own judgment is a data-loss path, and the trash costs nothing.
         destination = os.path.join(trash, f"{os.path.basename(ref)}.{stamp}.md")
         shutil.move(path, destination)
-        index = reindex()
-        projection = project(index)
+        index = _reindex_unlocked()
+        projection = _project_unlocked(index)
     return {"forgotten": ref, "path": destination, "projection": projection}
 
 
 def session(cwd=None):
     """One call for the bootstraps: refresh, project, return the block."""
-    index = reindex()
-    project(index)
-    return render_context(index, repo=repo_key(cwd))
+    with _memory_lock():
+        index = _reindex_unlocked()
+        _project_unlocked(index)
+        return render_context(index, repo=repo_key(cwd))
 
 
 FLAGS = ("--repo", "--cwd")
