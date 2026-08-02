@@ -1,2 +1,5 @@
+interface:
+  display_name: "Set Up Leo"
+  short_description: "Configure Leo's opt-in wiring and MCP services"
 policy:
   allow_implicit_invocation: false

@@ -692,6 +692,25 @@ class TestSkillFrontmatter(unittest.TestCase):
                 )
 
 
+class TestCodexSkillMetadata(unittest.TestCase):
+    def test_opt_in_metadata_has_required_interface_and_policy(self):
+        expected = {"setup", "watch-review"}
+        found = set()
+        for name in skill_dirs():
+            path = os.path.join(SKILLS_DIR, name, "agents", "openai.yaml")
+            if not os.path.isfile(path):
+                continue
+            found.add(name)
+            with self.subTest(skill=name), open(path, encoding="utf-8") as fh:
+                lines = fh.read().splitlines()
+                self.assertEqual(lines[0], "interface:")
+                self.assertTrue(any(line.startswith("  display_name: ") for line in lines))
+                self.assertTrue(any(line.startswith("  short_description: ") for line in lines))
+                self.assertIn("policy:", lines)
+                self.assertIn("  allow_implicit_invocation: false", lines)
+        self.assertEqual(found, expected)
+
+
 class TestPortableSkillDescriptionRouting(unittest.TestCase):
     """Portable descriptions are the routing surface every harness receives."""
 
@@ -970,10 +989,6 @@ class TestReadmeRoster(unittest.TestCase):
 
         for f in agent_files():
             stem = os.path.splitext(f)[0]
-            if stem == "review-lens":
-                # The public README deliberately documents the seven routed
-                # roles, not this internal review-pr lens.
-                continue
             with self.subTest(agent=stem):
                 self.assertIn(stem, text)
 
