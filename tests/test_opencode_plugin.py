@@ -13,10 +13,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from expected_version import EXPECTED_VERSION
+from test_consistency import parse_frontmatter
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PAYLOAD = os.path.join(REPO, "plugins", "leo")
@@ -187,7 +189,7 @@ class TestOpenCodeSessionDirectory(unittest.TestCase):
         # A shared cache would pin whichever project started first and serve
         # its repo-scoped memory block to every other project in the process.
         text = _read_plugin_js_code()
-        self.assertIn("policyCache = new Map()", text)
+        self.assertIn("policyInputsCache = null", text)
         self.assertIn("policyPathCache = new Map()", text)
         self.assertIn("opencode-policy-${directoryKey(directory)}.md", text)
 
@@ -277,6 +279,292 @@ class TestOpenCodeGuardLive(unittest.TestCase):
             self.assertEqual(result.stdout.strip(), "ALLOW")
             with open(os.path.join(local, "opencode-guard.log"), encoding="utf-8") as fh:
                 self.assertIn("guard did not run", fh.read())
+
+    def test_guard_child_early_exit_with_large_payload_fails_open_and_logs(self):
+        with tempfile.TemporaryDirectory() as local, tempfile.TemporaryDirectory() as fake_bin:
+            fake_python = os.path.join(fake_bin, "python3")
+            with open(fake_python, "w", encoding="utf-8") as fh:
+                fh.write("#!/bin/sh\nexit 0\n")
+            os.chmod(fake_python, 0o755)
+            command = "echo " + ("x" * 70_000)
+            env = dict(os.environ, PATH=fake_bin, LEOS_AGENT_LOCAL_PATH=local)
+            result = subprocess.run(
+                [
+                    shutil.which("node"), "--input-type=module", "-e",
+                    "const p=(await import(process.argv[1])).default;"
+                    "const h=await p({directory:process.argv[2]});"
+                    "await h['tool.execute.before']({tool:'bash'},"
+                    "{args:{command:process.argv[3]}});console.log('ALLOW')",
+                    PLUGIN_JS, REPO, command,
+                ],
+                capture_output=True, text=True, timeout=60, env=env,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "ALLOW")
+            with open(os.path.join(local, "opencode-guard.log"), encoding="utf-8") as fh:
+                self.assertIn("guard did not run", fh.read())
+
+
+@unittest.skipUnless(shutil.which("node"), "node is required to drive the ESM bridge")
+class TestOpenCodeShadowSkillsTree(unittest.TestCase):
+    """OpenCode requires a skill's frontmatter `name:` to equal its
+    containing directory name and has no separate namespace, so plugin.js
+    registers a generated shadow copy of skills/ with every skill renamed
+    leo-<name> in place of the source tree (see plugin.js's own header
+    comment for why). This drives the real config() hook rather than
+    re-deriving the copy/rewrite/hash rules in Python — a reimplementation
+    here could pass while the generator it is meant to guard silently
+    drifted.
+
+    Each test runs against its own throwaway copy of the plugin payload, so
+    mutating a "source" SKILL.md to exercise cache invalidation never
+    touches the repo.
+    """
+
+    def setUp(self):
+        self.workdir = tempfile.mkdtemp(prefix="leo-opencode-skills-")
+        self.addCleanup(shutil.rmtree, self.workdir, ignore_errors=True)
+        self.payload_copy = os.path.join(self.workdir, "leo")
+        shutil.copytree(PAYLOAD, self.payload_copy)
+        self.plugin_js = os.path.join(self.payload_copy, "adapters", "opencode", "plugin.js")
+        self.local_state = os.path.join(self.workdir, "local-state")
+        skills_dir = os.path.join(self.payload_copy, "skills")
+        self.source_skill_names = sorted(
+            name for name in os.listdir(skills_dir)
+            if os.path.isfile(os.path.join(skills_dir, name, "SKILL.md"))
+        )
+
+    def _generate(self):
+        """Runs the real config() hook and returns the shadow dir it registered
+        in config.skills.paths — the same value OpenCode itself would read.
+        """
+        script = (
+            "const plugin = (await import(process.argv[1])).default;"
+            "const hooks = await plugin({ directory: process.argv[2] });"
+            "const config = {};"
+            "await hooks.config(config);"
+            "console.log(config.skills.paths[0]);"
+        )
+        env = dict(os.environ, LEOS_AGENT_LOCAL_PATH=self.local_state)
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script, self.plugin_js, self.workdir],
+            capture_output=True, text=True, timeout=60, env=env,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        shadow = result.stdout.strip()
+        self.assertTrue(os.path.isdir(shadow), f"config() did not return a directory: {shadow!r}")
+        return shadow
+
+    def test_every_skill_appears_exactly_once_renamed_leo_prefixed(self):
+        shadow = self._generate()
+        registered = sorted(
+            name for name in os.listdir(shadow)
+            if os.path.isdir(os.path.join(shadow, name))
+        )
+        self.assertEqual(registered, [f"leo-{name}" for name in self.source_skill_names])
+
+    def test_frontmatter_name_matches_the_shadow_directory_name(self):
+        shadow = self._generate()
+        for name in self.source_skill_names:
+            with self.subTest(skill=name):
+                shadow_name = f"leo-{name}"
+                fm = parse_frontmatter(os.path.join(shadow, shadow_name, "SKILL.md"))
+                self.assertEqual(fm.get("name"), shadow_name)
+
+    def test_using_leo_references_travel_with_the_copy(self):
+        shadow = self._generate()
+        src_refs = os.path.join(self.payload_copy, "skills", "using-leo", "references")
+        dest_refs = os.path.join(shadow, "leo-using-leo", "references")
+        self.assertTrue(os.path.isdir(dest_refs), "references/ did not travel with the shadow copy")
+        self.assertEqual(sorted(os.listdir(src_refs)), sorted(os.listdir(dest_refs)))
+        for name in os.listdir(src_refs):
+            with self.subTest(reference=name):
+                with open(os.path.join(src_refs, name), encoding="utf-8") as fh:
+                    src_text = fh.read()
+                with open(os.path.join(dest_refs, name), encoding="utf-8") as fh:
+                    dest_text = fh.read()
+                self.assertEqual(src_text, dest_text)
+
+    def test_regeneration_is_idempotent(self):
+        first = self._generate()
+        second = self._generate()
+        self.assertEqual(first, second)
+        with open(os.path.join(second, "leo-doctor", "SKILL.md"), encoding="utf-8") as fh:
+            self.assertIn("name: leo-doctor", fh.read())
+
+    def test_changed_source_file_produces_a_different_tree(self):
+        first = self._generate()
+        skill_md = os.path.join(self.payload_copy, "skills", "doctor", "SKILL.md")
+        with open(skill_md, "a", encoding="utf-8") as fh:
+            fh.write("\n<!-- leo-test-perturbation -->\n")
+
+        second = self._generate()
+
+        self.assertNotEqual(first, second)
+        with open(os.path.join(second, "leo-doctor", "SKILL.md"), encoding="utf-8") as fh:
+            self.assertIn("<!-- leo-test-perturbation -->", fh.read())
+
+    def test_a_superseded_tree_survives_until_it_goes_stale(self):
+        """A fresh tree is never swept, however superseded it looks.
+
+        Two payloads can share one state root — the documented dev setup runs
+        a working tree beside the installed package — and each session holds
+        the path config() handed it. Deleting on hash mismatch alone would
+        pull a live session's skills out from under it.
+        """
+        first = self._generate()
+        skill_md = os.path.join(self.payload_copy, "skills", "doctor", "SKILL.md")
+        with open(skill_md, "a", encoding="utf-8") as fh:
+            fh.write("\n<!-- leo-test-perturbation -->\n")
+
+        second = self._generate()
+        self.assertNotEqual(first, second)
+        self.assertTrue(
+            os.path.isdir(first),
+            "a freshly-used shadow tree was swept; a live session would have lost its skills",
+        )
+
+    def test_a_tree_untouched_past_the_grace_period_is_swept(self):
+        first = self._generate()
+        marker = os.path.join(first, ".leo-shadow-complete")
+        self.assertTrue(os.path.isfile(marker), "completion marker missing")
+        # Eight days: past the seven-day grace period in plugin.js.
+        stale = time.time() - 8 * 24 * 60 * 60
+        os.utime(marker, (stale, stale))
+        os.utime(first, (stale, stale))
+
+        skill_md = os.path.join(self.payload_copy, "skills", "doctor", "SKILL.md")
+        with open(skill_md, "a", encoding="utf-8") as fh:
+            fh.write("\n<!-- leo-test-perturbation -->\n")
+        second = self._generate()
+
+        self.assertNotEqual(first, second)
+        self.assertFalse(
+            os.path.isdir(first),
+            "a tree untouched for longer than the grace period was not swept",
+        )
+
+    def test_reusing_a_tree_refreshes_its_marker(self):
+        """The touch is what keeps a live tree young; without it the grace
+        period would expire under a long-running session."""
+        tree = self._generate()
+        marker = os.path.join(tree, ".leo-shadow-complete")
+        stale = time.time() - 8 * 24 * 60 * 60
+        os.utime(marker, (stale, stale))
+
+        self.assertEqual(self._generate(), tree)
+        self.assertGreater(
+            os.stat(marker).st_mtime,
+            stale + 1,
+            "re-using a shadow tree did not refresh its marker mtime",
+        )
+
+    def test_shadow_failure_registers_no_bare_skills_fallback_and_leaves_log(self):
+        shadow = self._generate()
+        shutil.rmtree(os.path.join(shadow, "leo-doctor"))
+        with open(os.path.join(shadow, "leo-doctor"), "w", encoding="utf-8") as fh:
+            fh.write("block copied skill directory")
+        os.unlink(os.path.join(shadow, ".leo-shadow-complete"))
+        script = (
+            "const plugin=(await import(process.argv[1])).default;"
+            "const hooks=await plugin({directory:process.argv[2]});const config={};"
+            "await hooks.config(config);console.log(JSON.stringify(config.skills.paths));"
+        )
+        env = dict(os.environ, LEOS_AGENT_LOCAL_PATH=self.local_state)
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script, self.plugin_js, self.workdir],
+            capture_output=True, text=True, timeout=60, env=env,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), [])
+        with open(os.path.join(self.local_state, "opencode-skills.log"), encoding="utf-8") as fh:
+            breadcrumb = fh.read()
+        self.assertIn("shadow skills tree generation failed", breadcrumb)
+        self.assertNotIn("falling back", breadcrumb.lower())
+
+
+@unittest.skipUnless(shutil.which("node"), "node is required to drive the ESM bridge")
+class TestOpenCodeRuntimePolicy(unittest.TestCase):
+    def setUp(self):
+        self.workdir = tempfile.mkdtemp(prefix="leo-opencode-runtime-")
+        self.addCleanup(shutil.rmtree, self.workdir, ignore_errors=True)
+        self.payload_copy = os.path.join(self.workdir, "leo")
+        shutil.copytree(PAYLOAD, self.payload_copy)
+        self.plugin_js = os.path.join(self.payload_copy, "adapters", "opencode", "plugin.js")
+        self.local_state = os.path.join(self.workdir, "local-state")
+
+    def _run(self, script, *, env=None):
+        result = subprocess.run(
+            [shutil.which("node"), "--input-type=module", "-e", script, self.plugin_js, self.workdir],
+            capture_output=True, text=True, timeout=60,
+            env=dict(os.environ, LEOS_AGENT_LOCAL_PATH=self.local_state, **(env or {})),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout
+
+    def test_agents_are_namespaced_and_user_collision_wins(self):
+        out = self._run(
+            "const p=(await import(process.argv[1])).default;const h=await p({directory:process.argv[2]});"
+            "const c={agent:{'leo-planner':{prompt:'user definition'}}};await h.config(c);"
+            "console.log(JSON.stringify(c.agent))"
+        )
+        agents = json.loads(out)
+        self.assertEqual(agents["leo-planner"], {"prompt": "user definition"})
+        self.assertTrue(agents)
+        self.assertTrue(all(name.startswith("leo-") for name in agents))
+        self.assertNotIn("planner", agents)
+        with open(os.path.join(self.local_state, "opencode-agents.log"), encoding="utf-8") as fh:
+            self.assertIn("preserving user OpenCode agent definition for leo-planner", fh.read())
+
+    def test_generated_policy_and_state_root_modes_are_private(self):
+        out = self._run(
+            "const p=(await import(process.argv[1])).default;const h=await p({directory:process.argv[2]});"
+            "const c={};await h.config(c);console.log(c.instructions[0])"
+        )
+        policy_path = out.strip()
+        self.assertEqual(os.stat(self.local_state).st_mode & 0o777, 0o700)
+        self.assertEqual(os.stat(policy_path).st_mode & 0o777, 0o600)
+
+    def test_config_rebuilds_memory_but_writes_only_when_digest_changes(self):
+        fake_bin = os.path.join(self.workdir, "bin")
+        os.mkdir(fake_bin)
+        fake_python = os.path.join(fake_bin, "python3")
+        with open(fake_python, "w", encoding="utf-8") as fh:
+            fh.write(
+                "#!/bin/sh\n"
+                "cat \"$LEOS_AGENT_LOCAL_PATH/memory-current\"\n"
+            )
+        os.chmod(fake_python, 0o755)
+        out = self._run(
+            "const fs=await import('node:fs/promises');const p=(await import(process.argv[1])).default;"
+            "await fs.mkdir(process.env.LEOS_AGENT_LOCAL_PATH,{recursive:true});"
+            "const h=await p({directory:process.argv[2]});const a={},b={},c={};"
+            "await fs.writeFile(process.env.LEOS_AGENT_LOCAL_PATH+'/memory-current','memory-one');await h.config(a);"
+            "const one=await fs.readFile(a.instructions[0],'utf8');"
+            "await fs.writeFile(process.env.LEOS_AGENT_LOCAL_PATH+'/memory-current','memory-two');await h.config(b);"
+            "const two=await fs.readFile(b.instructions[0],'utf8');const before=(await fs.stat(b.instructions[0])).mtimeMs;"
+            "await h.config(c);const after=(await fs.stat(c.instructions[0])).mtimeMs;"
+            "console.log(JSON.stringify({same:a.instructions[0]===b.instructions[0],one,two,before,after}))",
+            env={"PATH": fake_bin + os.pathsep + os.environ["PATH"]},
+        )
+        result = json.loads(out)
+        self.assertTrue(result["same"])
+        self.assertIn("memory-one", result["one"])
+        self.assertIn("memory-two", result["two"])
+        self.assertEqual(result["before"], result["after"])
+        self.assertNotIn("${CLAUDE_PLUGIN_ROOT}", result["two"])
+
+    def test_transform_adds_the_real_policy_exactly_once(self):
+        out = self._run(
+            "const p=(await import(process.argv[1])).default;const h=await p({directory:process.argv[2]});"
+            "const o={system:['base']};await h['experimental.chat.system.transform']({},o);"
+            "await h['experimental.chat.system.transform']({},o);console.log(JSON.stringify(o.system))"
+        )
+        system = json.loads(out)
+        policy = [item for item in system if isinstance(item, str) and "<leo-policy>" in item]
+        self.assertEqual(len(policy), 1)
+        self.assertIn("# Leo's global agent directives", policy[0])
+        self.assertNotIn("${CLAUDE_PLUGIN_ROOT}", policy[0])
 
 
 class TestOpenCodePackageJson(unittest.TestCase):

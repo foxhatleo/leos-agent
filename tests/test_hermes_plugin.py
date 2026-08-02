@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import tempfile
+import threading
 import unittest
 
 
@@ -215,6 +216,40 @@ class TestHermesPolicyInjection(unittest.TestCase):
             self.assertIsNone(self.hook(result="important output", task_id="t1"))
         finally:
             self.plugin.POLICY_LIMIT = original
+
+    def test_failed_context_does_not_claim_the_session(self):
+        original = self.plugin._context
+        self.plugin._context = lambda: (_ for _ in ()).throw(RuntimeError("memory unavailable"))
+        try:
+            self.assertIsNone(self.hook(result="important output", task_id="retry"))
+        finally:
+            self.plugin._context = original
+        self.assertIsNotNone(self.hook(result="important output", task_id="retry"))
+
+    def test_concurrent_calls_claim_a_session_once(self):
+        barrier = threading.Barrier(8)
+        results = []
+        lock = threading.Lock()
+
+        def invoke():
+            barrier.wait()
+            value = self.hook(result="unchanged", task_id="shared")
+            with lock:
+                results.append(value)
+
+        workers = [threading.Thread(target=invoke) for _ in range(8)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
+        injected = [value for value in results if value is not None]
+        self.assertEqual(len(injected), 1)
+        self.assertTrue(injected[0].startswith("unchanged\n\n<leo-policy>"))
+
+    def test_claims_are_never_evicted_after_256_sessions(self):
+        for number in range(300):
+            self.assertIsNotNone(self.hook(result="ok", task_id=f"session-{number}"))
+        self.assertIsNone(self.hook(result="ok", task_id="session-0"))
 
     def test_non_string_results_are_left_alone(self):
         self.assertIsNone(self.hook(result=None, task_id="t1"))

@@ -1,24 +1,27 @@
 """Hermes entrypoint for the Leo plugin."""
 
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
+import threading
 
 
 ROOT = Path(__file__).resolve().parent
 PAYLOAD = ROOT / "plugins" / "leo"
 # Self-imposed context budget, not a documented Hermes API cap: it exists so
-# the policy can't grow without someone noticing. 16000 matches the Claude
-# SessionStart budget in tests/test_session_start.py, so both bootstraps are
-# held to one number. Overflow degrades to no injection (see _policy_context).
+# the policy can't grow without someone noticing. Hermes also carries the
+# generated harness mapping and optional memory envelope, so its ceiling is
+# slightly larger than Claude's SessionStart budget. Overflow degrades to no
+# injection (see _policy_context).
 #
-# Deliberate raise from 14000, the second such raise (12000 -> 14000 -> 16000).
+# Deliberate raise from 16000 after adding the 7.0 policy and role metadata.
 # The memory index is appended after the policy and is bounded by whatever is
 # left under this ceiling, so the number now covers policy + mapping + memory
 # rather than policy + mapping alone. _render_policy() stays policy-only and
 # keeps its own growth headroom check; _context() is what this limit bounds.
-POLICY_LIMIT = 16_000
+POLICY_LIMIT = 17_000
 _GUARD = None
 
 
@@ -128,6 +131,7 @@ def _load_guard():
 _INJECTED = set()
 _INJECTED_UNKEYED = False
 _PRIMARY_ALIVE = False
+_INJECTION_LOCK = threading.Lock()
 
 
 def _claim_injection(task_id):
@@ -146,32 +150,38 @@ def _claim_injection(task_id):
     the fallback stands down as soon as it fires.
     """
     global _INJECTED_UNKEYED
-    if _PRIMARY_ALIVE:
-        return False
-    key = task_id if isinstance(task_id, str) and task_id else None
-    if key is None:
-        if _INJECTED_UNKEYED:
+    key = (
+        hashlib.sha256(task_id.encode("utf-8")).hexdigest()
+        if isinstance(task_id, str) and task_id
+        else None
+    )
+    with _INJECTION_LOCK:
+        if _PRIMARY_ALIVE:
             return False
-        _INJECTED_UNKEYED = True
+        if key is None:
+            if _INJECTED_UNKEYED:
+                return False
+            _INJECTED_UNKEYED = True
+            return True
+        if key in _INJECTED:
+            return False
+        # Session identities are process-lifetime, deliberately never evicted:
+        # evicting an old key causes a duplicate policy injection when a
+        # long-lived gateway returns to that session.
+        _INJECTED.add(key)
         return True
-    if key in _INJECTED:
-        return False
-    if len(_INJECTED) > 256:
-        # A long-lived gateway process must not grow this without bound.
-        _INJECTED.clear()
-    _INJECTED.add(key)
-    return True
 
 
 def _on_pre_llm_call(**_):
     """Registered but never invoked upstream (#2817). Left intact and
     unbounded so that the day it starts firing it simply works, and marks
     itself alive so the tool-result fallback stops duplicating it."""
-    global _PRIMARY_ALIVE
     context = _policy_context()
     if context is None:
         return None
-    _PRIMARY_ALIVE = True
+    global _PRIMARY_ALIVE
+    with _INJECTION_LOCK:
+        _PRIMARY_ALIVE = True
     return {"context": context}
 
 
@@ -194,14 +204,16 @@ def _on_transform_tool_result(result="", task_id=None, **_):
     """
     if not isinstance(result, str):
         return None
-    if not _claim_injection(task_id):
-        return None
     try:
         context = _context()
     except Exception as exc:
         _breadcrumb(exc)
         return None
     if not context:
+        return None
+    # Build first. A broken memory/policy read must leave this session eligible
+    # to retry on its next tool result instead of consuming its one fallback.
+    if not _claim_injection(task_id):
         return None
     return f"{result}\n\n{context}"
 
