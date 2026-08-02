@@ -9,6 +9,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -101,12 +102,13 @@ class TestRelease(unittest.TestCase):
         """The publish input is staged; it must never clean the checkout."""
         cache = Path(REPO, "plugins", "leo", "__pycache__")
         cache.mkdir(exist_ok=True)
-        marker = cache / "release-test-marker.pyc"
+        token = uuid.uuid4().hex
+        marker = cache / f"release-test-marker-{token}.pyc"
         marker.write_bytes(b"source cache must remain")
-        self.addCleanup(marker.unlink)
-        log_marker = Path(REPO, "plugins", "leo", "release-test-marker.log")
+        self.addCleanup(marker.unlink, missing_ok=True)
+        log_marker = Path(REPO, "plugins", "leo", f"release-test-marker-{token}.log")
         log_marker.write_text("source log must remain", encoding="utf-8")
-        self.addCleanup(log_marker.unlink)
+        self.addCleanup(log_marker.unlink, missing_ok=True)
 
         with tempfile.TemporaryDirectory() as output:
             staged = Path(output, "leo")
