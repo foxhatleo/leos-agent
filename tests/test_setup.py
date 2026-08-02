@@ -647,6 +647,31 @@ class TestApplyExitCode(SetupApplyCase):
         self.assertEqual(code, 0)
 
 
+class TestRequiredRunnerPreflight(SetupApplyCase):
+    def test_cursor_refuses_without_writing_when_npx_is_missing(self):
+        gate = self.mkgate("cursor")
+        path = os.path.join(gate, "mcp.json")
+        with mock.patch.dict(os.environ, {"PATH": ""}):
+            code, out, _ = self.capture_output(
+                self.setup.cmd_apply, ["--harness", "cursor"]
+            )
+        self.assertEqual(code, 1)
+        self.assertIn("required executable 'npx' is not available on PATH", out)
+        self.assertFalse(os.path.exists(path))
+
+    def test_opencode_refuses_atomically_when_core_runners_are_missing(self):
+        gate = self.mkgate("opencode")
+        path = os.path.join(gate, "opencode.jsonc")
+        with mock.patch.dict(os.environ, {"PATH": ""}):
+            code, out, _ = self.capture_output(
+                self.setup.cmd_apply, ["--harness", "opencode"]
+            )
+        self.assertEqual(code, 1)
+        self.assertIn("required executable 'npx' is not available on PATH", out)
+        self.assertIn("required executable 'uvx' is not available on PATH", out)
+        self.assertFalse(os.path.exists(path))
+
+
 # ---------------------------------------------------------------------------
 # connectors / connect: the vendor MCP menu, opt-in and never auto-offered
 # ---------------------------------------------------------------------------

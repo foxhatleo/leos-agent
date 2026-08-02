@@ -68,6 +68,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 
@@ -319,6 +320,37 @@ def _core_servers(mcp, harness):
     names = (mcp.get("core") or {}).get(harness) or []
     catalogue = mcp.get("servers") or {}
     return [(name, catalogue[name]) for name in names if name in catalogue]
+
+
+def _missing_core_runners(harness, servers, dry_run):
+    """Fail a real automatic apply atomically when a stdio runner is absent.
+
+    Cursor and OpenCode write their configuration directly, so discovering a
+    missing ``npx`` or ``uvx`` after the write would report success for wiring
+    that cannot run.  Claude and Codex delegate the write to their CLIs, but
+    the same core command would still be unusable afterward.  Preflight every
+    declared runner once, before dispatching to any installer.
+
+    Dry runs remain pure renderings, and Hermes remains a successful manual
+    flow.  An absent harness directory also stays the install detector's
+    report-only/manual case rather than becoming a misleading PATH failure.
+    """
+    gate = _harness_dir(harness)
+    if dry_run or harness == "hermes" or not gate or not os.path.isdir(gate):
+        return []
+
+    missing = []
+    for name, spec in servers:
+        command = spec.get("command") or []
+        runner = command[0] if command else None
+        if runner and shutil.which(runner) is None:
+            prerequisites = "; ".join(spec.get("prerequisites") or [])
+            detail = f"required executable {runner!r} is not available on PATH"
+            if prerequisites:
+                detail += f"; prerequisites: {prerequisites}"
+            missing.append(_entry(name, spec, "failed", detail=detail,
+                                  command=list(command)))
+    return missing
 
 
 def _harness_dir(harness):
@@ -1010,7 +1042,10 @@ def cmd_apply(argv):
     if mcp is None:
         return 1
     servers = _core_servers(mcp, harness)
-    if harness == "opencode":
+    entries = _missing_core_runners(harness, servers, dry_run)
+    if entries:
+        pass  # Atomic preflight failure: no installer or config writer runs.
+    elif harness == "opencode":
         gating = ((mcp.get("gating") or {}).get("opencode")) or {}
         entries = _apply_opencode(servers, gating, dry_run)
     else:
@@ -1024,9 +1059,9 @@ def cmd_apply(argv):
     # A refused write (malformed config) or an install command that ran and
     # returned non-zero is a failure even though the run reported it politely —
     # the docstring promises 1 on a failed write, and a caller chaining on `&&`
-    # has to be able to see it. `manual` is not a failure: Hermes, the
-    # missing-binary case, and Claude-in-Chrome all reach it having correctly
-    # done nothing.
+    # has to be able to see it. `manual` is not a failure: Hermes and
+    # Claude-in-Chrome reach it having correctly done nothing. Missing required
+    # executables are `failed` and therefore nonzero.
     if any(entry.get("status") in ("error", "failed") for entry in entries):
         return 1
     return 0

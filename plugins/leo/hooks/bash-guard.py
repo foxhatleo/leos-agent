@@ -329,7 +329,7 @@ def check_find(tokens, cwd, cd_context, statement):
             j = i + 1
             while j < len(rest) and rest[j].startswith("-") and rest[j] not in (";", "+"):
                 j += 1
-            if j < len(rest) and os.path.basename(rest[j]) == "rm":
+            if j < len(rest) and _command_name(rest[j]) == "rm":
                 deleting = True
         i += 1
     if not deleting:
@@ -494,7 +494,7 @@ def check_statement(statement, cwd, cd_context, depth=0):
             # Scan past xargs flags/operands (-0, -n 1, -I{}, --no-run-if-empty...) to find rm.
             rest = tokens[1:]
             for j, t in enumerate(rest):
-                if os.path.basename(t) == "rm":
+                if _command_name(t) == "rm":
                     # `find /etc | xargs rm` (no -r) deletes every file fed in — the recursion
                     # flag is irrelevant when the pipeline already carries a critical/home path,
                     # so the -r gate is intentionally dropped here.

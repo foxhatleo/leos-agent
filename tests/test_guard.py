@@ -189,7 +189,14 @@ class TestCaseInsensitiveFs(unittest.TestCase):
         """On a case-insensitive filesystem, command names are case-insensitive too."""
         cwd = os.path.join(HOME, "project")
         expected = 2 if _fs_case_insensitive(HOME) else 0
-        for cmd in ("RM -rf /", "/bin/RM -rf /"):
+        for cmd in (
+            "RM -rf /",
+            "/bin/RM -rf /",
+            "find / -exec RM -rf {} +",
+            "find / -exec /bin/RM -rf {} +",
+            "find /etc | xargs RM -rf",
+            "find /etc | xargs /bin/RM -rf",
+        ):
             with self.subTest(cmd=cmd):
                 self.assertEqual(run(cmd, cwd), expected)
 

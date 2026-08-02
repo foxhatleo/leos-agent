@@ -171,9 +171,21 @@ class TestRelease(unittest.TestCase):
         self.assertIn("SHA-256", provenance)
         self.assertIn("Update procedure", provenance)
         self.assertIn("88fae0fd00998ea32fa2393869042f0231a2b43b", provenance)
-        self.assertIn("5310b9e8743213a7ac6c014d743bb03917dcf020", provenance)
+        self.assertIn("independently authored", provenance.lower())
+        self.assertIn("upstream repository declares no license", provenance.lower())
+        self.assertNotIn("5310b9e8743213a7ac6c014d743bb03917dcf020", provenance)
         self.assertTrue(Path(REPO, "tools", "vendor", "codex", "validate_plugin.py").is_file())
         self.assertTrue(Path(REPO, "tools", "vendor", "cursor", "validate-template.mjs").is_file())
+        codex_license = Path(REPO, "tools", "vendor", "codex", "LICENSE").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Apache License", codex_license)
+        self.assertIn("Version 2.0, January 2004", codex_license)
+        cursor_validator = Path(
+            REPO, "tools", "vendor", "cursor", "validate-template.mjs"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Copyright (c) 2026 Leo Liang", cursor_validator)
+        self.assertIn("SPDX-License-Identifier: MIT", cursor_validator)
 
     def test_workflow_uses_pinned_validators_and_least_privilege_jobs(self):
         workflow = Path(WORKFLOW).read_text(encoding="utf-8")

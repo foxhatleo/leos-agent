@@ -25,12 +25,22 @@ remain report-only.
 import importlib.util
 import json
 import os
+import re
 import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 PAYLOAD = os.path.dirname(_HERE)
 TIERS = ("fable", "opus", "sonnet", "haiku")
 MIN_PYTHON = (3, 9)
+EXPECTED_HARNESSES = {"claude", "codex", "cursor", "hermes", "opencode"}
+SEMVER_RE = re.compile(
+    r"^(0|[1-9]\d*)\."
+    r"(0|[1-9]\d*)\."
+    r"(0|[1-9]\d*)"
+    r"(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\."
+    r"(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+)
 
 
 HARNESS_ENV = ("CURSOR_PLUGIN_ROOT", "CURSOR_VERSION", "PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT")
@@ -38,7 +48,8 @@ HARNESS_ENV = ("CURSOR_PLUGIN_ROOT", "CURSOR_VERSION", "PLUGIN_ROOT", "CLAUDE_PL
 
 def _known_harnesses():
     models = _read_json(os.path.join(PAYLOAD, "config", "models.json")) or {}
-    return set(models.get("harnesses") or ())
+    harnesses = models.get("harnesses") if isinstance(models, dict) else None
+    return set(harnesses) if isinstance(harnesses, dict) else set()
 
 
 def _detect_harness(argv=()):
@@ -104,6 +115,78 @@ def _read_json(path):
             return json.load(fh)
     except Exception:
         return None
+
+
+def _manifest_valid(manifest):
+    """Validate the required portable manifest fields doctor reports."""
+    if not isinstance(manifest, dict):
+        return False
+    for key in ("name", "description", "homepage", "repository", "license"):
+        if not isinstance(manifest.get(key), str) or not manifest[key].strip():
+            return False
+    version = manifest.get("version")
+    if not isinstance(version, str) or SEMVER_RE.fullmatch(version) is None:
+        return False
+    author = manifest.get("author")
+    if not isinstance(author, dict) or not isinstance(author.get("name"), str) \
+            or not author["name"].strip():
+        return False
+    skills = manifest.get("skills")
+    return (isinstance(skills, list) and bool(skills) and
+            all(isinstance(item, str) and item.strip() for item in skills))
+
+
+def _models_valid(models):
+    """Apply structural checks and the canonical renderer validation.
+
+    The renderer owns cross-field coherence, while these checks reject
+    skeletal documents that happen not to exercise one of its relationships.
+    Doctor must never call either shape healthy merely because it contains a
+    ``harnesses`` object.
+    """
+    if not isinstance(models, dict) or models.get("schemaVersion") != 4:
+        return False
+    for key in ("roles", "harnesses", "skills", "mcp", "memoryTarget", "visual"):
+        if not isinstance(models.get(key), dict) or not models[key]:
+            return False
+    capabilities = models.get("capabilities")
+    if not isinstance(capabilities, list) or not capabilities:
+        return False
+    harnesses = models["harnesses"]
+    if set(harnesses) != EXPECTED_HARNESSES:
+        return False
+    for rows in harnesses.values():
+        if not isinstance(rows, dict):
+            return False
+        for tier in TIERS:
+            mapping = rows.get(tier)
+            if (not isinstance(mapping, dict) or
+                    not isinstance(mapping.get("model"), str) or
+                    not mapping["model"].strip()):
+                return False
+            if "effort" in mapping and (not isinstance(mapping["effort"], str) or
+                                         not mapping["effort"].strip()):
+                return False
+    for spec in models["roles"].values():
+        if (not isinstance(spec, dict) or spec.get("tier") not in TIERS or
+                spec.get("access") not in ("read-only", "write")):
+            return False
+    for row in capabilities:
+        if (not isinstance(row, dict) or not isinstance(row.get("key"), str) or
+                not isinstance(row.get("modes"), list) or not row["modes"] or
+                not isinstance(row.get("values"), dict)):
+            return False
+
+    validator_path = os.path.join(PAYLOAD, "scripts", "render_adapters.py")
+    try:
+        spec = importlib.util.spec_from_file_location("leo_doctor_models_validator",
+                                                      validator_path)
+        validator = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(validator)
+        validator._validate(models)
+    except Exception:
+        return False
+    return True
 
 
 def _local_root():
@@ -258,23 +341,34 @@ def collect(argv=()):
     models_raw = _read_json(models_path)
     manifest = manifest_raw if isinstance(manifest_raw, dict) else {}
     models = models_raw if isinstance(models_raw, dict) else {}
-    config = (models.get("harnesses") or {}).get(harness) or {}
+    harnesses = models.get("harnesses")
+    harnesses = harnesses if isinstance(harnesses, dict) else {}
+    config = harnesses.get(harness)
+    config = config if isinstance(config, dict) else {}
     bootstrap = _bootstrap(harness)
     local = _local_root()
     skills = _skills()
-    claude_only = set((models.get("skills") or {}).get("claudeOnly") or ())
-    excluded = set(((models.get("skills") or {}).get("exclude") or {}).get(harness) or ())
+    skill_config = models.get("skills")
+    skill_config = skill_config if isinstance(skill_config, dict) else {}
+    claude_only_raw = skill_config.get("claudeOnly")
+    claude_only = ({item for item in claude_only_raw if isinstance(item, str)}
+                   if isinstance(claude_only_raw, list) else set())
+    exclusions = skill_config.get("exclude")
+    exclusions = exclusions if isinstance(exclusions, dict) else {}
+    excluded_raw = exclusions.get(harness)
+    excluded = ({item for item in excluded_raw if isinstance(item, str)}
+                if isinstance(excluded_raw, list) else set())
 
     registered = [n for n in skills["skills"] if n not in excluded]
     if harness == "claude":
         registered += skills["skills-claude"]
-    tiers = {
-        tier: {"model": (config.get(tier) or {}).get("model"),
-               "effort": (config.get(tier) or {}).get("effort")}
-        for tier in TIERS
-    }
-    manifest_valid = isinstance(manifest.get("version"), str) and bool(manifest["version"])
-    models_valid = isinstance(models.get("harnesses"), dict)
+    tiers = {}
+    for tier in TIERS:
+        mapping = config.get(tier)
+        mapping = mapping if isinstance(mapping, dict) else {}
+        tiers[tier] = {"model": mapping.get("model"), "effort": mapping.get("effort")}
+    manifest_valid = _manifest_valid(manifest)
+    models_valid = _models_valid(models)
     tier_mapping_valid = harness == "unknown" or all(
         isinstance(value["model"], str) and bool(value["model"])
         for value in tiers.values()

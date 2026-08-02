@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PAYLOAD = os.path.join(REPO, "plugins", "leo")
@@ -248,6 +249,56 @@ class TestDegradation(DoctorCase):
         data = doctor.collect(["--harness", "codex"])
         data["payload"]["valid"] = False
         self.assertEqual(doctor._exit_code(data), 1)
+
+    def test_invalid_payload_files_on_disk_are_rejected(self):
+        doctor = _load(DOCTOR_PY, "leo_doctor_invalid_disk_payload")
+        with open(os.path.join(PAYLOAD, ".claude-plugin", "plugin.json"),
+                  encoding="utf-8") as fh:
+            valid_manifest = json.load(fh)
+        with open(os.path.join(PAYLOAD, "config", "models.json"), encoding="utf-8") as fh:
+            valid_models = json.load(fh)
+
+        skeletal_models = {
+            "schemaVersion": 4,
+            "capabilities": [],
+            "harnesses": {
+                "codex": {
+                    tier: {"model": "placeholder"}
+                    for tier in ("fable", "opus", "sonnet", "haiku")
+                }
+            },
+        }
+        wrong_type_models = dict(valid_models, harnesses=["codex"])
+        wrong_skill_types = dict(
+            valid_models,
+            skills={"claudeOnly": [{}], "exclude": {"codex": [{}]}},
+        )
+        cases = (
+            ("non-semver manifest", dict(valid_manifest, version="not-semver"), valid_models),
+            ("skeletal models", valid_manifest, skeletal_models),
+            ("wrong nested type", valid_manifest, wrong_type_models),
+            ("wrong skill types", valid_manifest, wrong_skill_types),
+        )
+        for label, manifest, models in cases:
+            with self.subTest(case=label):
+                payload = os.path.join(self.tmp.name, label.replace(" ", "-"))
+                os.makedirs(os.path.join(payload, ".claude-plugin"))
+                os.makedirs(os.path.join(payload, "config"))
+                os.makedirs(os.path.join(payload, "skills"))
+                os.makedirs(os.path.join(payload, "skills-claude"))
+                with open(os.path.join(payload, ".claude-plugin", "plugin.json"),
+                          "w", encoding="utf-8") as fh:
+                    json.dump(manifest, fh)
+                with open(os.path.join(payload, "config", "models.json"),
+                          "w", encoding="utf-8") as fh:
+                    json.dump(models, fh)
+                bootstrap = {"kind": "test", "present": True, "required": ("present",)}
+                with mock.patch.object(doctor, "PAYLOAD", payload), \
+                        mock.patch.object(doctor, "_bootstrap", return_value=bootstrap):
+                    data = doctor.collect(["--harness", "codex"])
+                self.assertFalse(data["payload"]["valid"])
+                self.assertIn("invalid required payload", data["degraded_reasons"])
+                self.assertEqual(doctor._exit_code(data), 1)
 
     def test_unknown_detection_is_degraded_but_report_only(self):
         doctor = _load(DOCTOR_PY, "leo_doctor_unknown")
