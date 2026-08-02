@@ -310,10 +310,10 @@ class TestReleaseWorkflowPublish(unittest.TestCase):
         )
 
     def test_publish_path_is_relative(self):
-        # A bare `plugins/leo` is read by npm as the GitHub shorthand
-        # owner/repo, and the publish dies trying to clone it.
-        self.assertIn("npm publish ./plugins/leo --access public", self.steps)
-        self.assertNotIn("npm publish plugins/leo", self.steps)
+        # The release helper receives the disposable staged directory with an
+        # explicit relative path; it owns the npm invocation and retry rules.
+        self.assertIn("--publish-npm ./npm-stage", self.steps)
+        self.assertNotIn("--publish-npm npm-stage", self.steps)
 
     def test_trusted_publishing_not_token_auth(self):
         self.assertIn("id-token: write", self.steps)
@@ -325,8 +325,8 @@ class TestReleaseWorkflowPublish(unittest.TestCase):
         # gh release create is not idempotent: if it ran first, a failed
         # publish could never be retried by re-running the workflow.
         self.assertLess(
-            self.steps.index("npm publish ./plugins/leo"),
-            self.steps.index("gh release create"),
+            self.steps.index("--publish-npm ./npm-stage"),
+            self.steps.index("--sync-github-release"),
         )
 
 

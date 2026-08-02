@@ -5,4 +5,4 @@ must import EXPECTED_VERSION from here rather than re-pinning its own
 literal copy of the version string.
 """
 
-EXPECTED_VERSION = "6.3.0"
+EXPECTED_VERSION = "7.0.0"

@@ -1,6 +1,6 @@
 {
   "name": "leos-agent",
-  "version": "6.3.0",
+  "version": "7.0.0",
   "description": "Leo's agent operating policy: cost-tiered routing, subagent roles, review gates, guardrails.",
   "type": "module",
   "main": "adapters/opencode/plugin.js",
@@ -22,9 +22,5 @@
     "skills/",
     "workflows/",
     "settings.json"
-  ],
-  "scripts": {
-    "//prepack": "A `files` whitelist overrides .npmignore for directory entries, so local test runs leak __pycache__/*.pyc into the tarball. Clear them before packing.",
-    "prepack": "find . -name __pycache__ -type d -prune -exec rm -rf {} +"
-  }
+  ]
 }

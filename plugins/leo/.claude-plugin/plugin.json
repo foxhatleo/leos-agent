@@ -1,7 +1,7 @@
 {
   "name": "leo",
   "description": "Leo's portable Claude Code config: cost-tiered model routing, execute-then-review policy, subagents, process skills, and guards.",
-  "version": "6.3.0",
+  "version": "7.0.0",
   "author": {
     "name": "Leo Liang"
   },
