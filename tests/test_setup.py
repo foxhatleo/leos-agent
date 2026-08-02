@@ -47,6 +47,13 @@ class SetupApplyCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         base = self.tmp.name
+        runner_bin = os.path.join(base, "runner-bin")
+        os.makedirs(runner_bin)
+        for runner in ("npx", "uvx"):
+            path = os.path.join(runner_bin, runner)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("#!/bin/sh\nexit 0\n")
+            os.chmod(path, 0o700)
         self.env = {
             "HOME": os.path.join(base, "home"),
             "CLAUDE_CONFIG_DIR": os.path.join(base, "claude"),
@@ -54,6 +61,10 @@ class SetupApplyCase(unittest.TestCase):
             "XDG_CONFIG_HOME": os.path.join(base, "xdg"),
             "HERMES_HOME": os.path.join(base, "hermes"),
             "LEOS_AGENT_LOCAL_PATH": os.path.join(base, "local"),
+            # Setup's real-apply preflight is the subject under test, not the
+            # hosted runner's optional software inventory. Negative cases
+            # replace PATH with empty explicitly.
+            "PATH": runner_bin + os.pathsep + os.environ.get("PATH", ""),
         }
         self._saved = {k: os.environ.get(k) for k in self.env}
         self._saved.update({k: os.environ.get(k) for k in HARNESS_ENV_VARS})
