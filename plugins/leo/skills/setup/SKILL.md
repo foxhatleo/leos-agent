@@ -74,11 +74,21 @@ than choose. `OPENCODE_CONFIG` wins, otherwise the sole existing global file
 wins, otherwise a new `.jsonc` is used.
 
 `apply` is idempotent, **not generally reversible**. It never removes an MCP
-server or tool gate. Remove an automatic CLI registration with that harness's
-exact command (for example `claude mcp remove context7 --scope user` or
-`codex mcp remove context7`); remove file-backed entries by editing the named
-config yourself. A `.leo-backup` is one pre-first-write snapshot, not a
-transaction log and not a promise that a later user edit can be undone.
+server or tool gate. Remove an automatic CLI registration with the command for
+the harness that owns it:
+
+```sh
+claude mcp remove <name> --scope user
+codex mcp remove <name>
+hermes mcp remove <name>
+```
+
+Cursor has no setup-owned removal command: remove the `mcpServers.<name>` key
+from `~/.cursor/mcp.json`. OpenCode likewise has no MCP removal command: remove
+the `mcp.<name>` key from the resolved `opencode.jsonc` or `opencode.json`, and
+remove any unwanted setup-owned tool gates there. A `.leo-backup` is one
+pre-first-write snapshot, not a conflict-aware restore, transaction log, or
+promise that a later user edit can be undone.
 
 `apply` also reports (never flips) two Codex toggles: its `computer_use`
 feature flag and `web_search` mode (offering, never forcing, the upgrade to

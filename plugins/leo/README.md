@@ -2,25 +2,31 @@
 
 # Leo's Agent
 
-Leo's Agent is a portable agent operating policy: cost-tiered model routing, specialist subagent roles, process skills, execute-then-review discipline, and a narrow catastrophic-command guard.
+Leo's Agent is a portable operating policy with cost-tiered routing, specialist roles, process skills, review discipline, and a narrow command guard. This npm package is the **OpenCode** distribution; use the [repository](https://github.com/foxhatleo/leos-agent) for Claude Code, Codex, Cursor, and Hermes instructions.
 
-This npm package is the **OpenCode** distribution. Claude Code, Codex, Cursor, and Hermes each install it through their own plugin system — see [the repository](https://github.com/foxhatleo/leos-agent) for those.
+Supported hosts are macOS, Linux, and WSL with Python 3.9+; native Windows is unsupported.
 
-## Install
+## Install and update
 
 ```sh
 opencode plugin leos-agent --global
 ```
 
-On builds without the `plugin` subcommand, add it to `~/.config/opencode/opencode.json` (or `opencode.jsonc`) by hand:
+On builds without that subcommand, add `leos-agent` to the `plugin` array in `~/.config/opencode/opencode.json` or `opencode.jsonc`:
 
 ```json
 { "$schema": "https://opencode.ai/config.json", "plugin": ["leos-agent"] }
 ```
 
-Start a new OpenCode session. The plugin registers the skills directory, the 7 subagent roles, and the operating policy, and installs the bash deletion tripwire.
+Run `opencode auth login` and choose OpenRouter before using the mapped models; Leo never writes provider credentials. Update with `opencode plugin leos-agent --global --force`, then start a new session. OpenCode currently has no plugin removal command; remove the `leos-agent` configuration entry to uninstall.
 
-If the skills do not appear, run `opencode debug skill` — each one should list a `location` inside this package. The plugin resolves its own install path and registers it, so none needs to be written by hand.
+The plugin registers generated shadow skills (`leo-<name>`) and namespaced `leo-<role>` agents (7 generated definitions) from `adapters/opencode/agents.json`, then injects the operating policy through OpenCode's configuration. Invoke its shadow skill as `leo-using-leo`. If a skill is absent, run `opencode debug skill`; its `location` should be an `opencode-skills-<hash>/leo-<name>/` directory under machine-local state, not a hand-written package path.
+
+## MCP and durable state
+
+Use `leo-setup` to inspect or explicitly configure MCP services: `connectors` reports without writing, while `connect` and `apply` make only reviewed, harness-owned changes. Vendor connectors are never installed automatically and OAuth stays in OpenCode. Slack, Gmail, Drive, and providers without dynamic registration remain manual-only.
+
+Uninstall preserves `${LEOS_AGENT_LOCAL_PATH:-$HOME/.leos-agent-local}`. Before a full purge, export or copy that directory; only then explicitly remove it. For a 7.0 recovery, move old `LEOS_AGENT_PATH/local/` data there, rename the variable, restart, and run `leo-doctor`.
 
 ## Model tiers
 
@@ -37,7 +43,8 @@ Fable is not a real rung here, so `expert` is not registered as an agent and esc
 
 ## Links
 
-- [Repository and full documentation](https://github.com/foxhatleo/leos-agent)
+- [Repository, contributing, and security policy](https://github.com/foxhatleo/leos-agent)
+- [GitHub Releases](https://github.com/foxhatleo/leos-agent/releases)
 - [Operating policy](https://github.com/foxhatleo/leos-agent/blob/main/plugins/leo/skills/using-leo/SKILL.md)
 
 MIT licensed.
