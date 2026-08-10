@@ -1,46 +1,118 @@
 {
-  "schemaVersion": 4,
-  "capabilities": [
-    {
-      "key": "policyInjection",
-      "label": "Policy injection",
-      "modes": [
-        "hook",
-        "config-file",
-        "tool-result",
-        "none"
-      ],
-      "values": {
-        "claude": {
-          "mode": "hook",
-          "note": "`SessionStart` hook, on every startup / resume / clear / compact"
+  "schemaVersion": 5,
+  "_comment": "Canonical matrix. Four harnesses, three tiers, and one answer per harness for every capability row. scripts/render_adapters.py refuses to render an incoherent matrix and regenerates every adapter from this file, so this is the only place a routing or capability fact is stated.",
+
+  "tiers": ["opus", "sonnet", "haiku"],
+  "efforts": ["low", "medium", "high", "xhigh", "max"],
+
+  "harnesses": {
+    "claude": {
+      "title": "Claude Code",
+      "effortSupport": true,
+      "tiers": {
+        "opus": { "model": "opus", "effort": "high" },
+        "sonnet": { "model": "sonnet", "effort": "medium" },
+        "haiku": { "model": "haiku", "effort": "low" }
+      },
+      "natives": {
+        "roles": {
+          "explore": {
+            "verdict": "drop",
+            "native": "the built-in Explore agent",
+            "reason": "a read-only scout with the same file:line return convention ships with the harness"
+          },
+          "planner": {
+            "verdict": "drop",
+            "native": "the built-in Plan agent, and plan mode",
+            "reason": "plan mode already produces a read-only plan and holds it at an approval gate, which a dispatched role cannot do"
+          },
+          "reviewer": {
+            "verdict": "drop",
+            "native": "/code-review",
+            "reason": "it targets a diff, PR, branch or path and scales finding volume by effort level, and can post inline comments or apply fixes"
+          },
+          "review-lens": {
+            "verdict": "drop",
+            "native": "/code-review",
+            "reason": "it runs its own perspectives internally, so a separate lens role has nothing left to fan out"
+          }
         },
-        "codex": {
-          "mode": "hook",
-          "note": "`SessionStart` hook, on every startup / resume / clear / compact"
-        },
-        "cursor": {
-          "mode": "hook",
-          "note": "`sessionStart` hook, every session"
-        },
-        "opencode": {
-          "mode": "config-file",
-          "note": "`config.instructions`, with a system-prompt transform as backstop"
+        "skills": {
+          "worktrees": {
+            "verdict": "prefer",
+            "native": "EnterWorktree and ExitWorktree",
+            "reason": "the harness tracks the worktree for the session and cleans it up, so provenance and teardown are not yours to manage here"
+          },
+          "visual-verification": {
+            "verdict": "prefer",
+            "native": "/run and /verify",
+            "reason": "both build and drive the real app, which is the render evidence this skill exists to demand"
+          }
         }
       }
     },
+
+    "codex": {
+      "title": "Codex",
+      "effortSupport": true,
+      "effortKey": "reasoning_effort",
+      "tiers": {
+        "opus": { "model": "gpt-5.6-sol", "effort": "high" },
+        "sonnet": { "model": "gpt-5.6-terra", "effort": "medium" },
+        "haiku": { "model": "gpt-5.6-terra", "effort": "low" }
+      },
+      "natives": { "roles": {}, "skills": {} }
+    },
+
+    "cursor": {
+      "title": "Cursor",
+      "effortSupport": false,
+      "effortAbsentNote": "agents are `model: inherit` and there is no reasoning-effort control, so a tier means its model alone — pick the tier's model in the UI before a batch of same-tier work",
+      "tiers": {
+        "opus": { "model": "Grok 4.5" },
+        "sonnet": { "model": "Grok 4.5" },
+        "haiku": { "model": "Composer 2.5" }
+      },
+      "natives": { "roles": {}, "skills": {} }
+    },
+
+    "opencode": {
+      "title": "OpenCode",
+      "provider": "openrouter",
+      "effortSupport": false,
+      "effortAbsentNote": "each registered agent always runs its pinned model at the provider's default effort, so no role downscales or upscales per dispatch",
+      "tiers": {
+        "opus": { "model": "moonshotai/kimi-k3" },
+        "sonnet": { "model": "z-ai/glm-5.2" },
+        "haiku": { "model": "z-ai/glm-5.2" }
+      },
+      "natives": { "roles": {}, "skills": {} },
+      "adapter": {
+        "readOnlyPermission": { "edit": "deny" },
+        "writeBashDeny": ["rm -rf ~", "rm -rf ~/*", "rm -rf /", "rm -rf /*"]
+      }
+    }
+  },
+
+  "roles": {
+    "explore": { "tier": "haiku", "access": "read-only" },
+    "executor": { "tier": "haiku", "access": "write" },
+    "implementer": { "tier": "sonnet", "access": "write" },
+    "review-lens": { "tier": "sonnet", "access": "read-only" },
+    "investigator": { "tier": "opus", "access": "read-only" },
+    "planner": { "tier": "opus", "access": "read-only" },
+    "reviewer": { "tier": "opus", "access": "read-only" }
+  },
+
+  "capabilities": [
     {
       "key": "subagentSpawn",
       "label": "Subagent spawn",
-      "modes": [
-        "native-agent",
-        "generic-prompt",
-        "delegate-task"
-      ],
+      "modes": ["native-agent", "generic-prompt"],
       "values": {
         "claude": {
           "mode": "native-agent",
-          "note": "spawn the named native agent; its generated frontmatter pins the model"
+          "note": "spawn the named native agent; its generated frontmatter pins both model and effort"
         },
         "codex": {
           "mode": "generic-prompt",
@@ -57,44 +129,36 @@
       }
     },
     {
-      "key": "perSpawnModel",
-      "label": "Per-spawn model",
-      "modes": [
-        "yes",
-        "no"
-      ],
+      "key": "tierPinning",
+      "label": "Tier pinning",
+      "modes": ["model-and-effort", "model-only", "none"],
       "values": {
         "claude": {
-          "mode": "yes",
-          "note": "yes — the agent's own frontmatter"
+          "mode": "model-and-effort",
+          "note": "both, fixed in the agent's own generated frontmatter — a dispatcher does not choose them per call"
         },
         "codex": {
-          "mode": "yes",
-          "note": "yes — pass `model` and `reasoning_effort` explicitly; a user or `AGENTS.md` override still wins"
+          "mode": "model-and-effort",
+          "note": "both, chosen per spawn: pass `model` and `reasoning_effort` explicitly; a user or `AGENTS.md` override still wins"
         },
         "cursor": {
-          "mode": "no",
-          "note": "no — agents are `model: inherit`; select the tier's model in the UI before a homogeneous batch"
+          "mode": "none",
+          "note": "neither — agents inherit the model selected in the UI, so a tier is a recommendation here and nothing more"
         },
         "opencode": {
-          "mode": "no",
-          "note": "no — each agent always runs its registered model, so `reviewer` never downscales on a trivial diff"
+          "mode": "model-only",
+          "note": "model only, fixed per registered agent; effort is not settable at all"
         }
       }
     },
     {
       "key": "readOnlyRoles",
       "label": "Read-only roles",
-      "modes": [
-        "tools",
-        "frontmatter",
-        "permission",
-        "prompt"
-      ],
+      "modes": ["tools", "frontmatter", "permission", "prompt"],
       "values": {
         "claude": {
           "mode": "tools",
-          "note": "native edit denial — the tool allowlist omits Write and Edit; Bash remains shell-capable, so the read-only prompt and permission constraints are not a hard sandbox"
+          "note": "native edit denial — the tool allowlist omits Write and Edit; Bash stays shell-capable, so this is not a hard sandbox"
         },
         "codex": {
           "mode": "prompt",
@@ -106,17 +170,14 @@
         },
         "opencode": {
           "mode": "permission",
-          "note": "native edit denial — generated `permission.edit: deny`, refused by OpenCode itself; Bash remains shell-capable, so the read-only prompt and permissions are not a hard sandbox"
+          "note": "native edit denial — generated `permission.edit: deny`, refused by OpenCode itself; Bash stays shell-capable, so this is not a hard sandbox"
         }
       }
     },
     {
       "key": "worktrees",
       "label": "Worktrees",
-      "modes": [
-        "native-tool",
-        "raw-git"
-      ],
+      "modes": ["native-tool", "raw-git"],
       "values": {
         "claude": {
           "mode": "native-tool",
@@ -139,10 +200,7 @@
     {
       "key": "workflowRunner",
       "label": "Workflow runner",
-      "modes": [
-        "workflow-tool",
-        "none"
-      ],
+      "modes": ["workflow-tool", "none"],
       "values": {
         "claude": {
           "mode": "workflow-tool",
@@ -163,13 +221,32 @@
       }
     },
     {
+      "key": "progressLedger",
+      "label": "Durable progress",
+      "modes": ["native-tool", "state-file"],
+      "values": {
+        "claude": {
+          "mode": "native-tool",
+          "note": "`TaskCreate` / `TaskUpdate` — the harness owns the list and it survives compaction, so do not hand-roll a ledger here"
+        },
+        "codex": {
+          "mode": "state-file",
+          "note": "no task tool — record progress in `<plugin-root>/scripts/state.py` after every dispatch resolves"
+        },
+        "cursor": {
+          "mode": "state-file",
+          "note": "no task tool — record progress in `<plugin-root>/scripts/state.py` after every dispatch resolves"
+        },
+        "opencode": {
+          "mode": "state-file",
+          "note": "no task tool — record progress in `<plugin-root>/scripts/state.py` after every dispatch resolves"
+        }
+      }
+    },
+    {
       "key": "followUp",
       "label": "Follow-up to a live agent",
-      "modes": [
-        "tool",
-        "none",
-        "unknown"
-      ],
+      "modes": ["tool", "unknown"],
       "values": {
         "claude": {
           "mode": "tool",
@@ -190,40 +267,9 @@
       }
     },
     {
-      "key": "skillNames",
-      "label": "Skill names",
-      "modes": [
-        "prefixed",
-        "hyphenated",
-        "bare"
-      ],
-      "values": {
-        "claude": {
-          "mode": "prefixed",
-          "note": "`leo:<name>`"
-        },
-        "codex": {
-          "mode": "prefixed",
-          "note": "`leo:<name>`"
-        },
-        "cursor": {
-          "mode": "prefixed",
-          "note": "`leo:<name>`"
-        },
-        "opencode": {
-          "mode": "hyphenated",
-          "note": "`leo-<name>` — OpenCode has no skill namespace, so the adapter registers a renamed copy; read every `leo:<x>` above as `leo-<x>`"
-        }
-      }
-    },
-    {
       "key": "askQuestion",
       "label": "Structured question to the user",
-      "modes": [
-        "tool",
-        "none",
-        "unknown"
-      ],
+      "modes": ["tool", "unknown"],
       "values": {
         "claude": {
           "mode": "tool",
@@ -231,7 +277,7 @@
         },
         "codex": {
           "mode": "tool",
-          "note": "Plan mode `request_user_input` — structured multiple-choice questions; outside Plan mode ask in plain text and default to changing nothing"
+          "note": "Plan mode `request_user_input` — structured multiple choice; outside Plan mode ask in plain text and default to changing nothing"
         },
         "cursor": {
           "mode": "unknown",
@@ -242,411 +288,54 @@
           "note": "native `question` tool — multi-choice, single or multi-select"
         }
       }
-    }
-  ],
-  "skills": {
-    "operational": [
-      "resolve-ticket",
-      "review-pr",
-      "watch-review",
-      "setup"
-    ],
-    "claudeOnly": [
-      "attach-pr"
-    ],
-    "exclude": {
-      "claude": [],
-      "cursor": [],
-      "codex": [],
-      "opencode": []
     },
-    "reasons": {
-      "attach-pr": "its entire product is a side effect in Claude Code Desktop's PR-card detector, which no other harness has — the same commands would run here, succeed, and produce nothing observable"
-    }
-  },
-  "mcp": {
-    "_comment": "Servers leo:setup installs, and the vendor connectors it can offer. Every connector endpoint was confirmed against a vendor-owned documentation page; an endpoint nobody could confirm does not belong here.",
-    "servers": {
-      "context7": {
-        "label": "Context7 — library documentation",
-        "transport": "stdio",
-        "command": [
-          "npx",
-          "-y",
-          "@upstash/context7-mcp@3.2.5"
-        ],
-        "exactVersion": "@upstash/context7-mcp@3.2.5",
-        "registration": "automatic",
-        "prerequisites": [
-          "Node.js",
-          "npx available on PATH"
-        ],
-        "auth": "none",
-        "authNote": "keyless; set CONTEXT7_API_KEY for higher rate limits"
-      },
-      "playwright": {
-        "label": "Playwright — browser automation",
-        "transport": "stdio",
-        "command": [
-          "npx",
-          "-y",
-          "@playwright/mcp@0.0.78"
-        ],
-        "exactVersion": "@playwright/mcp@0.0.78",
-        "registration": "automatic",
-        "prerequisites": [
-          "Node.js",
-          "npx available on PATH"
-        ],
-        "auth": "none",
-        "authNote": "browsers may need `npx playwright install chromium` on first use"
-      },
-      "chrome-devtools": {
-        "label": "Chrome DevTools — live page inspection",
-        "transport": "stdio",
-        "command": [
-          "npx",
-          "-y",
-          "chrome-devtools-mcp@1.6.0"
-        ],
-        "exactVersion": "chrome-devtools-mcp@1.6.0",
-        "registration": "automatic",
-        "prerequisites": [
-          "Node.js",
-          "npx available on PATH"
-        ],
-        "auth": "none",
-        "authNote": ""
-      },
-      "duckduckgo": {
-        "label": "DuckDuckGo — web search",
-        "transport": "stdio",
-        "command": [
-          "uvx",
-          "duckduckgo-mcp-server==0.5.0"
-        ],
-        "exactVersion": "duckduckgo-mcp-server==0.5.0",
-        "registration": "automatic",
-        "prerequisites": [
-          "uv or uvx available on PATH"
-        ],
-        "auth": "none",
-        "authNote": "needs uvx on PATH"
-      }
-    },
-    "core": {
-      "_comment": "Browser and search servers only where the harness has no native equivalent. Claude Code has Claude_Browser + WebSearch/WebFetch; Codex has browser_use/in_app_browser/computer_use and a native web_search; Cursor has Browser Preview.",
-      "claude": [
-        "context7"
-      ],
-      "codex": [
-        "context7"
-      ],
-      "cursor": [
-        "context7"
-      ],
-      "opencode": [
-        "context7",
-        "playwright",
-        "chrome-devtools",
-        "duckduckgo"
-      ]
-    },
-    "gating": {
-      "_comment": "OpenCode alone can gate MCP tools per agent. Heavy servers off globally, on only for the roles whose prompts actually reach for them.",
-      "opencode": {
-        "off": [
-          "context7",
-          "playwright",
-          "chrome-devtools"
-        ],
-        "agents": {
-          "build": [
-            "context7",
-            "playwright",
-            "chrome-devtools"
-          ],
-          "leo-investigator": [
-            "context7",
-            "chrome-devtools"
-          ],
-          "leo-planner": [
-            "context7"
-          ],
-          "leo-implementer": [
-            "context7",
-            "playwright",
-            "chrome-devtools"
-          ]
+    {
+      "key": "visualEvidence",
+      "label": "Visual evidence",
+      "modes": ["native-renderer", "mcp-driver", "none"],
+      "values": {
+        "claude": {
+          "mode": "native-renderer",
+          "note": "the Browser pane (start or attach a preview, then screenshot), an attached Chrome, or the iOS Simulator control tool; some arrive only after a tool search, so an empty tool list is not proof of absence"
+        },
+        "codex": {
+          "mode": "native-renderer",
+          "note": "the bundled browser plugin, else computer-use, else Playwright driven from the shell"
+        },
+        "cursor": {
+          "mode": "native-renderer",
+          "note": "Browser Preview against a running dev server, else a registered Playwright server"
+        },
+        "opencode": {
+          "mode": "mcp-driver",
+          "note": "no built-in renderer — a registered Playwright server, or the Playwright CLI, and only where the project already depends on it"
         }
       }
     },
-    "connectors": [
-      {
-        "key": "slack",
-        "label": "Slack",
-        "url": "https://mcp.slack.com/mcp",
-        "transport": "http",
-        "auth": "manual-oauth",
-        "registration": "manual",
-        "prerequisites": [
-          "Slack workspace admin approval for the MCP client",
-          "a Slack account authorized for the workspace"
-        ],
-        "authNote": "a workspace admin must approve the MCP client for the workspace first"
-      },
-      {
-        "key": "sentry",
-        "label": "Sentry",
-        "url": "https://mcp.sentry.dev/mcp",
-        "transport": "http",
-        "auth": "oauth",
-        "registration": "automatic",
-        "prerequisites": [
-          "Sentry organization access"
-        ],
-        "authNote": "browser consent against your Sentry org, or a user auth token"
-      },
-      {
-        "key": "honeycomb",
-        "label": "Honeycomb",
-        "url": "https://mcp.honeycomb.io/mcp",
-        "transport": "http",
-        "auth": "oauth",
-        "registration": "automatic",
-        "prerequisites": [
-          "Honeycomb Intelligence enrollment"
-        ],
-        "authNote": "the team must be enrolled in Honeycomb Intelligence"
-      },
-      {
-        "key": "snowflake",
-        "label": "Snowflake",
-        "url": "",
-        "urlTemplate": "https://<org>-<account>.snowflakecomputing.com/api/v2/databases/<database>/schemas/<schema>/mcp-servers/<name>",
-        "transport": "http",
-        "auth": "manual-oauth",
-        "registration": "manual",
-        "prerequisites": [
-          "account-specific server URL",
-          "Snowflake OAuth or programmatic access token"
-        ],
-        "authNote": "account-specific URL — must be supplied, never guessed; OAuth or a programmatic access token"
-      },
-      {
-        "key": "launchdarkly",
-        "label": "LaunchDarkly",
-        "url": "https://mcp.launchdarkly.com/mcp/launchdarkly",
-        "transport": "http",
-        "auth": "oauth",
-        "registration": "automatic",
-        "prerequisites": [
-          "LaunchDarkly project access"
-        ],
-        "authNote": "browser consent on first connect"
-      },
-      {
-        "key": "linear",
-        "label": "Linear",
-        "url": "https://mcp.linear.app/mcp",
-        "transport": "http",
-        "auth": "oauth",
-        "registration": "automatic",
-        "prerequisites": [
-          "Linear workspace access"
-        ],
-        "authNote": "OAuth 2.1 with dynamic client registration"
-      },
-      {
-        "key": "atlassian",
-        "label": "Jira + Confluence (Atlassian Rovo)",
-        "url": "https://mcp.atlassian.com/v1/mcp/authv2",
-        "transport": "http",
-        "auth": "manual-oauth",
-        "registration": "manual",
-        "prerequisites": [
-          "Atlassian organization access"
-        ],
-        "authNote": "one server covers Jira, Confluence, JSM, Bitbucket and Compass"
-      },
-      {
-        "key": "gmail",
-        "label": "Gmail",
-        "url": "https://gmailmcp.googleapis.com/mcp/v1",
-        "transport": "http",
-        "auth": "manual-oauth",
-        "registration": "manual",
-        "prerequisites": [
-          "Google Cloud project with Gmail MCP enabled",
-          "Google OAuth consent and Gmail account authorization"
-        ],
-        "authNote": "Google OAuth consent"
-      },
-      {
-        "key": "gdrive",
-        "label": "Google Drive",
-        "url": "https://drivemcp.googleapis.com/mcp/v1",
-        "transport": "http",
-        "auth": "manual-oauth",
-        "registration": "manual",
-        "prerequisites": [
-          "Google Cloud project with Drive MCP enabled",
-          "Google OAuth consent and Drive account authorization"
-        ],
-        "authNote": "Google OAuth consent"
-      },
-      {
-        "key": "granola",
-        "label": "Granola",
-        "url": "https://mcp.granola.ai/mcp",
-        "transport": "http",
-        "auth": "oauth",
-        "registration": "automatic",
-        "prerequisites": [
-          "Granola account access"
-        ],
-        "authNote": "browser consent on first connect"
-      },
-      {
-        "key": "vercel",
-        "label": "Vercel",
-        "url": "https://mcp.vercel.com",
-        "transport": "http",
-        "auth": "oauth",
-        "registration": "automatic",
-        "prerequisites": [
-          "Vercel account access"
-        ],
-        "authNote": "browser consent on first connect"
+    {
+      "key": "skillNames",
+      "label": "Skill names",
+      "modes": ["prefixed", "hyphenated"],
+      "values": {
+        "claude": { "mode": "prefixed", "note": "`leo:<name>`" },
+        "codex": { "mode": "prefixed", "note": "`leo:<name>`" },
+        "cursor": { "mode": "prefixed", "note": "`leo:<name>`" },
+        "opencode": {
+          "mode": "hyphenated",
+          "note": "`leo-<name>` — OpenCode has no skill namespace, so the adapter registers a renamed copy; read every `leo:<x>` here as `leo-<x>`"
+        }
       }
-    ]
-  },
-  "visual": {
-    "claude": "the Browser pane (start or attach a preview, then take a screenshot), an attached Chrome, or the iOS Simulator control tool; some arrive only after a tool search, so an empty tool list is not proof of absence",
-    "codex": "the bundled browser plugin, else computer-use, else Playwright driven from the shell",
-    "cursor": "Browser Preview against a running dev server, else a Playwright server if one is registered",
-    "opencode": "no built-in renderer; a registered Playwright server or the Playwright CLI"
-  },
-  "memoryTarget": {
-    "claude": "the per-user `CLAUDE.md` in the Claude config directory",
-    "codex": "the per-user `AGENTS.md` in the Codex home directory",
-    "cursor": "a generated rules file in the per-user Cursor rules directory",
-    "opencode": "the per-user `AGENTS.md` in the OpenCode config directory"
-  },
-  "roles": {
-    "expert": {
-      "tier": "fable",
-      "access": "read-only"
-    },
-    "planner": {
-      "tier": "opus",
-      "access": "read-only"
-    },
-    "investigator": {
-      "tier": "opus",
-      "access": "read-only"
-    },
-    "reviewer": {
-      "tier": "opus",
-      "access": "read-only"
-    },
-    "review-lens": {
-      "tier": "sonnet",
-      "access": "read-only"
-    },
-    "implementer": {
-      "tier": "sonnet",
-      "access": "write"
-    },
-    "executor": {
-      "tier": "haiku",
-      "access": "write"
-    },
-    "explore": {
-      "tier": "haiku",
-      "access": "read-only"
     }
-  },
-  "harnesses": {
-    "claude": {
-      "title": "Claude Code",
-      "fable": {
-        "model": "fable",
-        "effort": "max"
-      },
-      "opus": {
-        "model": "opus"
-      },
-      "sonnet": {
-        "model": "sonnet"
-      },
-      "haiku": {
-        "model": "haiku"
-      }
-    },
-    "cursor": {
-      "title": "Cursor",
-      "fable": {
-        "model": "GPT-5.6 Sol"
-      },
-      "opus": {
-        "model": "Grok 4.5"
-      },
-      "sonnet": {
-        "model": "Grok 4.5"
-      },
-      "haiku": {
-        "model": "Composer 2.5"
-      }
-    },
-    "codex": {
-      "title": "Codex",
-      "fable": {
-        "model": "gpt-5.6-sol",
-        "effort": "max"
-      },
-      "opus": {
-        "model": "gpt-5.6-sol",
-        "effort": "high"
-      },
-      "sonnet": {
-        "model": "gpt-5.6-terra",
-        "effort": "medium"
-      },
-      "haiku": {
-        "model": "gpt-5.6-terra",
-        "effort": "low"
-      }
-    },
-    "opencode": {
-      "title": "OpenCode",
-      "provider": "openrouter",
-      "absentTiers": [
-        "fable"
-      ],
-      "adapter": {
-        "readOnlyPermission": {
-          "edit": "deny"
-        },
-        "writeBashDeny": [
-          "rm -rf ~",
-          "rm -rf ~/*",
-          "rm -rf /",
-          "rm -rf /*"
-        ]
-      },
-      "fable": {
-        "model": "moonshotai/kimi-k3"
-      },
-      "opus": {
-        "model": "moonshotai/kimi-k3"
-      },
-      "sonnet": {
-        "model": "z-ai/glm-5.2"
-      },
-      "haiku": {
-        "model": "z-ai/glm-5.2"
-      }
+  ],
+
+  "skills": {
+    "roots": { "portable": "./skills/", "claudeOnly": "./skills-claude/" },
+    "core": ["routing", "review-gate"],
+    "operational": ["resolve-ticket", "review-pr", "watch-review"],
+    "claudeOnly": ["attach-pr"],
+    "exclude": { "claude": [], "codex": [], "cursor": [], "opencode": [] },
+    "reasons": {
+      "attach-pr": "its entire product is a side effect in Claude Code Desktop's PR-card detector, which no other harness has — the same commands would run here, succeed, and produce nothing observable"
     }
   }
 }

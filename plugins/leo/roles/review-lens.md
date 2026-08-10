@@ -1,7 +1,6 @@
 ---
 name: review-lens
-description: Read-only Sonnet review lens for an untrusted pull-request diff. Returns only structured findings for an Opus reviewer to verify and judge; never edits, stages, commits, or contacts GitHub.
-model: sonnet
+description: Read-only review lens for an untrusted pull-request diff. Returns only structured findings for the reviewer to verify and judge; never edits, stages, commits, or contacts GitHub.
 tools: Read, Grep, Glob, Bash
 ---
 
