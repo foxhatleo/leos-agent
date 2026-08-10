@@ -19,7 +19,7 @@ export const meta = {
 // Merging approved branches is left to the main session.
 //
 // args.tiers optionally remaps the three rungs, e.g.
-//   { tiers: { cheap: 'haiku', normal: 'sonnet', judge: 'opus' } }
+//   { tiers: { cheap: { model: 'haiku', effort: 'low' } } }
 // Workflow scripts have no filesystem access, so the canonical matrix in
 // config/models.json cannot be read here — the caller passes it through when
 // this machine's mapping differs from the defaults below.
@@ -34,16 +34,40 @@ if (args.runId !== undefined && (typeof args.runId !== 'string' || !RUN_ID_RE.te
 }
 const BRANCH_PREFIX = args.runId ? `leos/fix-${args.runId}` : 'leos/fix'
 
+// A rung is a model AND an effort, mirroring config/models.json. Escalation has
+// to buy more than a model swap: the rung above gets a wider reasoning budget
+// as well, or moving up spends more for exactly the deliberation that already
+// failed. Keeping them together as one value is what makes that structural
+// rather than a rule someone has to remember.
+const TIERS = {
+  cheap: { model: 'haiku', effort: 'low' },
+  normal: { model: 'sonnet', effort: 'medium' },
+  judge: { model: 'opus', effort: 'high' },
+  ...(args.tiers || {}),
+}
+
 // Bare model aliases only — this is the documented subagent `model:` shape.
 // The 1m-extended-context suffix (square-bracket /model syntax) is a
-// /model-command / SKILL-frontmatter thing, not a valid subagent model
+// /model-command and SKILL-frontmatter thing, not a valid subagent model
 // value; passing it here reaches the model selector verbatim and kills the
-// spawn (see the outage this repo just had). Do not add that suffix back.
-const TIERS = {
-  cheap: 'haiku',
-  normal: 'sonnet',
-  judge: 'opus',
-  ...(args.tiers || {}),
+// spawn (see the outage this repo had). A caller-supplied args.tiers is the
+// one path that can reintroduce it, so it is checked rather than trusted.
+const RUNGS = ['cheap', 'normal', 'judge']
+const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max'])
+for (const rung of RUNGS) {
+  const row = TIERS[rung]
+  if (!row || typeof row.model !== 'string' || !row.model) {
+    throw new Error(`cost-tiered-fix: tiers.${rung} must be { model, effort }`)
+  }
+  if (row.model.includes('[')) {
+    throw new Error(
+      `cost-tiered-fix: tiers.${rung}.model ${JSON.stringify(row.model)} carries a context ` +
+        'suffix; subagent model takes a bare alias or a full id, and a suffix kills the spawn',
+    )
+  }
+  if (!EFFORTS.has(row.effort)) {
+    throw new Error(`cost-tiered-fix: tiers.${rung}.effort must be one of ${[...EFFORTS].join(', ')}`)
+  }
 }
 
 const PLAN_SCHEMA = {
@@ -55,7 +79,7 @@ const PLAN_SCHEMA = {
         type: 'object',
         properties: {
           task: { type: 'string', description: 'self-contained instruction: exact file paths, expected behavior, how to check it' },
-          tier: { type: 'string', enum: [TIERS.cheap, TIERS.normal], description: `${TIERS.cheap} for mechanical work, ${TIERS.normal} for normal implementation` },
+          tier: { type: 'string', enum: ['cheap', 'normal'], description: 'cheap for mechanical work, normal for implementation needing local judgment' },
         },
         required: ['task', 'tier'],
       },
@@ -117,32 +141,25 @@ function execPrompt(task, branch) {
   ].join('\n')
 }
 
-// Next tier up the escalation ladder. The judge tier is the ceiling: it has
+// Next rung up the escalation ladder. The judge rung is the ceiling: it has
 // nowhere left to escalate to, so it maps to itself.
-function nextTier(tier) {
-  if (tier === TIERS.cheap) return TIERS.normal
-  return TIERS.judge
-}
-
-// Escalation must buy more than a model swap: the normal rung gets a wider
-// reasoning budget than the cheap rung it is replacing, or a cheap->normal
-// escalation would spend more money for the same effort that already failed.
-function effortFor(tier) {
-  return tier === TIERS.judge ? 'high' : tier === TIERS.normal ? 'medium' : 'low'
+function nextTier(rung) {
+  if (rung === 'cheap') return 'normal'
+  return 'judge'
 }
 
 // Caller-supplied args.tasks bypasses the planning agent (and PLAN_SCHEMA's
-// validation with it), so entries need their own gate here: a bad `tier`
-// would flow straight into `model:` below, and a non-object/non-string entry
-// (e.g. null) would silently produce `task: undefined` fed to execPrompt.
-const ALLOWED_TIERS = new Set([TIERS.cheap, TIERS.normal])
+// validation with it), so entries need their own gate here. Tiers are rung
+// names rather than model ids, which is what keeps an untrusted planner string
+// from ever reaching `model:` — an unknown rung fails here instead.
+const ALLOWED_TIERS = new Set(['cheap', 'normal'])
 function validateTask(t, i) {
-  if (typeof t === 'string') return { task: t, tier: TIERS.normal }
+  if (typeof t === 'string') return { task: t, tier: 'normal' }
   if (t && typeof t === 'object' && typeof t.task === 'string') {
     if (t.tier !== undefined && !ALLOWED_TIERS.has(t.tier)) {
       throw new Error(`cost-tiered-fix: args.tasks[${i}].tier must be one of ${[...ALLOWED_TIERS].join(', ')}, got ${JSON.stringify(t.tier)}`)
     }
-    return { tier: TIERS.normal, ...t }
+    return { tier: 'normal', ...t }
   }
   throw new Error(`cost-tiered-fix: args.tasks[${i}] must be a string or an object with a string "task", got ${JSON.stringify(t)}`)
 }
@@ -154,8 +171,8 @@ if (Array.isArray(args.tasks)) {
   log(`Using ${items.length} caller-provided tasks (planning skipped)`)
 } else {
   const plan = await agent(
-    `Decompose this goal into independent, well-scoped work items that can each be done in an isolated worktree without touching the same files. For each item write a self-contained instruction (exact file paths, expected behavior, how to check it) and pick a tier: ${TIERS.cheap} for mechanical work, ${TIERS.normal} for normal implementation. At most 10 items — if the goal needs more, return the 10 highest-value and say so in the last item.\n\nGoal: ` + args.goal,
-    { label: 'plan', phase: 'Plan', model: TIERS.judge, effort: 'high', schema: PLAN_SCHEMA },
+    `Decompose this goal into independent, well-scoped work items that can each be done in an isolated worktree without touching the same files. For each item write a self-contained instruction (exact file paths, expected behavior, how to check it) and pick a tier: "cheap" for mechanical work, "normal" for implementation needing local judgment. At most 10 items — if the goal needs more, return the 10 highest-value and say so in the last item.\n\nGoal: ` + args.goal,
+    { label: 'plan', phase: 'Plan', model: TIERS.judge.model, effort: TIERS.judge.effort, schema: PLAN_SCHEMA },
   )
   if (!plan || !Array.isArray(plan.items) || plan.items.length === 0) {
     log('Planning agent failed or returned no items — aborting cleanly')
@@ -174,13 +191,13 @@ if (items.length > 10) {
 const results = await pipeline(
   items,
 
-  // Stage 1 — execute cheap (haiku/sonnet, effort low: the cost levers)
+  // Stage 1 — execute at the planned rung; model and effort are the cost levers
   (item, _orig, i) =>
     agent(execPrompt(item.task, `${BRANCH_PREFIX}-${i}`), {
       label: `exec-${i}:${item.tier}`,
       phase: 'Execute',
-      model: item.tier,
-      effort: 'low',
+      model: TIERS[item.tier].model,
+      effort: TIERS[item.tier].effort,
       isolation: 'worktree',
       schema: EXEC_SCHEMA,
     }).then(result => boundExecutorOutput(result, `${BRANCH_PREFIX}-${i}`)),
@@ -198,19 +215,19 @@ const results = await pipeline(
 
     const supersededBranches = []
 
-    async function attempt(tier, suffix, priorSummary) {
+    async function attempt(rung, suffix, priorSummary) {
       const branch = `${BRANCH_PREFIX}-${i}-${suffix}`
       return agent(
         execPrompt(item.task, branch) +
           `\n\nA cheaper model already attempted this and reported: "${priorSummary}". Start from the task itself on a fresh branch off the same base as mainline — do NOT build on the earlier attempt's branch.`,
-        { label: `escalate-${i}-${suffix}`, phase: 'Execute', model: tier, effort: effortFor(tier), isolation: 'worktree', schema: EXEC_SCHEMA },
+        { label: `escalate-${i}-${suffix}`, phase: 'Execute', model: TIERS[rung].model, effort: TIERS[rung].effort, isolation: 'worktree', schema: EXEC_SCHEMA },
       ).then(result => boundExecutorOutput(result, branch))
     }
 
     let result
     let finalTier
     if (!run) {
-      const retryTier = item.tier === TIERS.cheap ? TIERS.normal : item.tier
+      const retryTier = item.tier === 'cheap' ? 'normal' : item.tier
       finalTier = retryTier
       log(`Item ${i} produced no result — retrying at ${retryTier}`)
       result = await attempt(retryTier, 'r2', 'no result (agent failed)')
@@ -249,16 +266,20 @@ const results = await pipeline(
     if (!run.branch) {
       return { task: item.task, ...run, verdict: { approved: false, issues: ['executor reported no branch — nothing to review'] } }
     }
-    // agentType pulls in the canonical reviewer rubric (roles/reviewer.md)
-    // instead of the weaker inline restatement this used to carry.
+    // The rubric arrives as a skill rather than an agent type. A dedicated
+    // reviewer agent is not registered on every harness — Claude Code defers
+    // that role to its own review skill — so binding this stage to one would
+    // make the verify phase die exactly where the role is absent. Loading
+    // leo:review-gate gets the same canonical rubric on all four.
     const verdict = await agent(
       [
+        `Invoke the leo:review-gate skill and apply its rubric for this review. Its "What a verdict judges" list is the standard; follow it in order.`,
         `Review branch ${run.branch} against this task: "${item.task}".`,
         `Diff scope: git diff $(git merge-base HEAD refs/heads/${run.branch}) refs/heads/${run.branch}`,
         `First check the branch is reviewable: git rev-parse --verify refs/heads/${run.branch} and git diff --stat $(git merge-base HEAD refs/heads/${run.branch}) refs/heads/${run.branch}. If the branch is missing or the diff is empty, return approved: false with issue "no reviewable diff".`,
         `Executor self-report (do not trust it, verify it): ${run.summary} — checks: ${run.checks || 'none reported'}`,
       ].join('\n'),
-      { label: `verify-${i}`, phase: 'Verify', agentType: 'leo:reviewer', model: TIERS.judge, effort: 'medium', schema: VERDICT_SCHEMA },
+      { label: `verify-${i}`, phase: 'Verify', model: TIERS.judge.model, effort: TIERS.judge.effort, schema: VERDICT_SCHEMA },
     )
     return { task: item.task, ...run, verdict }
   },
