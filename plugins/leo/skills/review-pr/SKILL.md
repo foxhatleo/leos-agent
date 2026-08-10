@@ -1,18 +1,15 @@
 ---
 name: review-pr
 description: >
-  Review a GitHub pull request of the current repo and stage inline review
-  comments that remain PENDING on GitHub — visible only to Leo, never
-  submitted. Handles Leo's existing reviews: a stale pending review is
-  replaced; posted threads are left, resolved, or get a staged reply.
-  Reports the staged comments and a merge verdict in chat. Requires gh,
-  installed and authenticated. Use when Leo asks to review a GitHub PR. Do not
-  use for a local working diff or to submit a review.
+  Review a GitHub pull request of the current repository and stage inline
+  comments that stay PENDING on GitHub — visible only to Leo, never submitted.
+  Replaces a stale pending review, and leaves, resolves, or replies to
+  already-posted threads. Reports the staged comments and a merge verdict.
+  Requires gh, authenticated.
 when_to_use: >
-  Leo asks to review a pull request by number ("review PR 42", "/review-pr 42")
-  or "review the PR for this branch". NOT for reviewing the local working diff
-  (that is the local reviewer subagent) and NOT for submitting a
-  review — this only stages draft comments.
+  Leo asks to review a pull request by number, or the pull request for this
+  branch. Not for the local working diff, which is leo:review-gate, and not
+  for submitting a review — this only stages.
 argument-hint: "[pr-number]"
 allowed-tools:
   - Bash(gh pr view *)
@@ -34,8 +31,9 @@ allowed-tools:
 # /review-pr — stage a pending GitHub review
 
 `${CLAUDE_PLUGIN_ROOT}` below is the Claude Code spelling of the plugin root.
-It is substituted into the injected policy, not into this skill body, so
-expand it in the shell — on Claude Code the variable is exported for you.
+Nothing substitutes it into this skill body, so expand it in the shell — on
+Claude Code the variable is exported for you. leo:delegation gives the forms
+the other harnesses use.
 
 Run this at the **Opus tier** — it ends in a merge verdict, which is judge
 work. Tier map: Sonnet reads (the lens agents), Opus judges (this main loop).

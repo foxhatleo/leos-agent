@@ -1,17 +1,14 @@
 ---
 name: writing-plans
 description: >
-  Quality bar for plans produced by the planner agent or in plan mode. A
-  plan is done when a Sonnet implementer can execute it without making a
-  single design decision — every step names exact files, shows literal
-  code or commands, and states how to verify it, anchored to a recorded
-  base ref. Use when writing or reviewing a multi-step implementation plan.
-  Do not use to choose an approach or to implement or review the plan's diff.
+  Quality bar for an implementation plan. A plan is done when the implementing
+  tier can carry it out without making a single design decision: every step
+  names exact files, shows literal code or commands, and states how to verify
+  it, anchored to a recorded base ref.
 when_to_use: >
-  Writing or reviewing a plan before handoff to leo:executing-plans —
-  planner-agent output, plan-mode output, or any multi-step change spec.
-  NOT for choosing the approach itself (that's leo:brainstorming) and NOT
-  for the implementation or review phases that consume the plan.
+  Writing or reviewing a plan before handoff to leo:executing-plans. Not for
+  choosing the approach, which is leo:brainstorming, and not for the
+  implementation or review that consume the plan.
 ---
 
 # writing-plans

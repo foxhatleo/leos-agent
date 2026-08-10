@@ -1,20 +1,14 @@
 ---
 name: test-first
 description: >
-  Failing-test-first as the default for runtime-behavior changes. Before
-  writing the change, write a test that fails for the intended reason, watch
-  it fail, then make it pass with the change — the red-to-green transition is
-  the evidence a real guard exists, not a rubber stamp added after the fact.
-  Applies to implementer and executor during implementation; reviewer checks
-  the resulting coverage as a rubric line. Use when an implementation changes
-  runtime behavior. Do not use for throwaway spikes, docs/config/dependency
-  work, or pure UI copy and styling.
+  Failing-test-first as the default for a change to runtime behaviour. Write
+  the test, watch it fail for the intended reason, then make it pass — the
+  red-to-green transition is the evidence that the guard is real rather than a
+  stamp added afterwards.
 when_to_use: >
-  Any implementation task that changes runtime behavior — fix, feature,
-  refactor with observable effect — routed through implementer or executor.
-  NOT for spikes/throwaway exploration that gets deleted, NOT for
-  docs/comments/config/dependency-bump edits, and NOT for pure UI copy or
-  styling tweaks — see Exemptions below for the full closed list.
+  Any implementation that changes runtime behaviour. Not for throwaway spikes,
+  not for docs, config, or dependency bumps, and not for pure copy or styling
+  — the closed exemption list is in the body.
 ---
 
 # test-first

@@ -1,18 +1,14 @@
 ---
 name: worktrees
 description: >
-  Worktree lifecycle mechanics for isolated branch work — detect, create,
-  and clean up a git worktree so implementation happens off the main
-  checkout. Shared by resolve-ticket, executing-plans, and delegation
-  fan-outs; not itself a workflow, just the plumbing they all call into. Use
-  when creating or tearing down isolated branch work. Do not use to decide
-  whether isolation is needed or to dispose of a finished branch.
+  Worktree lifecycle mechanics for isolated branch work: detect existing
+  isolation, create, and tear down, so implementation happens off the main
+  checkout. Plumbing other skills call into rather than a workflow of its own.
+  Where the harness manages worktrees natively, its tools come first.
 when_to_use: >
-  Any skill or agent about to create or tear down a worktree for isolated
-  branch work. NOT for choosing whether isolation is needed in the first
-  place (that call belongs to the calling skill's plan/gate step) and NOT
-  for merging or cleaning up a finished branch's remnants after the PR
-  lands — that's leo:finishing-a-branch.
+  About to create or tear down a worktree. Not for deciding whether isolation
+  is warranted — that belongs to the calling skill — and not for disposing of
+  a finished branch, which is leo:finishing-a-branch.
 ---
 
 # Worktrees

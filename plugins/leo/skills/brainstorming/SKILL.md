@@ -1,23 +1,15 @@
 ---
 name: brainstorming
 description: >
-  Design gate before non-trivial code — proportional to blast radius and
-  reversibility, the deliberate opposite of an unconditional gate. Contained,
-  easily reversible changes clear with one sentence of rationale; changes with
-  wide blast radius, hard to reverse, or that introduce new surface need
-  genuine, viable alternatives with trade-offs weighed before any code gets
-  written. Produces the chosen approach and its trade-offs, sized to the gate,
-  handed off to leo:writing-plans. Use when choosing an approach before
-  non-trivial code. Do not use for contained reversible tweaks, investigation,
-  or writing the plan itself.
+  Design gate sized to blast radius and reversibility rather than applied
+  unconditionally. A contained, reversible change clears with one sentence of
+  rationale; a wide-blast-radius or hard-to-undo change needs real
+  alternatives weighed before any code. Produces a chosen approach and its
+  trade-offs, never code.
 when_to_use: >
-  Before starting non-trivial code: a new feature, a new integration surface,
-  a schema or data-model change, anything that's expensive or awkward to
-  undo. NOT for a contained, easily reversible tweak (that just needs one
-  sentence of rationale, not this skill's full procedure), NOT for pure
-  investigation (use investigator), and NOT for writing the plan itself
-  (leo:writing-plans) — brainstorming stops at a chosen approach, it never
-  slides into implementation.
+  Before non-trivial code, while the approach is still open. Not for a
+  contained reversible tweak, not for diagnosis, and not for writing the plan
+  itself — that is leo:writing-plans.
 ---
 
 # brainstorming
@@ -96,11 +88,11 @@ implementation itself.
 
 ## Escalation
 
-Planning-tier work runs at Opus per the routing table (plan mode in an Opus
-session, or the `planner` subagent otherwise). Escalate per the standard
-ladder: two failed passes at reaching a defensible set of alternatives step
-up a tier; a genuine deadlock between two Opus-tier framings goes to
-`expert`, announced in one line, never silently.
+Planning-tier work runs at Opus per leo:routing — plan mode where the harness
+has it, the `planner` role where it does not. Two failed passes at reaching a
+defensible set of alternatives step up a tier, capped at Opus. A genuine
+deadlock between two well-argued framings is a decision for Leo, not another
+pass: put both on the table with what each costs.
 
 ## Works with
 

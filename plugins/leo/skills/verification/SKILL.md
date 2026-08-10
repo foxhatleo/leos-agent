@@ -1,19 +1,14 @@
 ---
 name: verification
 description: >
-  Fresh-evidence gate before claiming done, fixed, or passing. Applies to
-  the main loop, implementer, executor, and anyone reporting completion:
-  a completion claim needs a proving command run in the current turn, whose
-  output was actually read — never a prior run, a "should pass now," or a
-  subagent's self-report relayed as fact. Use when making or relaying a
-  completion claim. Do not use for in-progress updates or to replace review.
+  Fresh-evidence gate before claiming done, fixed, or passing. A completion
+  claim needs a proving command run in the current turn whose output was
+  actually read — never a prior run, never "should pass now", and never a
+  subagent's self-report relayed as fact.
 when_to_use: >
-  Before writing any completion claim — "tests pass," "build is green,"
-  "bug fixed," "agent finished the task." Also applies when relaying a
-  subagent's own "done"/"success" report up the chain. NOT for routine
-  in-progress status updates that make no completion claim, and NOT a
-  substitute for the review phase itself — this gates the evidence behind
-  it, execute-then-review still owns the verdict.
+  Before writing or relaying any completion claim. Not for in-progress status
+  updates that claim nothing, and not a substitute for leo:review-gate, which
+  owns the verdict this evidence sits under.
 ---
 
 # verification
@@ -96,10 +91,10 @@ it as such.
 
 ## Works with
 
-- The execute-then-review policy (injected leo:using-leo) — that gate is the
-  outer loop this skill feeds into; the reviewer subagent judges the diff,
-  this skill governs the evidence claimed leading up to that judgment.
-- reviewer — its verdict is itself a claim to relay accurately, not to
+- leo:review-gate — that gate is the outer loop this skill feeds into. It
+  owns the verdict on the diff; this skill governs the evidence claimed on
+  the way there.
+- The verdict that comes back is itself a claim to relay accurately, not to
   soften or summarize away.
 - End-to-end exercise — when the falsifying command is "does the real flow
   work," drive the actual app or flow, not just the test suite.

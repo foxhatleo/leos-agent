@@ -1,17 +1,13 @@
 ---
 name: watch-review
 description: >
-  One polling tick of the review watcher: check the current repo for open,
-  non-draft PRs where Leo's GitHub user is DIRECTLY requested as reviewer,
-  carry out the review-pr procedure on each new one, and record it in
-  machine-local state so it is never auto-reviewed again. Meant to be
-  re-invoked on an interval by whatever schedules recurring work here. Use
-  when Leo explicitly invokes the watcher only. Do not use because a PR or
-  review was merely mentioned.
+  One polling tick of the review watcher: find open, non-draft pull requests
+  in this repository where Leo is directly requested as a reviewer, run
+  leo:review-pr on each new one, and record it so it is never auto-reviewed
+  twice. Re-invoked on an interval by whatever schedules recurring work here.
 when_to_use: >
-  ONLY when Leo explicitly invokes watch-review (usually on a repeating
-  interval). Never trigger it because a PR or review was merely mentioned —
-  reviewing a specific PR is review-pr; nothing else warrants the watcher.
+  Only when Leo invokes the watcher explicitly. Never because a pull request
+  or a review was merely mentioned — reviewing one named PR is leo:review-pr.
 allowed-tools:
   - Bash(gh repo view *)
   - Bash(gh pr list *)
