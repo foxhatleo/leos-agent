@@ -22,16 +22,7 @@ MANIFESTS = (
 
 
 def versions():
-    found = {path.relative_to(ROOT).as_posix(): json.loads(path.read_text())["version"] for path in MANIFESTS}
-    match = re.search(
-        r'^version:\s*["\']?([^"\'\s]+)["\']?\s*$',
-        (ROOT / "plugin.yaml").read_text(encoding="utf-8"),
-        re.MULTILINE,
-    )
-    if not match:
-        raise ValueError("plugin.yaml has no version")
-    found["plugin.yaml"] = match.group(1)
-    return found
+    return {path.relative_to(ROOT).as_posix(): json.loads(path.read_text())["version"] for path in MANIFESTS}
 
 
 def release_version():
@@ -87,15 +78,6 @@ def build(output):
     version = release_version()
     output.mkdir(parents=True, exist_ok=True)
     _write_archive(output / f"leo-{version}-plugin.tar.gz", [(PAYLOAD, "leo")])
-    _write_archive(
-        output / f"leo-{version}-hermes.tar.gz",
-        [
-            (ROOT / "plugin.yaml", "leo/plugin.yaml"),
-            (ROOT / "__init__.py", "leo/__init__.py"),
-            (ROOT / "LICENSE", "leo/LICENSE"),
-            (PAYLOAD, "leo/plugins/leo"),
-        ],
-    )
 
 
 def stage_npm(destination):

@@ -23,10 +23,6 @@
           "mode": "hook",
           "note": "`sessionStart` hook, every session"
         },
-        "hermes": {
-          "mode": "tool-result",
-          "note": "rides the session's first tool result — so a session that runs no tool gets none; read `leo:using-leo` if the policy is not already in your context"
-        },
         "opencode": {
           "mode": "config-file",
           "note": "`config.instructions`, with a system-prompt transform as backstop"
@@ -54,10 +50,6 @@
           "mode": "native-agent",
           "note": "plugin agent from the generated Cursor agents directory"
         },
-        "hermes": {
-          "mode": "delegate-task",
-          "note": "native `delegate_task`, canonical role prompt pasted in"
-        },
         "opencode": {
           "mode": "native-agent",
           "note": "registered agent from `agents.json`, spawned via the task tool"
@@ -83,10 +75,6 @@
         "cursor": {
           "mode": "no",
           "note": "no — agents are `model: inherit`; select the tier's model in the UI before a homogeneous batch"
-        },
-        "hermes": {
-          "mode": "no",
-          "note": "no — one `delegation.model` for every child, so batch homogeneous Kimi or GLM work and switch it between batches"
         },
         "opencode": {
           "mode": "no",
@@ -116,10 +104,6 @@
           "mode": "frontmatter",
           "note": "harness-enforced — generated `readonly: true`"
         },
-        "hermes": {
-          "mode": "prompt",
-          "note": "prompt only — a convention, never a guarantee; never route work here that depends on it"
-        },
         "opencode": {
           "mode": "permission",
           "note": "native edit denial — generated `permission.edit: deny`, refused by OpenCode itself; Bash remains shell-capable, so the read-only prompt and permissions are not a hard sandbox"
@@ -146,10 +130,6 @@
           "mode": "raw-git",
           "note": "no native tool — raw `git worktree` at `.claude/worktrees/<name>`"
         },
-        "hermes": {
-          "mode": "raw-git",
-          "note": "no native tool — raw `git worktree` at `.claude/worktrees/<name>`"
-        },
         "opencode": {
           "mode": "raw-git",
           "note": "no native tool — raw `git worktree` at `.claude/worktrees/<name>`"
@@ -173,10 +153,6 @@
           "note": "none — fan out by hand and keep the ledger in `<plugin-root>/scripts/state.py`"
         },
         "cursor": {
-          "mode": "none",
-          "note": "none — fan out by hand and keep the ledger in `<plugin-root>/scripts/state.py`"
-        },
-        "hermes": {
           "mode": "none",
           "note": "none — fan out by hand and keep the ledger in `<plugin-root>/scripts/state.py`"
         },
@@ -207,10 +183,6 @@
           "mode": "unknown",
           "note": "none established — re-dispatch cold with the context restated"
         },
-        "hermes": {
-          "mode": "unknown",
-          "note": "none established — re-dispatch cold with the context restated"
-        },
         "opencode": {
           "mode": "unknown",
           "note": "none established — re-dispatch cold with the context restated"
@@ -235,10 +207,6 @@
           "note": "`leo:<name>`"
         },
         "cursor": {
-          "mode": "prefixed",
-          "note": "`leo:<name>`"
-        },
-        "hermes": {
           "mode": "prefixed",
           "note": "`leo:<name>`"
         },
@@ -269,10 +237,6 @@
           "mode": "unknown",
           "note": "none established — ask in plain text and default to changing nothing"
         },
-        "hermes": {
-          "mode": "unknown",
-          "note": "none established — ask in plain text and default to changing nothing"
-        },
         "opencode": {
           "mode": "tool",
           "note": "native `question` tool — multi-choice, single or multi-select"
@@ -294,7 +258,6 @@
       "claude": [],
       "cursor": [],
       "codex": [],
-      "hermes": [],
       "opencode": []
     },
     "reasons": {
@@ -314,7 +277,10 @@
         ],
         "exactVersion": "@upstash/context7-mcp@3.2.5",
         "registration": "automatic",
-        "prerequisites": ["Node.js", "npx available on PATH"],
+        "prerequisites": [
+          "Node.js",
+          "npx available on PATH"
+        ],
         "auth": "none",
         "authNote": "keyless; set CONTEXT7_API_KEY for higher rate limits"
       },
@@ -328,7 +294,10 @@
         ],
         "exactVersion": "@playwright/mcp@0.0.78",
         "registration": "automatic",
-        "prerequisites": ["Node.js", "npx available on PATH"],
+        "prerequisites": [
+          "Node.js",
+          "npx available on PATH"
+        ],
         "auth": "none",
         "authNote": "browsers may need `npx playwright install chromium` on first use"
       },
@@ -342,7 +311,10 @@
         ],
         "exactVersion": "chrome-devtools-mcp@1.6.0",
         "registration": "automatic",
-        "prerequisites": ["Node.js", "npx available on PATH"],
+        "prerequisites": [
+          "Node.js",
+          "npx available on PATH"
+        ],
         "auth": "none",
         "authNote": ""
       },
@@ -355,7 +327,9 @@
         ],
         "exactVersion": "duckduckgo-mcp-server==0.5.0",
         "registration": "automatic",
-        "prerequisites": ["uv or uvx available on PATH"],
+        "prerequisites": [
+          "uv or uvx available on PATH"
+        ],
         "auth": "none",
         "authNote": "needs uvx on PATH"
       }
@@ -370,12 +344,6 @@
       ],
       "cursor": [
         "context7"
-      ],
-      "hermes": [
-        "context7",
-        "playwright",
-        "chrome-devtools",
-        "duckduckgo"
       ],
       "opencode": [
         "context7",
@@ -421,7 +389,10 @@
         "transport": "http",
         "auth": "manual-oauth",
         "registration": "manual",
-        "prerequisites": ["Slack workspace admin approval for the MCP client", "a Slack account authorized for the workspace"],
+        "prerequisites": [
+          "Slack workspace admin approval for the MCP client",
+          "a Slack account authorized for the workspace"
+        ],
         "authNote": "a workspace admin must approve the MCP client for the workspace first"
       },
       {
@@ -431,7 +402,9 @@
         "transport": "http",
         "auth": "oauth",
         "registration": "automatic",
-        "prerequisites": ["Sentry organization access"],
+        "prerequisites": [
+          "Sentry organization access"
+        ],
         "authNote": "browser consent against your Sentry org, or a user auth token"
       },
       {
@@ -441,7 +414,9 @@
         "transport": "http",
         "auth": "oauth",
         "registration": "automatic",
-        "prerequisites": ["Honeycomb Intelligence enrollment"],
+        "prerequisites": [
+          "Honeycomb Intelligence enrollment"
+        ],
         "authNote": "the team must be enrolled in Honeycomb Intelligence"
       },
       {
@@ -452,7 +427,10 @@
         "transport": "http",
         "auth": "manual-oauth",
         "registration": "manual",
-        "prerequisites": ["account-specific server URL", "Snowflake OAuth or programmatic access token"],
+        "prerequisites": [
+          "account-specific server URL",
+          "Snowflake OAuth or programmatic access token"
+        ],
         "authNote": "account-specific URL — must be supplied, never guessed; OAuth or a programmatic access token"
       },
       {
@@ -462,7 +440,9 @@
         "transport": "http",
         "auth": "oauth",
         "registration": "automatic",
-        "prerequisites": ["LaunchDarkly project access"],
+        "prerequisites": [
+          "LaunchDarkly project access"
+        ],
         "authNote": "browser consent on first connect"
       },
       {
@@ -472,7 +452,9 @@
         "transport": "http",
         "auth": "oauth",
         "registration": "automatic",
-        "prerequisites": ["Linear workspace access"],
+        "prerequisites": [
+          "Linear workspace access"
+        ],
         "authNote": "OAuth 2.1 with dynamic client registration"
       },
       {
@@ -482,7 +464,9 @@
         "transport": "http",
         "auth": "manual-oauth",
         "registration": "manual",
-        "prerequisites": ["Atlassian organization access"],
+        "prerequisites": [
+          "Atlassian organization access"
+        ],
         "authNote": "one server covers Jira, Confluence, JSM, Bitbucket and Compass"
       },
       {
@@ -492,7 +476,10 @@
         "transport": "http",
         "auth": "manual-oauth",
         "registration": "manual",
-        "prerequisites": ["Google Cloud project with Gmail MCP enabled", "Google OAuth consent and Gmail account authorization"],
+        "prerequisites": [
+          "Google Cloud project with Gmail MCP enabled",
+          "Google OAuth consent and Gmail account authorization"
+        ],
         "authNote": "Google OAuth consent"
       },
       {
@@ -502,7 +489,10 @@
         "transport": "http",
         "auth": "manual-oauth",
         "registration": "manual",
-        "prerequisites": ["Google Cloud project with Drive MCP enabled", "Google OAuth consent and Drive account authorization"],
+        "prerequisites": [
+          "Google Cloud project with Drive MCP enabled",
+          "Google OAuth consent and Drive account authorization"
+        ],
         "authNote": "Google OAuth consent"
       },
       {
@@ -512,7 +502,9 @@
         "transport": "http",
         "auth": "oauth",
         "registration": "automatic",
-        "prerequisites": ["Granola account access"],
+        "prerequisites": [
+          "Granola account access"
+        ],
         "authNote": "browser consent on first connect"
       },
       {
@@ -522,7 +514,9 @@
         "transport": "http",
         "auth": "oauth",
         "registration": "automatic",
-        "prerequisites": ["Vercel account access"],
+        "prerequisites": [
+          "Vercel account access"
+        ],
         "authNote": "browser consent on first connect"
       }
     ]
@@ -531,14 +525,12 @@
     "claude": "the Browser pane (start or attach a preview, then take a screenshot), an attached Chrome, or the iOS Simulator control tool; some arrive only after a tool search, so an empty tool list is not proof of absence",
     "codex": "the bundled browser plugin, else computer-use, else Playwright driven from the shell",
     "cursor": "Browser Preview against a running dev server, else a Playwright server if one is registered",
-    "hermes": "no built-in renderer; Playwright driven from the shell is the only rung, and only when the project already depends on it",
     "opencode": "no built-in renderer; a registered Playwright server or the Playwright CLI"
   },
   "memoryTarget": {
     "claude": "the per-user `CLAUDE.md` in the Claude config directory",
     "codex": "the per-user `AGENTS.md` in the Codex home directory",
     "cursor": "a generated rules file in the per-user Cursor rules directory",
-    "hermes": "`SOUL.md` in the Hermes home, and only once `leo:setup enable hermes-memory` turns it on — that file is the agent's own identity prompt, so it is never written to unasked and never created",
     "opencode": "the per-user `AGENTS.md` in the OpenCode config directory"
   },
   "roles": {
@@ -624,22 +616,6 @@
       "haiku": {
         "model": "gpt-5.6-terra",
         "effort": "low"
-      }
-    },
-    "hermes": {
-      "title": "Hermes",
-      "provider": "openrouter",
-      "fable": {
-        "model": "moonshotai/kimi-k3"
-      },
-      "opus": {
-        "model": "moonshotai/kimi-k3"
-      },
-      "sonnet": {
-        "model": "z-ai/glm-5.2"
-      },
-      "haiku": {
-        "model": "z-ai/glm-5.2"
       }
     },
     "opencode": {
