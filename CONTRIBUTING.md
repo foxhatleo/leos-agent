@@ -72,11 +72,12 @@ not exist.
 Anything outside that set fails the build. A portable skill should carry exactly
 `name`, `description`, and `when_to_use`.
 
-Keep the two of them together under roughly 450 bytes for a process skill. Every
-byte is paid in every session whether the skill fires or not, and
-`tests/test_token_budget.py` fails the build past the committed ceiling. The two
-core policy skills are allowed more, because their descriptions carry the whole
-routing burden.
+`description` and `when_to_use` together are the skill's **listing text** — the
+only part of it loaded into every session whether the skill fires or not. Keep
+the pair under roughly 450 bytes for a process skill;
+`tests/test_token_budget.py` fails the build once the total passes the committed
+ceiling. The two core policy skills are allowed more, because their listing text
+carries the whole routing burden now that nothing is injected.
 
 ### Description and triggers
 

@@ -62,24 +62,29 @@ class TestOrphanVsRejectedReporting(unittest.TestCase):
 
 
 class TestTierSchemaConsistency(unittest.TestCase):
-    def test_plan_schema_tier_enum_matches_tiers_constant(self):
+    def test_plan_schema_tier_enum_is_rung_names(self):
+        """Rung names, never model ids.
+
+        The planning agent's output is untrusted text. When the enum carried
+        model ids, that string flowed straight into `model:`; as a rung name
+        it can only ever index TIERS, so an unknown value fails validation
+        instead of reaching the model selector.
+        """
         text = _read()
         enum_match = re.search(r"enum:\s*\[([^\]]+)\]", text)
         self.assertIsNotNone(enum_match, "expected PLAN_SCHEMA tier enum")
         enum_body = enum_match.group(1)
-        self.assertIn("TIERS.cheap", enum_body)
-        self.assertIn("TIERS.normal", enum_body)
-        # The judge tier must never be offered to the planning agent — the
-        # judge is reserved for verification, not something the planner
-        # assigns to a work item.
-        self.assertNotIn("TIERS.judge", enum_body)
+        self.assertIn("'cheap'", enum_body)
+        self.assertIn("'normal'", enum_body)
+        # The judge rung is reserved for verification, never assigned to a
+        # work item by the planner.
+        self.assertNotIn("'judge'", enum_body)
 
     def test_next_tier_ceiling_is_judge(self):
         text = _read()
-        match = re.search(r"function nextTier\(tier\)\s*\{(.*?)\n\}", text, re.DOTALL)
+        match = re.search(r"function nextTier\(rung\)\s*\{(.*?)\n\}", text, re.DOTALL)
         self.assertIsNotNone(match, "expected a nextTier function")
-        body = match.group(1)
-        self.assertIn("TIERS.judge", body)
+        self.assertIn("'judge'", match.group(1))
 
 
 class TestNoBareModelLiterals(unittest.TestCase):
@@ -105,26 +110,52 @@ class TestNoBareModelLiterals(unittest.TestCase):
             with self.subTest(literal=literal):
                 self.assertIn(literal, self.ALLOWED_MODELS)
 
-    def test_tiers_constant_values_are_bare_aliases(self):
+    def test_tiers_constant_models_are_bare_aliases(self):
         text = _read()
         match = re.search(r"const TIERS = \{(.*?)\n\}", text, re.DOTALL)
         self.assertIsNotNone(match, "expected a `const TIERS = {...}` block")
         body = match.group(1)
-        for literal in re.findall(r":\s*'([^']+)'", body):
+        for literal in re.findall(r"model:\s*'([^']+)'", body):
             with self.subTest(literal=literal):
                 self.assertIn(literal, self.ALLOWED_MODELS)
 
 
 class TestEscalationBudget(unittest.TestCase):
-    def test_effort_for_normal_tier_is_not_low(self):
+    """Escalation must buy a wider reasoning budget, not only a bigger model.
+
+    Effort used to be derived beside the rung by an effortFor() helper, which
+    made the two separable and the invariant a rule someone had to remember.
+    A rung now carries both, so the check is that the ladder is monotonic.
+    """
+
+    ORDER = ["low", "medium", "high", "xhigh", "max"]
+
+    def test_effort_rises_with_every_rung(self):
         text = _read()
-        match = re.search(r"function effortFor\(tier\)\s*\{(.*?)\n\}", text, re.DOTALL)
-        self.assertIsNotNone(match, "expected an effortFor function")
+        match = re.search(r"const TIERS = \{(.*?)\n\}", text, re.DOTALL)
+        self.assertIsNotNone(match, "expected a `const TIERS = {...}` block")
         body = match.group(1)
-        # A cheap->normal escalation must raise the reasoning budget, not
-        # just swap models — 'low' for the normal branch would be the
-        # original bug.
-        self.assertNotRegex(body, r"TIERS\.normal\s*\?\s*'low'")
+        efforts = {}
+        for rung in ("cheap", "normal", "judge"):
+            found = re.search(rung + r":\s*\{[^}]*effort:\s*'([^']+)'", body)
+            self.assertIsNotNone(found, f"{rung} declares no effort")
+            efforts[rung] = found.group(1)
+        ranks = [self.ORDER.index(efforts[r]) for r in ("cheap", "normal", "judge")]
+        self.assertEqual(ranks, sorted(ranks), f"effort ladder is not monotonic: {efforts}")
+        self.assertLess(ranks[0], ranks[2], "cheap and judge share an effort")
+
+    def test_effort_for_helper_is_gone(self):
+        """Deriving effort separately is what let the two drift apart."""
+        self.assertNotIn("function effortFor", _read())
+
+    def test_every_agent_call_pins_both_model_and_effort(self):
+        text = _read()
+        calls = re.findall(r"\{[^{}]*label:[^{}]*\}", text)
+        self.assertTrue(calls, "expected labelled agent() option objects")
+        for call in calls:
+            with self.subTest(call=call[:60]):
+                self.assertIn("model:", call)
+                self.assertIn("effort:", call)
 
 
 class TestCallerTaskValidation(unittest.TestCase):

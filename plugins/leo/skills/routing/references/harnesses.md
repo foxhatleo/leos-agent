@@ -27,7 +27,7 @@ Leo runs on four harnesses. Read only the section for the one you are on; the ot
 | Visual evidence | the Browser pane (start or attach a preview, then screenshot), an attached Chrome, or the iOS Simulator control tool; some arrive only after a tool search, so an empty tool list is not proof of absence |
 | Skill names | `leo:<name>` |
 
-## Native substitutions here
+### Native substitutions here
 
 | Leo | Use instead | Registered here? | Why |
 |---|---|---|---|
@@ -40,7 +40,7 @@ Leo runs on four harnesses. Read only the section for the one you are on; the ot
 
 A row marked `no` is not installed here at all, so reaching for it fails. A row marked `yes, as reference` still ships: use the native to do the work, and read Leo's version only when you need the reasoning behind a step the native leaves to you. If a native named here is missing from this install, fall back to Leo's version and say so in the report.
 
-## Leo skills only available here
+### Leo skills only available here
 
 - `leo:attach-pr` — its entire product is a side effect in Claude Code Desktop's PR-card detector, which no other harness has — the same commands would run here, succeed, and produce nothing observable.
 
@@ -67,11 +67,11 @@ A procedure that leans on one of these does not transfer to another harness.
 | Visual evidence | the bundled browser plugin, else computer-use, else Playwright driven from the shell |
 | Skill names | `leo:<name>` |
 
-## Native substitutions here
+### Native substitutions here
 
 None. Every Leo role and skill is registered on this harness and is the mechanism to use.
 
-## Leo skills not available here
+### Leo skills not available here
 
 - `leo:attach-pr` — its entire product is a side effect in Claude Code Desktop's PR-card detector, which no other harness has — the same commands would run here, succeed, and produce nothing observable.
 
@@ -102,11 +102,11 @@ Tier collapse here: Opus≡Sonnet (`Grok 4.5`). Moving between collapsed rungs c
 | Visual evidence | Browser Preview against a running dev server, else a registered Playwright server |
 | Skill names | `leo:<name>` |
 
-## Native substitutions here
+### Native substitutions here
 
 None. Every Leo role and skill is registered on this harness and is the mechanism to use.
 
-## Leo skills not available here
+### Leo skills not available here
 
 - `leo:attach-pr` — its entire product is a side effect in Claude Code Desktop's PR-card detector, which no other harness has — the same commands would run here, succeed, and produce nothing observable.
 
@@ -139,11 +139,11 @@ Tier collapse here: Sonnet≡Haiku (`z-ai/glm-5.2`). Moving between collapsed ru
 | Visual evidence | no built-in renderer — a registered Playwright server, or the Playwright CLI, and only where the project already depends on it |
 | Skill names | `leo-<name>` — OpenCode has no skill namespace, so the adapter registers a renamed copy; read every `leo:<x>` here as `leo-<x>` |
 
-## Native substitutions here
+### Native substitutions here
 
 None. Every Leo role and skill is registered on this harness and is the mechanism to use.
 
-## Leo skills not available here
+### Leo skills not available here
 
 - `leo:attach-pr` — its entire product is a side effect in Claude Code Desktop's PR-card detector, which no other harness has — the same commands would run here, succeed, and produce nothing observable.
 

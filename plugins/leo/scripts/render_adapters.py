@@ -324,12 +324,12 @@ def _native_table(config, harness):
     skills = _natives(config, harness, "skills")
     if not roles and not skills:
         return (
-            "\n## Native substitutions here\n\nNone. Every Leo role and skill is registered "
+            "\n### Native substitutions here\n\nNone. Every Leo role and skill is registered "
             "on this harness and is the mechanism to use.\n"
         )
     lines = [
         "",
-        "## Native substitutions here",
+        "### Native substitutions here",
         "",
         "| Leo | Use instead | Registered here? | Why |",
         "|---|---|---|---|",
@@ -385,13 +385,13 @@ def _skill_notes(config, harness):
         exclusive = sorted(set(skills.get("claudeOnly", ())))
         if not exclusive:
             return ""
-        lines = ["", "## Leo skills only available here", ""]
+        lines = ["", "### Leo skills only available here", ""]
         for name in exclusive:
             lines.append(f"- `leo:{name}` — {reasons.get(name, 'not portable elsewhere')}.")
         lines.append("")
         lines.append("A procedure that leans on one of these does not transfer to another harness.")
         return "\n".join(lines) + "\n"
-    lines = ["", "## Leo skills not available here", ""]
+    lines = ["", "### Leo skills not available here", ""]
     for name in sorted(missing):
         lines.append(f"- `leo:{name}` — {reasons.get(name, 'not portable to this harness')}.")
     lines.append("")

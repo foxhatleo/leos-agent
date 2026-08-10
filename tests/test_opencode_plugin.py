@@ -69,36 +69,38 @@ def _read_plugin_js_code():
 
 
 class TestOpenCodeAgentsJson(unittest.TestCase):
-    def test_roster_is_every_role_whose_tier_is_not_declared_absent(self):
+    def test_roster_is_every_role_not_natively_substituted(self):
         """Intent-derived, not a magic count.
 
         The old assertion was `len(agents) == 6`, which does fail if a role
-        goes missing — but with the message "6 != 5", which reads as an
+        goes missing -- but with the message "6 != 5", which reads as an
         off-by-one and invites the next person to edit the 6 to a 5.
         """
         config = _load_config()
-        absent = set(config["harnesses"]["opencode"].get("absentTiers", ()))
-        expected = {r for r, s in config["roles"].items() if s["tier"] not in absent}
+        natives = config["harnesses"]["opencode"].get("natives", {}).get("roles", {})
+        substituted = {n for n, e in natives.items() if e["verdict"] == "drop"}
+        expected = set(config["roles"]) - substituted
         self.assertEqual(set(_load_agents()), expected)
-        self.assertNotIn("expert", _load_agents())
 
     def test_a_tier_collapse_cannot_silently_drop_a_role(self):
-        """The regression the old model-identity rule would have shipped.
+        """The regression an identity-based rule would ship.
 
-        Point sonnet at the opus model and `implementer` used to vanish from
-        the roster, because the rule dropped any role whose tier resolved to
-        the opus model rather than any role whose tier was declared absent.
+        Point sonnet at the opus model and `implementer` must still register.
+        A role is omitted only when the harness declares a native substitution
+        for it, never because two tiers happen to resolve to one model --
+        collapsing rungs changes which role does the work, not whether the
+        role exists.
         """
         sys.path.insert(0, os.path.join(PAYLOAD, "scripts"))
         import render_adapters
 
         config = copy.deepcopy(_load_config())
-        opencode = config["harnesses"]["opencode"]
-        opencode["sonnet"]["model"] = opencode["opus"]["model"]
+        tiers = config["harnesses"]["opencode"]["tiers"]
+        tiers["sonnet"]["model"] = tiers["opus"]["model"]
         agents = json.loads(render_adapters._opencode_agents(config))
         self.assertIn("implementer", agents)
         self.assertIn("executor", agents)
-        self.assertNotIn("expert", agents, "fable is still the only declared-absent tier")
+        self.assertEqual(set(agents), set(config["roles"]))
 
     def test_every_model_openrouter_prefixed_and_matches_config(self):
         config = _load_config()
@@ -108,7 +110,7 @@ class TestOpenCodeAgentsJson(unittest.TestCase):
             with self.subTest(role=role):
                 tier = config["roles"][role]["tier"]
                 self.assertTrue(agent["model"].startswith("openrouter/"))
-                self.assertEqual(agent["model"], f"openrouter/{opencode[tier]['model']}")
+                self.assertEqual(agent["model"], f"openrouter/{opencode['tiers'][tier]['model']}")
 
     def test_read_only_roles_carry_edit_deny(self):
         agents = _load_agents()
@@ -138,16 +140,30 @@ class TestOpenCodeAgentsJson(unittest.TestCase):
 
 
 class TestOpenCodePluginJsStatic(unittest.TestCase):
-    def test_declares_the_four_hooks(self):
+    def test_declares_the_two_surviving_hooks(self):
         text = _read_plugin_js()
-        for hook in ("async config(config)", "'experimental.chat.system.transform'", "'tool.execute.before'"):
+        for hook in ("async config(config)", "'tool.execute.before'"):
             with self.subTest(hook=hook):
                 self.assertIn(hook, text)
 
-    def test_references_leo_policy_marker(self):
-        text = _read_plugin_js()
-        self.assertIn("<leo-policy>", text)
-        self.assertIn("</leo-policy>", text)
+    def test_delivers_no_policy(self):
+        """8.0: instructions reach the model only as natively loaded skills.
+
+        Both old injection channels have to stay gone -- config.instructions
+        and the chat system-prompt transform -- or the ~3,900-token block is
+        back on one harness while the others are clean.
+        """
+        code = _read_plugin_js_code()
+        for gone in (
+            "experimental.chat.system.transform",
+            "config.instructions",
+            "leo-policy",
+            "assemblePolicy",
+            "memoryBlock",
+            "memory.py",
+        ):
+            with self.subTest(token=gone):
+                self.assertNotIn(gone, code)
 
     def test_no_frontmatter_parser_or_env_overrides(self):
         text = _read_plugin_js()
@@ -185,13 +201,16 @@ class TestOpenCodeSessionDirectory(unittest.TestCase):
         self.assertEqual(text.count("process.cwd()"), 1)
         self.assertNotIn("cwd: process.cwd()", text)
 
-    def test_per_directory_state_is_not_held_in_bare_module_variables(self):
-        # A shared cache would pin whichever project started first and serve
-        # its repo-scoped memory block to every other project in the process.
+    def test_no_per_directory_state_is_held_at_module_scope(self):
+        """One OpenCode process serves several project directories at once and
+        ESM caches this module once per process, so a bare module-scope cache
+        would pin whichever project started first. With the policy gone there
+        is no per-directory state left to hold, and none should reappear.
+        """
         text = _read_plugin_js_code()
-        self.assertIn("policyInputsCache = null", text)
-        self.assertIn("policyPathCache = new Map()", text)
-        self.assertIn("opencode-policy-${directoryKey(directory)}.md", text)
+        for gone in ("policyInputsCache", "policyPathCache", "directoryKey"):
+            with self.subTest(symbol=gone):
+                self.assertNotIn(gone, text)
 
 
 class TestOpenCodeGuardFailureHandling(unittest.TestCase):
@@ -202,8 +221,11 @@ class TestOpenCodeGuardFailureHandling(unittest.TestCase):
 
     def test_guard_spawn_is_bounded(self):
         text = _read_plugin_js_code()
-        # One for the memory spawn, one for the guard spawn.
-        self.assertEqual(text.count("setTimeout"), 2)
+        # Exactly one spawn survives -- the guard. The memory subprocess went
+        # with the feature, and an unbounded second one reappearing here would
+        # mean something can hang a tool call forever.
+        self.assertEqual(text.count("setTimeout"), 1)
+        self.assertEqual(text.count("spawn("), 1)
         self.assertIn("timed out after 10s", text)
 
     def test_every_unguarded_command_is_recorded(self):
@@ -211,9 +233,10 @@ class TestOpenCodeGuardFailureHandling(unittest.TestCase):
         self.assertNotIn("guardWarnedOnce", text)
         self.assertIn("opencode-guard.log", text)
 
-    def test_doctor_surfaces_the_guard_log(self):
-        with open(os.path.join(PAYLOAD, "scripts", "doctor.py"), encoding="utf-8") as fh:
-            self.assertIn("opencode-guard.log", fh.read())
+    def test_guard_log_lands_in_machine_local_state(self):
+        code = _read_plugin_js_code()
+        self.assertIn("opencode-guard.log", code)
+        self.assertIn("LEOS_AGENT_LOCAL_PATH", code)
 
 
 @unittest.skipUnless(shutil.which("node"), "node is required to drive the ESM bridge")
@@ -371,10 +394,10 @@ class TestOpenCodeShadowSkillsTree(unittest.TestCase):
                 fm = parse_frontmatter(os.path.join(shadow, shadow_name, "SKILL.md"))
                 self.assertEqual(fm.get("name"), shadow_name)
 
-    def test_using_leo_references_travel_with_the_copy(self):
+    def test_routing_references_travel_with_the_copy(self):
         shadow = self._generate()
-        src_refs = os.path.join(self.payload_copy, "skills", "using-leo", "references")
-        dest_refs = os.path.join(shadow, "leo-using-leo", "references")
+        src_refs = os.path.join(self.payload_copy, "skills", "routing", "references")
+        dest_refs = os.path.join(shadow, "leo-routing", "references")
         self.assertTrue(os.path.isdir(dest_refs), "references/ did not travel with the shadow copy")
         self.assertEqual(sorted(os.listdir(src_refs)), sorted(os.listdir(dest_refs)))
         for name in os.listdir(src_refs):
@@ -389,19 +412,19 @@ class TestOpenCodeShadowSkillsTree(unittest.TestCase):
         first = self._generate()
         second = self._generate()
         self.assertEqual(first, second)
-        with open(os.path.join(second, "leo-doctor", "SKILL.md"), encoding="utf-8") as fh:
-            self.assertIn("name: leo-doctor", fh.read())
+        with open(os.path.join(second, "leo-routing", "SKILL.md"), encoding="utf-8") as fh:
+            self.assertIn("name: leo-routing", fh.read())
 
     def test_changed_source_file_produces_a_different_tree(self):
         first = self._generate()
-        skill_md = os.path.join(self.payload_copy, "skills", "doctor", "SKILL.md")
+        skill_md = os.path.join(self.payload_copy, "skills", "routing", "SKILL.md")
         with open(skill_md, "a", encoding="utf-8") as fh:
             fh.write("\n<!-- leo-test-perturbation -->\n")
 
         second = self._generate()
 
         self.assertNotEqual(first, second)
-        with open(os.path.join(second, "leo-doctor", "SKILL.md"), encoding="utf-8") as fh:
+        with open(os.path.join(second, "leo-routing", "SKILL.md"), encoding="utf-8") as fh:
             self.assertIn("<!-- leo-test-perturbation -->", fh.read())
 
     def test_a_superseded_tree_survives_until_it_goes_stale(self):
@@ -413,7 +436,7 @@ class TestOpenCodeShadowSkillsTree(unittest.TestCase):
         pull a live session's skills out from under it.
         """
         first = self._generate()
-        skill_md = os.path.join(self.payload_copy, "skills", "doctor", "SKILL.md")
+        skill_md = os.path.join(self.payload_copy, "skills", "routing", "SKILL.md")
         with open(skill_md, "a", encoding="utf-8") as fh:
             fh.write("\n<!-- leo-test-perturbation -->\n")
 
@@ -433,7 +456,7 @@ class TestOpenCodeShadowSkillsTree(unittest.TestCase):
         os.utime(marker, (stale, stale))
         os.utime(first, (stale, stale))
 
-        skill_md = os.path.join(self.payload_copy, "skills", "doctor", "SKILL.md")
+        skill_md = os.path.join(self.payload_copy, "skills", "routing", "SKILL.md")
         with open(skill_md, "a", encoding="utf-8") as fh:
             fh.write("\n<!-- leo-test-perturbation -->\n")
         second = self._generate()
@@ -461,8 +484,8 @@ class TestOpenCodeShadowSkillsTree(unittest.TestCase):
 
     def test_shadow_failure_registers_no_bare_skills_fallback_and_leaves_log(self):
         shadow = self._generate()
-        shutil.rmtree(os.path.join(shadow, "leo-doctor"))
-        with open(os.path.join(shadow, "leo-doctor"), "w", encoding="utf-8") as fh:
+        shutil.rmtree(os.path.join(shadow, "leo-routing"))
+        with open(os.path.join(shadow, "leo-routing"), "w", encoding="utf-8") as fh:
             fh.write("block copied skill directory")
         os.unlink(os.path.join(shadow, ".leo-shadow-complete"))
         script = (
@@ -516,55 +539,18 @@ class TestOpenCodeRuntimePolicy(unittest.TestCase):
         with open(os.path.join(self.local_state, "opencode-agents.log"), encoding="utf-8") as fh:
             self.assertIn("preserving user OpenCode agent definition for leo-planner", fh.read())
 
-    def test_generated_policy_and_state_root_modes_are_private(self):
-        out = self._run(
-            "const p=(await import(process.argv[1])).default;const h=await p({directory:process.argv[2]});"
-            "const c={};await h.config(c);console.log(c.instructions[0])"
+    def test_state_root_mode_is_private(self):
+        """Machine-local state is per-user and never world-readable.
+
+        Only the directory mode is checked now: the generated policy file it
+        used to also cover went with policy injection in 8.0.
+        """
+        self._run(
+            "const plugin=(await import(process.argv[1])).default;"
+            "const hooks=await plugin({directory:process.argv[2]});"
+            "const config={};await hooks.config(config);"
         )
-        policy_path = out.strip()
         self.assertEqual(os.stat(self.local_state).st_mode & 0o777, 0o700)
-        self.assertEqual(os.stat(policy_path).st_mode & 0o777, 0o600)
-
-    def test_config_rebuilds_memory_but_writes_only_when_digest_changes(self):
-        fake_bin = os.path.join(self.workdir, "bin")
-        os.mkdir(fake_bin)
-        fake_python = os.path.join(fake_bin, "python3")
-        with open(fake_python, "w", encoding="utf-8") as fh:
-            fh.write(
-                "#!/bin/sh\n"
-                "cat \"$LEOS_AGENT_LOCAL_PATH/memory-current\"\n"
-            )
-        os.chmod(fake_python, 0o755)
-        out = self._run(
-            "const fs=await import('node:fs/promises');const p=(await import(process.argv[1])).default;"
-            "await fs.mkdir(process.env.LEOS_AGENT_LOCAL_PATH,{recursive:true});"
-            "const h=await p({directory:process.argv[2]});const a={},b={},c={};"
-            "await fs.writeFile(process.env.LEOS_AGENT_LOCAL_PATH+'/memory-current','memory-one');await h.config(a);"
-            "const one=await fs.readFile(a.instructions[0],'utf8');"
-            "await fs.writeFile(process.env.LEOS_AGENT_LOCAL_PATH+'/memory-current','memory-two');await h.config(b);"
-            "const two=await fs.readFile(b.instructions[0],'utf8');const before=(await fs.stat(b.instructions[0])).mtimeMs;"
-            "await h.config(c);const after=(await fs.stat(c.instructions[0])).mtimeMs;"
-            "console.log(JSON.stringify({same:a.instructions[0]===b.instructions[0],one,two,before,after}))",
-            env={"PATH": fake_bin + os.pathsep + os.environ["PATH"]},
-        )
-        result = json.loads(out)
-        self.assertTrue(result["same"])
-        self.assertIn("memory-one", result["one"])
-        self.assertIn("memory-two", result["two"])
-        self.assertEqual(result["before"], result["after"])
-        self.assertNotIn("${CLAUDE_PLUGIN_ROOT}", result["two"])
-
-    def test_transform_adds_the_real_policy_exactly_once(self):
-        out = self._run(
-            "const p=(await import(process.argv[1])).default;const h=await p({directory:process.argv[2]});"
-            "const o={system:['base']};await h['experimental.chat.system.transform']({},o);"
-            "await h['experimental.chat.system.transform']({},o);console.log(JSON.stringify(o.system))"
-        )
-        system = json.loads(out)
-        policy = [item for item in system if isinstance(item, str) and "<leo-policy>" in item]
-        self.assertEqual(len(policy), 1)
-        self.assertIn("# Leo's global agent directives", policy[0])
-        self.assertNotIn("${CLAUDE_PLUGIN_ROOT}", policy[0])
 
 
 class TestOpenCodePackageJson(unittest.TestCase):

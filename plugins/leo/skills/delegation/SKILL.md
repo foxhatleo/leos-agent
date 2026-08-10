@@ -4,8 +4,12 @@ description: >
   How to dispatch a subagent so its report is trustworthy: writing a brief
   that survives having no conversation history, pinning model and effort, the
   four states a report may resolve to, and keeping progress durable across a
-  long run. Use when spawning any subagent or fan-out. Do not use to pick
-  which tier the work belongs in — that is leo:routing.
+  long run.
+when_to_use: >
+  Any time work goes to a subagent instead of being done inline, single
+  dispatch or fan-out. Not for picking which tier the work belongs in, which
+  is leo:routing, and not for judging what comes back, which is
+  leo:review-gate.
 ---
 
 # delegation

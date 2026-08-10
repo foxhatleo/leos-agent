@@ -18,7 +18,7 @@ def _load(*parts):
         return json.load(fh)
 
 
-class TestV4Layout(unittest.TestCase):
+class TestLayout(unittest.TestCase):
     def test_payload_contains_all_harness_manifests(self):
         for relative in (
             ".claude-plugin/plugin.json",
@@ -26,10 +26,12 @@ class TestV4Layout(unittest.TestCase):
             ".cursor-plugin/plugin.json",
             "config/models.json",
             "hooks/hooks.json",
-            "skills/using-leo/SKILL.md",
+            "hooks/bash-guard.py",
+            "skills/routing/SKILL.md",
+            "skills/routing/references/harnesses.md",
+            "skills/review-gate/SKILL.md",
             "scripts/state.py",
-            "scripts/memory.py",
-            "scripts/doctor.py",
+            "scripts/render_adapters.py",
         ):
             with self.subTest(path=relative):
                 self.assertTrue(os.path.isfile(os.path.join(PLUGIN, relative)))
@@ -103,10 +105,27 @@ class TestV4Layout(unittest.TestCase):
 
         agents_dir = os.path.join(PLUGIN, "agents")
         self.assertTrue(os.path.isdir(agents_dir), f"missing {agents_dir}")
+
+        # Claude no longer generates an agent for every role: the ones it has
+        # a native for are substituted away. So the invariant is containment
+        # plus an exact match against what models.json says should be here,
+        # not equality with roles/ -- which would have quietly reverted the
+        # substitution the first time someone re-ran the renderer.
+        config = _load("plugins", "leo", "config", "models.json")
+        substituted = {
+            name
+            for name, entry in config["harnesses"]["claude"]["natives"]["roles"].items()
+            if entry["verdict"] == "drop"
+        }
+        expected = sorted(f"{r}.md" for r in config["roles"] if r not in substituted)
+        self.assertEqual(sorted(n for n in os.listdir(agents_dir) if n.endswith(".md")), expected)
+
         roles_dir = os.path.join(PLUGIN, "roles")
         self.assertEqual(
-            sorted(n for n in os.listdir(agents_dir) if n.endswith(".md")),
             sorted(n for n in os.listdir(roles_dir) if n.endswith(".md")),
+            sorted(f"{r}.md" for r in config["roles"]),
+            "roles/ must carry a prompt for every role, substituted or not -- "
+            "the other harnesses still render them",
         )
 
     def test_removed_setup_surfaces_are_absent(self):
@@ -114,7 +133,7 @@ class TestV4Layout(unittest.TestCase):
         # OpenCode bridge and its npm manifest now live at the conventional
         # payload paths (plugins/leo/adapters/opencode/, plugins/leo/package.json).
         # This assertion is repo-root only, so it never sees them there.
-        for relative in ("install.sh", "install", ".mcp.json"):
+        for relative in ("install.sh", "install", ".mcp.json", "plugin.yaml", "__init__.py"):
             with self.subTest(path=relative):
                 self.assertFalse(os.path.lexists(os.path.join(REPO, relative)))
 
