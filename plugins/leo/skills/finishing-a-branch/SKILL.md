@@ -1,21 +1,14 @@
 ---
 name: finishing-a-branch
 description: >
-  End-of-branch state machine: what happens once implementation on a
-  branch/worktree is complete. Gates on a clean review verdict, then offers
-  a closed set of next steps — merge / PR / keep / discard — routes the
-  chosen path through the right ordering (land the work before removing the
-  worktree, remove the worktree before deleting the branch), and leaves the
-  repo clean. Use when reviewed implementation on a branch/worktree needs a
-  terminal disposition. Do not use to manage a worktree mid-task or replace
-  the review cycle.
+  End-of-branch state machine for once the work on a branch or worktree is
+  done. Gates on a clean verdict, offers a closed set of dispositions — merge,
+  pull request, keep, discard — and orders the teardown so the work lands
+  before the worktree goes and the worktree goes before the branch.
 when_to_use: >
-  A branch or worktree has reached "implementation done" and Leo needs to
-  decide what happens to it. Fires after execute-then-review completes, or
-  when Leo says finish/wrap up/close out/clean up this branch. NOT for
-  starting or managing a worktree mid-task (that's leo:worktrees) and NOT a
-  substitute for the review cycle itself (that's execute-then-review) — this
-  skill starts only once a review verdict already exists.
+  A branch has reached implementation-done and needs a disposition, or Leo
+  says to wrap up or clean up this branch. Not for managing a worktree
+  mid-task, which is leo:worktrees, and not a substitute for leo:review-gate.
 ---
 
 # finishing-a-branch

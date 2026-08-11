@@ -29,7 +29,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PAYLOAD = os.path.join(REPO, "plugins", "leo")
 SKILLS_DIR = os.path.join(PAYLOAD, "skills")
 AGENTS_DIR = os.path.join(PAYLOAD, "roles")
-REFERENCES_DIR = os.path.join(SKILLS_DIR, "using-leo", "references")
+REFERENCES_DIR = os.path.join(SKILLS_DIR, "routing", "references")
 FIXTURES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 SHINGLES_FIXTURE = os.path.join(FIXTURES_DIR, "superpowers_shingles.txt")
 
@@ -51,25 +51,25 @@ DENYLIST = [
     "red flags",
 ]
 
-# The fourteen process skills from using-leo's Skill index, plus the
-# using-leo policy skill itself.
+# The process skills from the routing skill's index, plus the two core policy
+# skills themselves. Operational skills (review-pr, resolve-ticket,
+# watch-review, attach-pr) are denylist-checked but not shingle-checked: they
+# are mostly command sequences and API mechanics rather than the kind of
+# discipline prose this corpus overlaps with.
 PROCESS_SKILLS = [
     "brainstorming",
     "debugging",
     "delegation",
-    "doctor",
     "executing-plans",
     "finishing-a-branch",
     "freshness",
-    "memory",
     "test-first",
     "verification",
     "visual-verification",
     "worktrees",
     "writing-plans",
-    "writing-skills",
 ]
-SHINGLE_SKILLS = PROCESS_SKILLS + ["using-leo"]
+SHINGLE_SKILLS = PROCESS_SKILLS + ["routing", "review-gate"]
 
 CODE_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 MARKDOWN_PUNCT_RE = re.compile(r"[#*|>`_\-\[\]()]")

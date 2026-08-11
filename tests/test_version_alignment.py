@@ -1,8 +1,12 @@
-"""Version-string alignment across all four harness manifests."""
+"""Version-string alignment across every manifest the release gate reads.
+
+All four sources are checked here, `package.json` included. Before 8.0 this file
+covered only the three plugin manifests, so an npm-only version drift could reach
+`tools/release.py` before anything caught it.
+"""
 
 import json
 import os
-import re
 import sys
 import unittest
 
@@ -17,6 +21,7 @@ MANIFESTS = {
     "claude": os.path.join(PAYLOAD, ".claude-plugin", "plugin.json"),
     "codex": os.path.join(PAYLOAD, ".codex-plugin", "plugin.json"),
     "cursor": os.path.join(PAYLOAD, ".cursor-plugin", "plugin.json"),
+    "npm": os.path.join(PAYLOAD, "package.json"),
 }
 
 
@@ -25,14 +30,11 @@ def _versions():
     for label, path in MANIFESTS.items():
         with open(path, encoding="utf-8") as fh:
             versions[label] = json.load(fh).get("version")
-    with open(os.path.join(REPO, "plugin.yaml"), encoding="utf-8") as fh:
-        match = re.search(r'^version:\s*["\']?([^"\'\s]+)', fh.read(), re.MULTILINE)
-    versions["hermes"] = match.group(1) if match else None
     return versions
 
 
-class TestVersionsPinnedToV4(unittest.TestCase):
-    def test_each_manifest_is_v4(self):
+class TestVersionsPinned(unittest.TestCase):
+    def test_each_manifest_matches_expected_version(self):
         for label, version in _versions().items():
             with self.subTest(manifest=label):
                 self.assertEqual(version, EXPECTED_VERSION)
@@ -42,6 +44,22 @@ class TestVersionsAlignedAcrossManifests(unittest.TestCase):
     def test_all_versions_equal(self):
         versions = _versions()
         self.assertEqual(len(set(versions.values())), 1, f"version strings diverge: {versions}")
+
+    def test_release_tool_reads_exactly_these_sources(self):
+        """The gate and this test must not drift apart: same four files, no plugin.yaml.
+
+        `tools/release.py` is what actually blocks a tagged release, so if it grows or
+        loses a version source without this file following, the drift check silently
+        stops covering it.
+        """
+        sys.path.insert(0, os.path.join(REPO, "tools"))
+        import release
+
+        self.assertEqual(
+            sorted(os.path.relpath(p, REPO).replace(os.sep, "/") for p in MANIFESTS.values()),
+            sorted(release.versions()),
+            "release.py version sources and this test's MANIFESTS have diverged",
+        )
 
 
 if __name__ == "__main__":

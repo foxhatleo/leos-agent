@@ -1,6 +1,6 @@
 {
   "name": "leos-agent",
-  "version": "7.0.0",
+  "version": "8.0.0",
   "description": "Leo's agent operating policy: cost-tiered routing, subagent roles, review gates, guardrails.",
   "type": "module",
   "main": "adapters/opencode/plugin.js",
@@ -20,7 +20,6 @@
     "roles/",
     "scripts/",
     "skills/",
-    "vendor/",
     "workflows/",
     "settings.json"
   ]

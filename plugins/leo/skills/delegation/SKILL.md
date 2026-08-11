@@ -1,17 +1,15 @@
 ---
 name: delegation
 description: >
-  Operational mechanics for dispatching subagents — a single spawn or a large
-  fan-out — the companion to the policy's "Delegate the labor" section.
-  Covers brief construction, model/effort pinning, the four-state return
-  contract, and ledger-backed progress tracking for long multi-agent runs. Use
-  when dispatching any subagent or fan-out. Do not use to choose a task's tier.
+  How to dispatch a subagent so its report is trustworthy: writing a brief
+  that survives having no conversation history, pinning model and effort, the
+  four states a report may resolve to, and keeping progress durable across a
+  long run.
 when_to_use: >
-  Any time work is routed to a subagent (explore, investigator, executor,
-  implementer, reviewer, expert) rather than done inline — single dispatch or
-  fan-out. NOT for deciding *which* tier a task belongs in (that's the
-  routing table in the injected leo:using-leo policy); this skill covers what
-  to do once the tier is already chosen.
+  Any time work goes to a subagent instead of being done inline, single
+  dispatch or fan-out. Not for picking which tier the work belongs in, which
+  is leo:routing, and not for judging what comes back, which is
+  leo:review-gate.
 ---
 
 # delegation
@@ -36,14 +34,20 @@ version needs no follow-up question; the first invites three.
 
 ## Pin model and effort
 
-Every dispatch pins **model AND effort** from the routing table — opus for
-judges (reviewer, investigator), sonnet for normal implementation
-(implementer), haiku for mechanical work (executor). expert
-never appears in a fan-out — one at a time, never fanned. An unpinned call
-silently inherits the session's tier: in an opus session that means every
-executor spawn quietly runs at opus, and a ten-item fan-out burns
-opus-fan-out money for haiku-shaped work. Pin both fields on every spawn, not
-just the ones that "obviously" need it.
+Where the harness lets a dispatch choose them, every spawn pins **model and
+effort** from leo:routing — the judging tier for verdicts and diagnosis, the
+middle tier for normal implementation, the cheap tier for mechanical work. An
+unpinned call inherits the session's own tier: in an expensive session that
+means every cheap spawn quietly runs at the expensive rate, and a ten-item
+fan-out bills judge money for work that needed none. Pin both, not only the
+ones that obviously need it.
+
+Where the harness fixes them per registered role instead, that pin is already
+made and the dispatch cannot override it — so the choice of *role* is the
+choice of tier, and picking the wrong role is the whole mistake. Where it
+offers neither, say so rather than reporting a tier you did not actually set.
+Check your section of the harness reference under **Tier pinning** before
+assuming which of the three applies.
 
 ## The four-state return contract
 
@@ -63,49 +67,52 @@ credential) or something neither of you can supply without more work
 (blocked — a failing external service, a genuinely ambiguous requirement).
 
 Each role's own prompt carries the state line it must emit, so the contract
-is enforced at both ends. Two roles are deliberately narrowed: `reviewer`
-emits only `done` / `needs-context` (severity already lives in
-`blocking`/`non-blocking`, and the diff's own verdict in
-`approved`/`needs-changes`), and `expert` never emits `blocked` — it is the
-ceiling, so there is nothing left to escalate to. `status` is a separate axis
-from `confidence`: status routes your next move, confidence rates the work.
+is enforced at both ends. One role is deliberately narrowed: a reviewer emits
+only `done` / `needs-context`, because severity already lives in
+`blocking`/`non-blocking` and the diff's own answer in
+`approved`/`needs-changes`. `status` is a separate axis from `confidence`:
+status routes your next move, confidence rates the work.
 
-## Long multi-agent runs: the ledger
+## Long multi-agent runs: durable progress
 
 A run spanning many dispatches survives context compaction only if progress
-is persisted outside the conversation. Use
-`${CLAUDE_PLUGIN_ROOT}/scripts/state.py` (get / merge / path — flock-guarded,
-atomic writes, keyed per repo) as the ledger, not ad hoc notes in the
-transcript. Each entry: item id, status (one of the four states above, plus
-`pending` / `in-progress`), artifact path (branch name, file, or diff). On
-resume, read the ledger first — anything already `done` or `concerns` is not
-re-dispatched; anything `blocked` is reported, not silently retried.
+is persisted outside the conversation. Each entry needs an item id, a status
+(one of the four above, plus `pending` / `in-progress`), and an artifact path
+— a branch name, a file, a diff. On resume, read that record first: anything
+already `done` or `concerns` is not re-dispatched, and anything `blocked` is
+reported rather than quietly retried.
 
-A ledger entry is small — `{"items": {"<id>": {"status": "done", "artifact":
-"branch:fix/eng-123-slug"}}}` merged via `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/state.py"
-merge <skill-name> <owner/repo> '<patch>'` — but it's the only thing standing between a
-compaction mid-run and forty items silently re-dispatched from item 1.
-Update it after every dispatch resolves, not in a batch at the end: a crash
-between "agent finished" and "ledger written" is exactly the gap this
-exists to close.
+Where the harness owns a task list of its own, that list *is* the record.
+Use it, and do not build a second one alongside it — two ledgers disagreeing
+about which item finished is worse than either alone.
 
-`${CLAUDE_PLUGIN_ROOT}` above is the Claude Code spelling of the plugin root,
-and it is substituted into this text only there. Codex exposes `$PLUGIN_ROOT`
-and Cursor `$CURSOR_PLUGIN_ROOT`. Hermes and OpenCode expose no root variable;
-their injected policy substitutes an absolute payload path into the `state.py`
-and `memory.py` commands, which is the discoverable source to reuse. Do not
-invent an environment variable where the harness exposes none.
+Everywhere else, use `<plugin-root>/scripts/state.py` (`get` / `merge` /
+`path` — flock-guarded, atomic writes, keyed per repo) rather than notes in
+the transcript. An entry is small:
 
-For a batch of independent, well-scoped fixes, don't hand-roll this loop —
-the reusable workflow at `${CLAUDE_PLUGIN_ROOT}/workflows/cost-tiered-fix.js`
-(Workflow tool, `scriptPath`) already implements plan → tiered execute →
-opus verify with escalation built in, including its own progress tracking.
-Reach for it before writing a bespoke fan-out loop; write the ledger
-approach above only when the run doesn't fit that workflow's shape (e.g. one
-dispatch at a time inside a larger interactive flow, not a clean batch).
-That workflow needs Claude Code's Workflow tool; on every other harness the
-ledger above is the whole mechanism, so use it directly rather than looking
-for a runner that isn't there.
+```
+python3 "<plugin-root>/scripts/state.py" merge <skill-name> <owner/repo> \
+  '{"items": {"<id>": {"status": "done", "artifact": "branch:fix/eng-123-slug"}}}'
+```
+
+Small, but it is the only thing between a compaction mid-run and forty items
+re-dispatched from the first. Write it as each dispatch resolves, never
+batched at the end: the gap between "agent finished" and "record written" is
+exactly what this closes.
+
+`<plugin-root>` is spelled differently per harness — `${CLAUDE_PLUGIN_ROOT}`
+on Claude Code, `$PLUGIN_ROOT` on Codex, `$CURSOR_PLUGIN_ROOT` on Cursor. On
+OpenCode no such variable exists; use the absolute path of the installed
+package. Never invent an environment variable the harness does not export.
+
+Check the **Durable progress** row of your harness section before choosing
+between the two mechanisms.
+
+For a batch of independent, well-scoped fixes, don't hand-roll the loop where
+a runner exists: `<plugin-root>/workflows/cost-tiered-fix.js` already
+implements plan → tiered execute → verify with bounded escalation and its own
+progress tracking. The **Workflow runner** row says whether this harness can
+execute it. Where it cannot, the record above is the whole mechanism.
 
 ## Parallel dispatch: own your files
 

@@ -1,17 +1,14 @@
 ---
 name: resolve-ticket
 description: >
-  End-to-end ticket fix: resolve the ticket (Linear or Jira), pull linked
-  context (Confluence, Slack, GitHub), investigate and plan at Opus tier, get
-  Leo's explicit sign-off, implement on a worktree branch with sonnet/haiku
-  executors, Opus-review the diff, then push and open a DRAFT pull request in
-  the browser. Use when Leo names a tracked ticket to fix or implement. Do not
-  use for ad-hoc fixes without a ticket or independent-item batches.
+  End-to-end fix for a tracked ticket: resolve it in Linear or Jira, pull
+  linked context, investigate and plan at the judging tier, get Leo's explicit
+  sign-off, implement on a worktree branch, review the diff, then push and
+  open a draft pull request.
 when_to_use: >
-  Leo asks to fix or implement a specific tracked ticket by ID ("fix ENG-123",
-  "/resolve-ticket PLAT-42"). NOT for ad-hoc fixes with no ticket (normal
-  execute-then-review flow) and NOT for batches of independent items (that is
-  the cost-tiered-fix workflow).
+  Leo names a specific tracked ticket to fix or implement. Not for ad-hoc
+  fixes with no ticket, and not for batches of independent items — that is the
+  cost-tiered-fix workflow.
 argument-hint: "[ticket-id]"
 allowed-tools:
   - Bash(gh auth status *)
@@ -53,8 +50,8 @@ a misconfiguration.
 Run this at the **Opus tier**. Tier map: this main loop triages, plans, gates,
 and synthesizes; `investigator` diagnoses at the Opus tier; `executor`
 implements at the Haiku tier for mechanical steps and the Sonnet tier for
-normal ones; `reviewer` judges the diff at the Opus tier before anything is
-pushed. Your harness mapping names the concrete models, and its *Per-spawn
+normal ones; leo:review-gate judges the diff at the Opus tier before anything
+is pushed. Your harness section names the concrete models, and its *Tier
 model* row says whether the tier can be chosen per spawn here at all — where it
 cannot, Step 6 routes to `implementer` instead (see there).
 
@@ -97,10 +94,10 @@ capability at runtime (a Linear issue-fetch tool; the Atlassian tools
 `getAccessibleAtlassianResources` → cloudId → `getJiraIssue`). Use the harness's tool-discovery mechanism (Claude Code: ToolSearch)
 if the tools are deferred.
 
-Prefix → tracker mappings live in machine-local state (see the injected
-leo:using-leo policy › Machine-local state). `${CLAUDE_PLUGIN_ROOT}` below is
-the Claude Code spelling of the plugin root and is not substituted into this
-skill body; leo:delegation's ledger section gives the per-harness forms.
+Prefix → tracker mappings live in machine-local state (see leo:routing ›
+Machine-local state). `${CLAUDE_PLUGIN_ROOT}` below is the Claude Code
+spelling of the plugin root and nothing substitutes it into this skill body;
+leo:delegation gives the per-harness forms.
 `STATE='python3 "${CLAUDE_PLUGIN_ROOT}/scripts/state.py"'`,
 file `resolve-ticket.json`, keyed by this repo's `owner/repo`, shaped
 `{"prefixes": {"ENG": "linear"}}`. A project CLAUDE.md may still declare its
@@ -154,11 +151,12 @@ blast radius*: git archaeology, related PRs, callers/consumers of what will
 change, landmines named in ticket comments. Scale down to 1 when the ticket
 names the file and fix; up to 3 max for gnarly cross-cutting work — never
 more. Feed them the normalized ticket, resource summaries, and Leo's steering
-constraints; let cheap `explore` scouts handle raw searching. Synthesize root
-cause and approach here. If the investigators return low confidence on the
-same core question, that is the standing auto-escalation condition: announce
-it in one line and put that question (not the whole investigation) to the
-`expert` agent — raw artifact paths and the failed attempts included.
+constraints; let cheap scouting handle raw searching. Synthesize root cause
+and approach here. If the investigators return low confidence on the same core
+question, Opus is already the ceiling — do not re-run them hoping for a
+different answer. Carry that question into the Step 4 plan as an explicit open
+question, with the evidence each account rests on, and let Leo settle it at
+the sign-off gate.
 
 ## Step 4 — Plan and sign-off gate
 
@@ -220,8 +218,7 @@ Step 7 gate as a known failure, never silently.
 
 ## Step 7 — Mandatory opus review
 
-Spawn a **fresh** `reviewer` subagent with no model override (it inherits its
-Opus-tier frontmatter default) — never self-review, this loop wrote the
+Run leo:review-gate **fresh**, at the judging tier — never self-review, this loop wrote the
 plan and is biased toward believing it worked. Give it: the normalized
 ticket, the approved plan, and the diff scope
 `git diff $(git merge-base origin/<default> HEAD)...HEAD`.
@@ -231,12 +228,12 @@ ticket, the approved plan, and the diff scope
   deliberately one more than the policy's global ONE-cycle rule, because that
   rule exists to stop open-ended looping and this flow instead ends at the
   hard user gate below. Two rounds is the ceiling here, not a new default.
-- Still blocking after round 2 → ask Leo: **Expert arbitration**
-  (the `expert` agent rules on the disputed findings from the raw diff and
-  both review rounds; a "findings stand" ruling routes back to fix-and-push,
-  a "findings wrong" ruling means push) / **Push anyway as draft** (PR body
-  gains a "Known issues" section listing the findings) / **Abort** (branch
-  and worktree left local; report the path).
+- Still blocking after round 2 → ask Leo, presenting the disputed findings
+  alongside the raw diff and both review rounds: **Push anyway as draft** (PR
+  body gains a "Known issues" section listing the findings) / **Abort**
+  (branch and worktree left local; report the path). Do not open a third
+  review round to break the tie — two rounds disagreeing is a judgement call,
+  and it is Leo's.
 - Non-blocking findings ride along into the PR body's review notes.
 
 ## Step 8 — Ship

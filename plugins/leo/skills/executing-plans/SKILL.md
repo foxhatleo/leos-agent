@@ -1,17 +1,13 @@
 ---
 name: executing-plans
 description: >
-  Checkpoint discipline for carrying out a written plan — batch execution
-  with a check at every batch boundary, plan-intent-wins-on-architecture /
-  reality-wins-on-mechanics arbitration, and one fix-then-re-review cycle
-  before stopping to report. Used by the implementer agent, or the main loop
-  when it executes a plan directly. Use when a written plan is about to become
-  code. Do not use for open-ended work without a plan or for reviewing a diff.
+  Checkpoint discipline for turning a written plan into code: batch the work,
+  check at every batch boundary, let plan intent win on architecture and the
+  codebase win on mechanics, and take one fix-then-re-review cycle before
+  stopping to report.
 when_to_use: >
-  A written plan (from planner, an issue, or Leo's own outline) is about to
-  be turned into code. NOT for open-ended implementation with no plan
-  (normal execute-then-review flow) and NOT for the review step itself
-  (the reviewer agent judges the diff; this skill only carries out the plan).
+  A written plan is about to become code. Not for open-ended work with no
+  plan, and not for the review step itself — that is leo:review-gate.
 ---
 
 # executing-plans
@@ -82,14 +78,14 @@ executed.
 
 ## One fix-then-re-review cycle
 
-Once all batches are in, this hands off to the standard review gate — spawn
-`reviewer` on the actual diff against the recorded base ref,
-with the plan text as the original request. If it comes back with blocking
+Once all batches are in, this hands off to leo:review-gate — judge the
+actual diff against the recorded base ref, with the plan text as the original
+request. If it comes back with blocking
 findings: fix at the executing tier, then re-review only the fix. That's
 **one fix-then-re-review cycle**, full stop. A second block on the same
-findings means stop the loop and report to Leo with options, expert
-arbitration (the `expert` agent) among them — never a third pass, never quietly
-loosening what counts as blocking to escape the loop.
+findings means stop the loop and report to Leo with the findings and the
+options — never a third pass, never quietly loosening what counts as blocking
+to escape the loop.
 
 ## Delegation and workspace boundaries
 
@@ -114,4 +110,4 @@ sequence at the end.
 ## Works with
 
 leo:test-first, leo:verification, leo:delegation, leo:worktrees,
-leo:finishing-a-branch — plus the `reviewer` and `expert` agents.
+leo:finishing-a-branch, and leo:review-gate for the verdict itself.

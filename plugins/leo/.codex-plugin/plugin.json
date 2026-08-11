@@ -1,6 +1,6 @@
 {
   "name": "leo",
-  "version": "7.0.0",
+  "version": "8.0.0",
   "description": "Leo's portable agent config: cost-tiered model routing, execute-then-review policy, process skills, and guards.",
   "author": {
     "name": "Leo Liang"

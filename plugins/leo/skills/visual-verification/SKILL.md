@@ -1,20 +1,16 @@
 ---
 name: visual-verification
 description: >
-  Render-evidence gate for changes a person can see. A UI-visible edit is not
-  reported done until a render produced after the edit has been looked at.
-  Detection walks a ranked ladder of whatever browser, preview, or simulator
-  tooling this harness exposes; when nothing on the ladder answers, the change
-  is reported with an explicit unverified warning instead of a completion
-  claim. Use when a person can see the changed result. Do not use for
-  non-rendered logic, an off feature flag, or as a replacement for tests.
+  Render-evidence gate for a change a person can see. A visible edit is not
+  done until a render produced after the edit has been looked at. Walks a
+  ranked ladder of whatever preview, browser, or simulator tooling the harness
+  exposes; when nothing on it answers, reports an explicit unverified warning
+  in place of a completion claim.
 when_to_use: >
-  A change whose result someone would notice by looking — layout, styling,
-  on-screen text, a new view or route, a chart, a generated image or rendered
-  document. Fires just before the completion claim, beside leo:verification.
-  NOT for logic with no rendered surface, NOT for a component behind a flag
-  that is off, and NOT a replacement for tests — a render shows one state, a
-  test covers the branch.
+  A change someone would notice by looking — layout, styling, on-screen text,
+  a new view, a chart, a rendered document. Not for logic with no rendered
+  surface, not for a component behind a flag that is off, and not a
+  replacement for tests.
 ---
 
 # visual-verification

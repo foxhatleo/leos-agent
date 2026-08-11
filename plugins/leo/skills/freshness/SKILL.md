@@ -2,20 +2,15 @@
 name: freshness
 description: >
   Currency gate for code written against anything outside this repository.
-  Before a library call, CLI flag, endpoint field, or vendor number is
-  committed to, its shape is confirmed against a source that reflects the
-  version this project actually runs — the installed package, the lockfile
-  pin, or documentation fetched this turn. Each check is recorded by symbol
-  and source in the report. Use when writing, reviewing, or asserting a
-  third-party surface. Do not use for first-party code, pinned standard
-  libraries, or as a substitute for verification.
+  Before committing to a library call, CLI flag, endpoint field, or vendor
+  number, confirm its shape against the version this project actually runs —
+  the installed package, the lockfile pin, or documentation fetched this turn.
+  Each check is reported by symbol and source.
 when_to_use: >
-  About to write, review, or assert the shape of a third-party surface — an
-  import path, an argument list, a config key, an HTTP field, an auth
-  scheme, a model id, a price, a deprecation claim. NOT for first-party code
-  in this workspace (read it instead), NOT for the standard library of a
-  pinned runtime, and NOT a substitute for running anything — leo:verification
-  still governs the completion claim built on top of it.
+  About to write, review, or assert the shape of a third-party surface. Not
+  for first-party code in this workspace, not for a pinned runtime's standard
+  library, and not a substitute for running anything — leo:verification owns
+  the completion claim.
 ---
 
 # freshness

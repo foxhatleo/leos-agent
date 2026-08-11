@@ -42,7 +42,8 @@ class TestRelease(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
 
-    def test_archive_builder_outputs_both_packages(self):
+    def test_archive_builder_outputs_the_single_plugin_package(self):
+        """One archive, not two. The Hermes tarball went with the harness in 8.0."""
         with tempfile.TemporaryDirectory() as output:
             result = subprocess.run(
                 [sys.executable, SCRIPT, "--build", output],
@@ -52,10 +53,7 @@ class TestRelease(unittest.TestCase):
                 timeout=30,
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertEqual(
-                sorted(os.listdir(output)),
-                [f"leo-{EXPECTED_VERSION}-hermes.tar.gz", f"leo-{EXPECTED_VERSION}-plugin.tar.gz"],
-            )
+            self.assertEqual(sorted(os.listdir(output)), [f"leo-{EXPECTED_VERSION}-plugin.tar.gz"])
             for name in os.listdir(output):
                 with self.subTest(archive=name):
                     with tarfile.open(os.path.join(output, name), "r:gz") as archive:
@@ -78,7 +76,7 @@ class TestRelease(unittest.TestCase):
                     timeout=30,
                 )
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            for name in (f"leo-{EXPECTED_VERSION}-hermes.tar.gz", f"leo-{EXPECTED_VERSION}-plugin.tar.gz"):
+            for name in (f"leo-{EXPECTED_VERSION}-plugin.tar.gz",):
                 with self.subTest(archive=name):
                     with open(os.path.join(first, name), "rb") as lhs:
                         first_bytes = lhs.read()
@@ -151,9 +149,14 @@ class TestRelease(unittest.TestCase):
                 self.assertEqual(packed.returncode, 0, packed.stdout + packed.stderr)
                 files = {entry["path"] for entry in json.loads(packed.stdout)[0]["files"]}
                 self.assertIn("LICENSE", files)
-                self.assertIn("vendor/jsonc-parser-3.3.1/LICENSE.md", files)
-                self.assertIn("vendor/jsonc-parser-3.3.1/README.md", files)
-                self.assertIn("vendor/jsonc-parser-3.3.1/lib/umd/main.js", files)
+                # The OpenCode entrypoint and the guard it bridges to are the two
+                # things this package exists to deliver. Everything else is data.
+                self.assertIn("adapters/opencode/plugin.js", files)
+                self.assertIn("hooks/bash-guard.py", files)
+                # 8.0 removals: no vendored parser (its only consumer was the
+                # deleted setup.py), and no policy-injection hook anywhere.
+                self.assertFalse(any(path.startswith("vendor/") for path in files))
+                self.assertNotIn("hooks/session-start.py", files)
                 self.assertFalse(any(path.endswith((".pyc", ".log")) for path in files))
 
     def test_release_licenses_and_vendor_provenance_are_shipped(self):

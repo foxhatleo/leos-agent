@@ -60,12 +60,10 @@ class TestHooksCursorJson(unittest.TestCase):
         data = _load_hooks()
         self.assertEqual(data.get("version"), 1)
 
-    def test_session_start_references_session_start_py(self):
+    def test_no_session_start_hook(self):
+        """8.0 removed policy injection; the guard is the only Cursor hook."""
         data = _load_hooks()
-        session_start = _hooks_root(data).get("sessionStart", [])
-        self.assertTrue(session_start, "expected sessionStart to be non-empty")
-        entry = session_start[0]
-        self.assertIn("session-start.py", entry.get("command", ""))
+        self.assertNotIn("sessionStart", _hooks_root(data))
 
     def test_before_shell_execution_references_cursor_guard(self):
         data = _load_hooks()
