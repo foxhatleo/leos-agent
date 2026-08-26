@@ -2,9 +2,9 @@
 
 # Harnesses
 
-Leo runs on four harnesses. Read only the section for the one you are on; the others describe models you cannot reach and tools you do not have.
+Leo runs on five harnesses. Read only the section for the one you are on; the others describe models you cannot reach and tools you do not have.
 
-**Which one is this?** Check, in order: `CURSOR_PLUGIN_ROOT` set means Cursor; otherwise an unprefixed `PLUGIN_ROOT` means Codex; otherwise `CLAUDE_PLUGIN_ROOT` means Claude Code; if none is set and Leo's skills are named `leo-<name>` rather than `leo:<name>`, you are on OpenCode. Check the environment rather than guessing from the model you think you are.
+**Which one is this?** Check, in order: `LEOS_AGENT_HARNESS` names the harness outright where it is set, and only Hermes sets it (to `hermes`), because Hermes exports no plugin-root variable of its own; otherwise `CURSOR_PLUGIN_ROOT` set means Cursor; otherwise an unprefixed `PLUGIN_ROOT` means Codex; otherwise `CLAUDE_PLUGIN_ROOT` means Claude Code; if none is set and Leo's skills are named `leo-<name>` rather than `leo:<name>`, you are on OpenCode. Check the environment rather than guessing from the model you think you are.
 
 ## Claude Code
 
@@ -101,6 +101,43 @@ Tier collapse here: Opus≡Sonnet (`Grok 4.5`). Moving between collapsed rungs c
 | Structured question to the user | none established — ask in plain text and default to changing nothing |
 | Visual evidence | Browser Preview against a running dev server, else a registered Playwright server |
 | Skill names | `leo:<name>` |
+
+### Native substitutions here
+
+None. Every Leo role and skill is registered on this harness and is the mechanism to use.
+
+### Leo skills not available here
+
+- `leo:attach-pr` — its entire product is a side effect in Claude Code Desktop's PR-card detector, which no other harness has — the same commands would run here, succeed, and produce nothing observable.
+
+Everything else in the skill index is registered here, including the operational skills — `leo:resolve-ticket`, `leo:review-pr`, `leo:watch-review`. Where one of them names a capability the table above says is missing, take the fallback it documents.
+
+## Hermes
+
+Provider: `openrouter`
+
+| Tier | Model | Effort |
+|---|---|---|
+| Opus | `moonshotai/kimi-k3` | not selectable |
+| Sonnet | `z-ai/glm-5.2` | not selectable |
+| Haiku | `z-ai/glm-5.2` | not selectable |
+
+Effort here: every child spawn takes the session's single `delegation.model` and there is no reasoning-effort control, so a tier is a recommendation here — batch same-tier work and switch that model between batches.
+
+Tier collapse here: Sonnet≡Haiku (`z-ai/glm-5.2`). Moving between collapsed rungs changes which role does the work, not how much thinking it gets — so escalating across one buys nothing, and a task that needs more power has run out of rungs.
+
+| Capability | Here |
+|---|---|
+| Subagent spawn | generic `delegate_task` spawn with `roles/<role>.md` pasted in |
+| Tier pinning | neither — every child takes the session's one `delegation.model`, so a tier is a recommendation here and nothing more |
+| Read-only roles | prompt only — a convention, never a guarantee; never route work here that depends on it |
+| Worktrees | no native tool — raw `git worktree` at `.claude/worktrees/<name>` |
+| Workflow runner | none — fan out by hand and keep the ledger in `<plugin-root>/scripts/state.py` |
+| Durable progress | no task tool — record progress in `<plugin-root>/scripts/state.py` after every dispatch resolves |
+| Follow-up to a live agent | none established — re-dispatch cold with the context restated |
+| Structured question to the user | none established — ask in plain text and default to changing nothing |
+| Visual evidence | no built-in renderer — a registered Playwright server, or the Playwright CLI, and only where the project already depends on it |
+| Skill names | `leo:<name>` — the entrypoint's `register()` hands each skill to `ctx.register_skill` |
 
 ### Native substitutions here
 

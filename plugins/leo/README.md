@@ -2,7 +2,7 @@
 
 # Leo's Agent
 
-Leo's Agent is a portable operating policy: cost-tiered routing across model and reasoning effort, specialist roles, process skills, a review gate, and a narrow catastrophic-command guard. This npm package is the **OpenCode** distribution; use the [repository](https://github.com/foxhatleo/leos-agent) for Claude Code, Codex, and Cursor instructions.
+Leo's Agent is a portable operating policy: cost-tiered routing across model and reasoning effort, specialist roles, process skills, a review gate, and a narrow catastrophic-command guard. This npm package is the **OpenCode** distribution; use the [repository](https://github.com/foxhatleo/leos-agent) for Claude Code, Codex, Cursor, and Hermes instructions.
 
 Supported hosts are macOS, Linux, and WSL with Python 3.9+; native Windows is unsupported.
 

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 5,
-  "_comment": "Canonical matrix. Four harnesses, three tiers, and one answer per harness for every capability row. scripts/render_adapters.py refuses to render an incoherent matrix and regenerates every adapter from this file, so this is the only place a routing or capability fact is stated.",
+  "_comment": "Canonical matrix. Five harnesses, three tiers, and one answer per harness for every capability row. scripts/render_adapters.py refuses to render an incoherent matrix and regenerates every adapter from this file, so this is the only place a routing or capability fact is stated.",
 
   "tiers": ["opus", "sonnet", "haiku"],
   "efforts": ["low", "medium", "high", "xhigh", "max"],
@@ -76,6 +76,19 @@
       "natives": { "roles": {}, "skills": {} }
     },
 
+    "hermes": {
+      "title": "Hermes",
+      "provider": "openrouter",
+      "effortSupport": false,
+      "effortAbsentNote": "every child spawn takes the session's single `delegation.model` and there is no reasoning-effort control, so a tier is a recommendation here — batch same-tier work and switch that model between batches",
+      "tiers": {
+        "opus": { "model": "moonshotai/kimi-k3" },
+        "sonnet": { "model": "z-ai/glm-5.2" },
+        "haiku": { "model": "z-ai/glm-5.2" }
+      },
+      "natives": { "roles": {}, "skills": {} }
+    },
+
     "opencode": {
       "title": "OpenCode",
       "provider": "openrouter",
@@ -122,6 +135,10 @@
           "mode": "native-agent",
           "note": "plugin agent from the generated Cursor agents directory"
         },
+        "hermes": {
+          "mode": "generic-prompt",
+          "note": "generic `delegate_task` spawn with `roles/<role>.md` pasted in"
+        },
         "opencode": {
           "mode": "native-agent",
           "note": "registered agent from `agents.json`, spawned via the task tool"
@@ -144,6 +161,10 @@
         "cursor": {
           "mode": "none",
           "note": "neither — agents inherit the model selected in the UI, so a tier is a recommendation here and nothing more"
+        },
+        "hermes": {
+          "mode": "none",
+          "note": "neither — every child takes the session's one `delegation.model`, so a tier is a recommendation here and nothing more"
         },
         "opencode": {
           "mode": "model-only",
@@ -168,6 +189,10 @@
           "mode": "frontmatter",
           "note": "harness-enforced — generated `readonly: true`"
         },
+        "hermes": {
+          "mode": "prompt",
+          "note": "prompt only — a convention, never a guarantee; never route work here that depends on it"
+        },
         "opencode": {
           "mode": "permission",
           "note": "native edit denial — generated `permission.edit: deny`, refused by OpenCode itself; Bash stays shell-capable, so this is not a hard sandbox"
@@ -188,6 +213,10 @@
           "note": "no native tool — raw `git worktree` at `.claude/worktrees/<name>`"
         },
         "cursor": {
+          "mode": "raw-git",
+          "note": "no native tool — raw `git worktree` at `.claude/worktrees/<name>`"
+        },
+        "hermes": {
           "mode": "raw-git",
           "note": "no native tool — raw `git worktree` at `.claude/worktrees/<name>`"
         },
@@ -214,6 +243,10 @@
           "mode": "none",
           "note": "none — fan out by hand and keep the ledger in `<plugin-root>/scripts/state.py`"
         },
+        "hermes": {
+          "mode": "none",
+          "note": "none — fan out by hand and keep the ledger in `<plugin-root>/scripts/state.py`"
+        },
         "opencode": {
           "mode": "none",
           "note": "no runner — `cost-tiered-fix.js` ships in the package but nothing here executes it; fan out by hand and keep the ledger in `<plugin-root>/scripts/state.py`"
@@ -234,6 +267,10 @@
           "note": "no task tool — record progress in `<plugin-root>/scripts/state.py` after every dispatch resolves"
         },
         "cursor": {
+          "mode": "state-file",
+          "note": "no task tool — record progress in `<plugin-root>/scripts/state.py` after every dispatch resolves"
+        },
+        "hermes": {
           "mode": "state-file",
           "note": "no task tool — record progress in `<plugin-root>/scripts/state.py` after every dispatch resolves"
         },
@@ -260,6 +297,10 @@
           "mode": "unknown",
           "note": "none established — re-dispatch cold with the context restated"
         },
+        "hermes": {
+          "mode": "unknown",
+          "note": "none established — re-dispatch cold with the context restated"
+        },
         "opencode": {
           "mode": "unknown",
           "note": "none established — re-dispatch cold with the context restated"
@@ -280,6 +321,10 @@
           "note": "Plan mode `request_user_input` — structured multiple choice; outside Plan mode ask in plain text and default to changing nothing"
         },
         "cursor": {
+          "mode": "unknown",
+          "note": "none established — ask in plain text and default to changing nothing"
+        },
+        "hermes": {
           "mode": "unknown",
           "note": "none established — ask in plain text and default to changing nothing"
         },
@@ -306,6 +351,10 @@
           "mode": "native-renderer",
           "note": "Browser Preview against a running dev server, else a registered Playwright server"
         },
+        "hermes": {
+          "mode": "mcp-driver",
+          "note": "no built-in renderer — a registered Playwright server, or the Playwright CLI, and only where the project already depends on it"
+        },
         "opencode": {
           "mode": "mcp-driver",
           "note": "no built-in renderer — a registered Playwright server, or the Playwright CLI, and only where the project already depends on it"
@@ -320,6 +369,10 @@
         "claude": { "mode": "prefixed", "note": "`leo:<name>`" },
         "codex": { "mode": "prefixed", "note": "`leo:<name>`" },
         "cursor": { "mode": "prefixed", "note": "`leo:<name>`" },
+        "hermes": {
+          "mode": "prefixed",
+          "note": "`leo:<name>` — the entrypoint's `register()` hands each skill to `ctx.register_skill`"
+        },
         "opencode": {
           "mode": "hyphenated",
           "note": "`leo-<name>` — OpenCode has no skill namespace, so the adapter registers a renamed copy; read every `leo:<x>` here as `leo-<x>`"
@@ -333,7 +386,7 @@
     "core": ["routing", "review-gate"],
     "operational": ["resolve-ticket", "review-pr", "watch-review"],
     "claudeOnly": ["attach-pr"],
-    "exclude": { "claude": [], "codex": [], "cursor": [], "opencode": [] },
+    "exclude": { "claude": [], "codex": [], "cursor": [], "hermes": [], "opencode": [] },
     "reasons": {
       "attach-pr": "its entire product is a side effect in Claude Code Desktop's PR-card detector, which no other harness has — the same commands would run here, succeed, and produce nothing observable"
     }

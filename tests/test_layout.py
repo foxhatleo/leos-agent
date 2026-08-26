@@ -51,6 +51,21 @@ class TestLayout(unittest.TestCase):
                         self.assertEqual(os.path.commonpath((PLUGIN, resolved)), PLUGIN)
                         self.assertTrue(os.path.exists(resolved))
 
+    def test_hermes_entrypoint_sits_at_the_repository_root(self):
+        """Hermes loads the repo root, not the payload.
+
+        It is the only harness whose plugin root is this repository, so its two
+        files live beside the marketplaces rather than inside plugins/leo. The
+        dependency runs inward only -- the payload never reaches back out.
+        """
+        for relative in ("plugin.yaml", "__init__.py"):
+            with self.subTest(path=relative):
+                self.assertTrue(os.path.isfile(os.path.join(REPO, relative)))
+        with open(os.path.join(REPO, "plugin.yaml"), encoding="utf-8") as fh:
+            manifest = fh.read()
+        self.assertIn("name: leo", manifest)
+        self.assertIn(f'version: "{EXPECTED_VERSION}"', manifest)
+
     def test_payload_has_no_symlinks(self):
         for root, dirs, files in os.walk(PLUGIN):
             for name in dirs + files:
@@ -133,7 +148,11 @@ class TestLayout(unittest.TestCase):
         # OpenCode bridge and its npm manifest now live at the conventional
         # payload paths (plugins/leo/adapters/opencode/, plugins/leo/package.json).
         # This assertion is repo-root only, so it never sees them there.
-        for relative in ("install.sh", "install", ".mcp.json", "plugin.yaml", "__init__.py"):
+        #
+        # plugin.yaml and __init__.py left this list in 9.0: they are the Hermes
+        # plugin root, covered by test_hermes_entrypoint_sits_at_the_repository_root
+        # above and by tests/test_hermes_plugin.py.
+        for relative in ("install.sh", "install", ".mcp.json"):
             with self.subTest(path=relative):
                 self.assertFalse(os.path.lexists(os.path.join(REPO, relative)))
 
