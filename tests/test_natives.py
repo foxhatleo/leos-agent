@@ -21,8 +21,12 @@ REFERENCE = os.path.join(PAYLOAD, "skills", "routing", "references", "harnesses.
 
 # Where packaging can actually honour an exclusion. Codex's vendored validator
 # hard-codes plugin_root/"skills" and Cursor's requires a single directory, so
-# neither can be handed a reduced skill set.
-SKILL_DROP_HARNESSES = {"claude", "opencode"}
+# neither can be handed a reduced skill set. Hermes can: its root __init__.py
+# walks the tree itself and skips what skills.exclude names.
+#
+# Duplicated from render_adapters.SKILL_DROP_HARNESSES on purpose -- this is the
+# test's independent copy -- so the two move together.
+SKILL_DROP_HARNESSES = {"claude", "hermes", "opencode"}
 
 
 def _config():

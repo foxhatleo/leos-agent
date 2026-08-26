@@ -1,6 +1,6 @@
 # Leo's Agent
 
-Leo's Agent is a portable agent operating policy for Claude Code, Codex, Cursor, and OpenCode. It packages cost-tiered routing across model *and* reasoning effort, seven specialist roles, process skills, a review gate, and a narrow catastrophic-command guard as native plugins.
+Leo's Agent is a portable agent operating policy for Claude Code, Codex, Cursor, Hermes, and OpenCode. It packages cost-tiered routing across model *and* reasoning effort, seven specialist roles, process skills, a review gate, and a narrow catastrophic-command guard as native plugins.
 
 Nothing is injected. Every instruction reaches the model through a mechanism the harness loads on its own — a skill, an agent definition, or the one hook that guards destructive shell commands. Reading the policy costs nothing until something asks for it.
 
@@ -76,6 +76,31 @@ Before marketplace approval, install it directly from this public repository:
 ```
 
 Use Cursor's Customize → Plugins screen to verify, update, disable, or remove it. Cursor agents inherit the model selected in the UI; Leo's Agent recommends a tier but does not claim to enforce an arbitrary model name per subagent.
+
+### Hermes
+
+OpenRouter authentication must already be configured, then run:
+
+```sh
+hermes plugins install foxhatleo/leos-agent --enable
+```
+
+Update, disable, or remove it with:
+
+```sh
+hermes plugins update leo
+hermes plugins disable leo
+hermes plugins remove leo
+```
+
+Hermes installs the Git repository into its plugin directory and loads the root
+`plugin.yaml` and `__init__.py` entrypoint — it is the one harness whose plugin
+root is this repository rather than `plugins/leo/`. On load, the entrypoint
+registers Leo's portable skills as `leo:<skill>` and installs the
+catastrophic-command guard, and nothing else. No policy is injected: start with
+`leo:routing`, the same as everywhere else.
+
+Verify the enabled state with `hermes plugins list`; inside a running session, `/plugins` shows the loaded plugin.
 
 ### OpenCode
 
@@ -198,6 +223,7 @@ policy is still absent, revisit `/hooks` and confirm trust.
 .claude-plugin/marketplace.json      Claude marketplace catalog
 .agents/plugins/marketplace.json     Codex marketplace catalog
 .cursor-plugin/marketplace.json      Cursor marketplace catalog
+plugin.yaml __init__.py              Hermes plugin root: manifest and entrypoint
 .github/workflows/                   CI and release automation
 plugins/leo/                          self-contained cached plugin payload, also published to npm as leos-agent
   .claude-plugin/plugin.json

@@ -1,7 +1,7 @@
 # Contributing
 
 Thank you for improving Leo's Agent. Keep changes portable across its supported
-harnesses — Claude Code, Codex, Cursor, and OpenCode — and keep generated output
+harnesses — Claude Code, Codex, Cursor, Hermes, and OpenCode — and keep generated output
 derived from its source.
 
 ## Before opening a pull request
@@ -144,10 +144,11 @@ was 39% of the old injected policy.
 | Codex | `~/.codex/skills/<name>/SKILL.md` |
 | OpenCode | add the containing directory to the skills paths in `opencode.json` |
 | Cursor | not confirmed here — check the harness's own documentation |
+| Hermes | not confirmed here — check the harness's own documentation |
 
 Plugin skills are namespaced `leo:<name>`; a personal skill is invoked bare, so
-its name is free to collide conceptually without colliding literally. One row of
-that table is unverified, which is why the advice is to confirm the load path
+its name is free to collide conceptually without colliding literally. Two rows of
+that table are unverified, which is why the advice is to confirm the load path
 rather than trusting a path that may not exist — the same discipline
 leo:freshness applies to a third-party API, turned on the harness.
 

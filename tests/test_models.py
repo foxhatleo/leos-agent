@@ -22,7 +22,7 @@ PLUGIN = os.path.join(REPO, "plugins", "leo")
 MODELS = os.path.join(PLUGIN, "config", "models.json")
 RENDERER = os.path.join(PLUGIN, "scripts", "render_adapters.py")
 
-HARNESSES = ("claude", "codex", "cursor", "opencode")
+HARNESSES = ("claude", "codex", "cursor", "hermes", "opencode")
 
 
 def _renderer():
@@ -45,12 +45,8 @@ class TestMatrixShape(unittest.TestCase):
     def test_schema_version(self):
         self.assertEqual(self.data["schemaVersion"], 5)
 
-    def test_exactly_the_four_supported_harnesses(self):
+    def test_exactly_the_five_supported_harnesses(self):
         self.assertEqual(sorted(self.data["harnesses"]), sorted(HARNESSES))
-
-    def test_no_trace_of_the_dropped_harness(self):
-        with open(MODELS, encoding="utf-8") as fh:
-            self.assertNotIn("hermes", fh.read().lower())
 
     def test_three_tiers_and_no_ceiling_rung(self):
         self.assertEqual(self.data["tiers"], ["opus", "sonnet", "haiku"])

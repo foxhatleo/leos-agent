@@ -54,7 +54,12 @@ class TestHarnessReference(unittest.TestCase):
 
     def test_it_says_how_to_tell_which_harness_this_is(self):
         """Without a detection hook, the reference has to carry the rule."""
-        for token in ("CURSOR_PLUGIN_ROOT", "PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT"):
+        for token in (
+            "LEOS_AGENT_HARNESS",
+            "CURSOR_PLUGIN_ROOT",
+            "PLUGIN_ROOT",
+            "CLAUDE_PLUGIN_ROOT",
+        ):
             with self.subTest(token=token):
                 self.assertIn(token, self.text)
 

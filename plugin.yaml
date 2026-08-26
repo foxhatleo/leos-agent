@@ -1,0 +1,7 @@
+name: leo
+version: "9.0.0"
+description: "Leo's cost-tiered routing, execute-then-review policy, process skills, and accidental-command guard for Hermes."
+author: "Leo Liang"
+# No hooks key: Hermes reads name/version/description here and registers hooks
+# only through ctx.register_hook() in __init__.py, so listing them here would
+# declare nothing and imply a wiring that does not exist.

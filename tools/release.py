@@ -19,10 +19,31 @@ MANIFESTS = (
     PAYLOAD / ".cursor-plugin" / "plugin.json",
     PAYLOAD / "package.json",
 )
+PLUGIN_YAML = ROOT / "plugin.yaml"
+
+
+def _yaml_version(path):
+    """The Hermes manifest's version, without a YAML dependency.
+
+    plugin.yaml is the one non-JSON version source: Hermes loads the repository
+    root, so its manifest sits beside __init__.py rather than in the payload.
+    The file is four flat keys and a comment, so a line match is exact here and
+    keeps the release tooling on the standard library.
+    """
+    match = re.search(
+        r'^version:\s*["\']?([^"\'\s]+)["\']?\s*$',
+        path.read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    if not match:
+        raise ValueError("plugin.yaml has no version")
+    return match.group(1)
 
 
 def versions():
-    return {path.relative_to(ROOT).as_posix(): json.loads(path.read_text())["version"] for path in MANIFESTS}
+    found = {path.relative_to(ROOT).as_posix(): json.loads(path.read_text())["version"] for path in MANIFESTS}
+    found[PLUGIN_YAML.relative_to(ROOT).as_posix()] = _yaml_version(PLUGIN_YAML)
+    return found
 
 
 def release_version():

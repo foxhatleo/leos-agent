@@ -43,7 +43,12 @@ class TestRelease(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
 
     def test_archive_builder_outputs_the_single_plugin_package(self):
-        """One archive, not two. The Hermes tarball went with the harness in 8.0."""
+        """One archive, not two.
+
+        Hermes came back in 9.0 without one: it loads the repository root
+        directly, so the second tarball 7.x built for it packaged a tree nothing
+        installed from.
+        """
         with tempfile.TemporaryDirectory() as output:
             result = subprocess.run(
                 [sys.executable, SCRIPT, "--build", output],

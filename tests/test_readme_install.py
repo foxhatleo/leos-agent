@@ -46,7 +46,6 @@ class TestReadmeInstall(unittest.TestCase):
     def setUpClass(cls):
         cls.readme = _read("README.md")
         cls.payload_readme = _read("plugins", "leo", "README.md")
-        cls.contributing = _read("CONTRIBUTING.md")
         cls.security = _read("SECURITY.md")
 
     def test_every_harness_has_an_install_path(self):
@@ -56,6 +55,7 @@ class TestReadmeInstall(unittest.TestCase):
             "codex plugin marketplace add foxhatleo/leos-agent",
             "codex plugin add leo@leos-agent",
             "/add-plugin leo",
+            "hermes plugins install foxhatleo/leos-agent --enable",
             "opencode plugin leos-agent --global",
         ):
             with self.subTest(command=command):
@@ -65,15 +65,6 @@ class TestReadmeInstall(unittest.TestCase):
         for harness in _config()["harnesses"].values():
             with self.subTest(harness=harness["title"]):
                 self.assertIn(harness["title"], self.readme)
-
-    def test_removed_harness_is_gone_everywhere(self):
-        for path, text in (
-            ("README.md", self.readme),
-            ("CONTRIBUTING.md", self.contributing),
-            ("plugins/leo/README.md", self.payload_readme),
-        ):
-            with self.subTest(path=path):
-                self.assertNotIn("hermes", text.lower())
 
     def test_removed_surfaces_are_not_offered_as_components(self):
         """A removed skill may be named in the upgrade note — that is the point
@@ -88,7 +79,7 @@ class TestReadmeInstall(unittest.TestCase):
                 self.assertNotIn(gone, section)
 
     def test_removed_files_are_never_mentioned(self):
-        for gone in ("session-start.py", "./install.sh", "CHANGELOG", "plugin.yaml"):
+        for gone in ("session-start.py", "./install.sh", "CHANGELOG"):
             with self.subTest(token=gone):
                 self.assertNotIn(gone, self.readme)
 
@@ -109,8 +100,8 @@ class TestReadmeInstall(unittest.TestCase):
 
     def test_no_hand_copied_release_version(self):
         """Versions live in the manifests; release.py is what checks them."""
-        self.assertNotIn("Version `8.0.0`", self.readme)
-        self.assertNotRegex(self.readme, r"\bv?8\.0\.0\b")
+        self.assertNotIn("Version `9.0.0`", self.readme)
+        self.assertNotRegex(self.readme, r"\bv?9\.0\.0\b")
 
     def test_platform_support_is_stated(self):
         self.assertIn("macOS, Linux, and WSL", self.readme)
