@@ -33,6 +33,10 @@
     "rules/",
     "scripts/",
     "skills-claude/",
-    "skills/"
+    "skills/",
+    "!**/__pycache__",
+    "!**/*.pyc",
+    "!**/*.log",
+    "!**/.DS_Store"
   ]
 }

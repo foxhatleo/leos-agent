@@ -546,6 +546,21 @@ copied file that something else has since overwritten.
 To release: bump the version in `package.json`, the three `plugin.json` files,
 `.claude-plugin/marketplace.json`, `plugin.yaml`, and every mention in this
 README (the uninstall commands embed it in cache paths — `check.py` fails on any
-stale one); run `scripts/check.py`; tag; and publish to npm for OpenCode.
+stale one); run `scripts/check.py`; then push a `v`-prefixed tag.
+
+Pushing that tag is the whole release. `.github/workflows/release.yml` runs the
+tests and both checks, refuses a tag that disagrees with `package.json`,
+inspects the tree npm would ship, and publishes to npm for OpenCode. It
+authenticates by OIDC trusted publishing, so there is no token in the repository
+— npm's configuration names this workflow by path, and renaming the file breaks
+publishing until npm is updated to match. Publishing is idempotent: a version
+already on the registry is a no-op, and a lookup that fails for any reason other
+than a confirmed 404 aborts rather than assuming the version is absent.
+
+Check what a publish would contain, without publishing:
+
+```bash
+python3 scripts/publish-npm.py --dry-run
+```
 
 MIT licensed.
