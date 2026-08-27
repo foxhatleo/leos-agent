@@ -149,7 +149,7 @@ def main():
 	# it will mistake its own installed copy for a stranger's file and refuse to
 	# upgrade or remove it. The list is derived from the installer's own copy sets,
 	# so a skill added there can never slip past this check.
-	copied = ["skills/install/SKILL.md", "commands/leo-install.md"]
+	copied = ["skills/install/SKILL.md"]
 	copied.extend(f"payload/codex-agents/{name}.toml" for name in installer.CODEX_AGENTS)
 	for name in installer.OPENCODE_SKILLS:
 		copied.append(f"skills/{name}/SKILL.md")

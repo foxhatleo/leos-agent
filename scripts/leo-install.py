@@ -40,7 +40,7 @@ PROVENANCE = "leos-agent"
 # copied to disk instead. check.py asserts every file they name carries
 # PROVENANCE, without which the installer would refuse to upgrade its own copy.
 OPENCODE_SKILLS = ("doctor", "review-pr", "handoff", "handon")
-OPENCODE_COMMANDS = ("leo-doctor", "leo-install", "review-pr", "handoff", "handon")
+OPENCODE_COMMANDS = ("review-pr", "handoff", "handon")
 
 # Codex plugins cannot package custom agent definitions directly, so these are
 # copied into ~/.codex/agents. Keep this tuple authoritative: check.py and the

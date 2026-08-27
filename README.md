@@ -1,6 +1,6 @@
 # leos-agent
 
-Leo's portable agent operating policy, version **10.1.0**, installable on Claude
+Leo's portable agent operating policy, version **10.2.0**, installable on Claude
 Code, Codex, Cursor, Hermes, Pi, and OpenCode through each harness's own plugin
 system.
 
@@ -22,7 +22,7 @@ three GitHub skills. The GitHub ones need `gh`, authenticated.
 |---|---|---|
 | `review-pr` | Reviews a pull request and stages inline comments as a **pending** review — visible only to you until you submit or discard on GitHub. Never submits. Resolves the originating ticket (Linear, Jira, GitHub issue) from the PR's title, body, or branch when one is named, and adds a spec lens that checks the diff against it. | every skill-loading harness |
 | `watch-review` | Arms a watcher that streams new direct review requests into the session, one notification per pull request, for `review-pr` to handle. Polling is a shell script (`scripts/watch_review.py`), not a model loop: an idle tick is one `gh` call and zero tokens. | **Claude Code only** — built on its Monitor tool |
-| `doctor` | Diagnoses this harness's setup, read-only: whether the `<leos-agent>` block is injected and current, what else is loaded into every session (global instruction file, memories, settings, skills), and whether a local checkout passes `scripts/check.py`. Run it with `/leo-doctor`. | every skill-loading harness |
+| `doctor` | Diagnoses this harness's setup, read-only: whether the `<leos-agent>` block is injected and current, what else is loaded into every session (global instruction file, memories, settings, skills), and whether a local checkout passes `scripts/check.py`. Run it with `/doctor`. | every skill-loading harness |
 | `handoff` | Writes this session's context — goal, what landed, what is next, key files, decisions, gotchas — to a markdown document under `~/.leos-agent-local/handoffs/`, so a later session can pick the work up. Pointers, not contents: it names files rather than pasting them. Run it with `/handoff`. | every skill-loading harness |
 | `handon` | Loads a handoff written earlier — in this harness or a different one — and resumes from it, reporting any drift first when the directory, branch, or HEAD has moved since. Loading never consumes a handoff. Run it with `/handon <name>`. | every skill-loading harness |
 | `attach-pr` | Attaches the current desktop session to an existing pull request so the app shows its PR card. Creates nothing and pushes nothing. | **Claude Code only** — it drives that app's card |
@@ -49,7 +49,7 @@ gets it through its global instruction file, written by
 [`scripts/leo-install.py`](scripts/leo-install.py) into a marker block:
 
 ```
-<leos-agent version="10.1.0">
+<leos-agent version="10.2.0">
 ...the payload...
 </leos-agent>
 ```
@@ -96,7 +96,7 @@ claude plugin marketplace add foxhatleo/leos-agent
 claude plugin install leos-agent@leos-agent --scope user
 ```
 
-Then, in a Claude Code session, run `/leo-install` (or ask it to use the `install`
+Then, in a Claude Code session, run `/install` (or ask it to use the `install`
 skill). That writes the block into `~/.claude/CLAUDE.md`.
 
 **Upgrade**
@@ -109,7 +109,7 @@ claude plugin marketplace update leos-agent
 claude plugin install leos-agent@leos-agent --scope user
 ```
 
-Re-run `/leo-install` afterwards to refresh the block, then start a new session.
+Re-run `/install` afterwards to refresh the block, then start a new session.
 Both commands are safe to repeat; installing an already-current version reports
 that it is already installed and changes nothing.
 
@@ -118,7 +118,7 @@ that it is already installed and changes nothing.
 Run the installer's uninstall first, while the script is still on disk:
 
 ```bash
-python3 ~/.claude/plugins/cache/leos-agent/leos-agent/10.1.0/scripts/leo-install.py claude --uninstall
+python3 ~/.claude/plugins/cache/leos-agent/leos-agent/10.2.0/scripts/leo-install.py claude --uninstall
 ```
 
 ```bash
@@ -149,7 +149,7 @@ Then run the `install` skill in a Codex session (`$leos-agent`, then `install`),
 run the script directly:
 
 ```bash
-python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.1.0/scripts/leo-install.py codex
+python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.2.0/scripts/leo-install.py codex
 ```
 
 This writes `~/.codex/AGENTS.md` and installs two economical agents:
@@ -174,7 +174,7 @@ threads only. Re-adding an already-installed plugin is idempotent.
 **Uninstall**
 
 ```bash
-python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.1.0/scripts/leo-install.py codex --uninstall
+python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.2.0/scripts/leo-install.py codex --uninstall
 ```
 
 ```bash
@@ -322,7 +322,7 @@ Pinned refs are reconciled, never silently advanced — to move to a new tag,
 install it explicitly:
 
 ```bash
-pi install git:github.com/foxhatleo/leos-agent@v10.1.0
+pi install git:github.com/foxhatleo/leos-agent@v10.2.0
 ```
 
 Re-run `/skill:install` afterwards.
@@ -359,9 +359,9 @@ first run has to come from the package itself:
 python3 ~/.cache/opencode/packages/leos-agent@latest/node_modules/leos-agent/scripts/leo-install.py opencode
 ```
 
-That writes `~/.config/opencode/AGENTS.md` and copies the skill and command into
-`~/.config/opencode/skills/leo-install/` and `~/.config/opencode/commands/`. From
-then on `/leo-install` works inside OpenCode.
+That writes `~/.config/opencode/AGENTS.md` and copies the skills and commands into
+`~/.config/opencode/skills/` and `~/.config/opencode/commands/`. From then on
+`/leo-install` works inside OpenCode.
 
 **Upgrade**
 
@@ -537,7 +537,7 @@ claude plugin uninstall leos-agent@leos-agent && claude plugin install leos-agen
 ```
 
 or replace the cachebuster suffix in the Codex manifest with one in the form
-`10.1.0+codex.local-YYYYMMDD-HHMMSS` and re-add. Either way, plugin changes only
+`10.2.0+codex.local-YYYYMMDD-HHMMSS` and re-add. Either way, plugin changes only
 reach a **new** session or thread.
 
 `--check` exits non-zero when a file is out of date, and `--force` replaces a
