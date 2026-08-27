@@ -1,0 +1,38 @@
+{
+  "name": "leos-agent",
+  "version": "10.1.0",
+  "description": "Leo's portable agent operating policy: orchestrator main thread, subagent-first execution, cost-tiered model routing.",
+  "type": "module",
+  "main": "index.js",
+  "license": "MIT",
+  "author": {
+    "name": "Leo Liang"
+  },
+  "homepage": "https://github.com/foxhatleo/leos-agent",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/foxhatleo/leos-agent.git"
+  },
+  "keywords": [
+    "pi-package",
+    "opencode",
+    "agent",
+    "orchestrator",
+    "subagents"
+  ],
+  "pi": {
+    "skills": [
+      "./skills"
+    ]
+  },
+  "files": [
+    "commands-claude/",
+    "commands/",
+    "index.js",
+    "payload/",
+    "rules/",
+    "scripts/",
+    "skills-claude/",
+    "skills/"
+  ]
+}

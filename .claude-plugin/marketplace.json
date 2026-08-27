@@ -1,8 +1,25 @@
 {
   "name": "leos-agent",
   "description": "Leo's personal plugin marketplace (this repo).",
-  "owner": { "name": "Leo Liang" },
+  "owner": {
+    "name": "Leo Liang",
+    "url": "https://github.com/foxhatleo"
+  },
   "plugins": [
-    { "name": "leo", "source": "./plugins/leo", "description": "Leo's portable Claude Code config." }
+    {
+      "name": "leos-agent",
+      "source": "./",
+      "description": "Leo's portable agent operating policy: orchestrator main thread, subagent-first execution, cost-tiered model routing.",
+      "version": "10.1.0",
+      "author": {
+        "name": "Leo Liang"
+      },
+      "license": "MIT",
+      "keywords": [
+        "orchestrator",
+        "subagents",
+        "routing"
+      ]
+    }
   ]
 }

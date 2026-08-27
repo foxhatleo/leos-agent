@@ -1,0 +1,36 @@
+{
+  "name": "leos-agent",
+  "version": "10.1.0",
+  "description": "Leo's portable agent operating policy: orchestrator main thread, subagent-first execution, cost-tiered model routing.",
+  "author": {
+    "name": "Leo Liang",
+    "url": "https://github.com/foxhatleo"
+  },
+  "homepage": "https://github.com/foxhatleo/leos-agent",
+  "repository": "https://github.com/foxhatleo/leos-agent",
+  "license": "MIT",
+  "keywords": [
+    "orchestrator",
+    "subagents",
+    "routing",
+    "preferences"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Leo's Agent",
+    "shortDescription": "Orchestrator main thread, subagent-first execution",
+    "longDescription": "Leo's operating policy: keep the main thread an orchestrator, push investigation, debugging, execution, and testing into briefed subagents, and route thinking work to the standard tier and doing work and fan-outs to the economical tier.",
+    "developerName": "Leo Liang",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/foxhatleo/leos-agent",
+    "defaultPrompt": [
+      "Install Leo's preferences into this harness.",
+      "Plan this change and dispatch the work to subagents."
+    ]
+  }
+}

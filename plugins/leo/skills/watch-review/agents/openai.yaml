@@ -1,5 +1,0 @@
-interface:
-  display_name: "Watch Pull Request Reviews"
-  short_description: "Check directly requested pull request reviews"
-policy:
-  allow_implicit_invocation: false

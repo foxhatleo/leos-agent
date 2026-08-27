@@ -1,284 +1,528 @@
-# Leo's Agent
+# leos-agent
 
-Leo's Agent is a portable agent operating policy for Claude Code, Codex, Cursor, Hermes, and OpenCode. It packages cost-tiered routing across model *and* reasoning effort, seven specialist roles, process skills, a review gate, and a narrow catastrophic-command guard as native plugins.
+Leo's portable agent operating policy, version **10.1.0**, installable on Claude
+Code, Codex, Cursor, Hermes, Pi, and OpenCode through each harness's own plugin
+system.
 
-Nothing is injected. Every instruction reaches the model through a mechanism the harness loads on its own — a skill, an agent definition, or the one hook that guards destructive shell commands. Reading the policy costs nothing until something asks for it.
+The policy it carries is short: **the main thread is an orchestrator.**
+Investigation, brainstorming, debugging, execution, testing, and mechanical work
+all run in briefed subagents, so the main thread never fills up with the files,
+retries, and logs that produced an answer — only the answer. Work runs at one of two
+named tiers: **standard**, the model you are already using, for thinking and
+judging; **economical**, the cheaper model where the harness has one, for doing
+work and for every fan-out.
 
-The repository does not need to be cloned for normal use. Each harness installs Leo's Agent through its own plugin system, and updates come through that system.
+## What it ships
 
-Leo supports macOS, Linux, and WSL with Python 3.9 or newer available to the
-harness. Native Windows is unsupported. Before enabling any plugin hooks,
-review the hook commands and grant trust only when you are comfortable with
-their local effects; in Codex, use `/hooks` to review and trust Leo's hooks.
+Beyond the preferences payload: a setup diagnostic, a session handoff pair, and
+three GitHub skills. The GitHub ones need `gh`, authenticated.
 
-## Install
+| Skill | What it does | Where |
+|---|---|---|
+| `review-pr` | Reviews a pull request and stages inline comments as a **pending** review — visible only to you until you submit or discard on GitHub. Never submits. Resolves the originating ticket (Linear, Jira, GitHub issue) from the PR's title, body, or branch when one is named, and adds a spec lens that checks the diff against it. | every skill-loading harness |
+| `watch-review` | Arms a watcher that streams new direct review requests into the session, one notification per pull request, for `review-pr` to handle. Polling is a shell script (`scripts/watch_review.py`), not a model loop: an idle tick is one `gh` call and zero tokens. | **Claude Code only** — built on its Monitor tool |
+| `doctor` | Diagnoses this harness's setup, read-only: whether the `<leos-agent>` block is injected and current, what else is loaded into every session (global instruction file, memories, settings, skills), and whether a local checkout passes `scripts/check.py`. Run it with `/leo-doctor`. | every skill-loading harness |
+| `handoff` | Writes this session's context — goal, what landed, what is next, key files, decisions, gotchas — to a markdown document under `~/.leos-agent-local/handoffs/`, so a later session can pick the work up. Pointers, not contents: it names files rather than pasting them. Run it with `/handoff`. | every skill-loading harness |
+| `handon` | Loads a handoff written earlier — in this harness or a different one — and resumes from it, reporting any drift first when the directory, branch, or HEAD has moved since. Loading never consumes a handoff. Run it with `/handon <name>`. | every skill-loading harness |
+| `attach-pr` | Attaches the current desktop session to an existing pull request so the app shows its PR card. Creates nothing and pushes nothing. | **Claude Code only** — it drives that app's card |
 
-### Claude Code
+The Claude-only pair live in `skills-claude/` and `commands-claude/`, listed in
+`.claude-plugin/plugin.json` and nowhere else. Hermes receives the preferences
+payload but no skills — it has no skill loader.
 
-```sh
-claude plugin marketplace add foxhatleo/leos-agent
-claude plugin install leo@leos-agent
+The watcher records each reviewed pull request under `~/.leos-agent-local/`
+(override with `$LEOS_AGENT_LOCAL_PATH`), so it never surfaces the same one
+twice; `watch_review.py forget <n>` puts one back in play.
+
+Handoffs live in the same place, under `handoffs/`. Nothing there is ever pruned
+automatically: `handoff.py list [--all]` shows what exists and `handoff.py rm
+<name>` is the only way one goes away. The directory is deliberately outside
+the plugin, so upgrading or reinstalling can never take state with it.
+
+## How it works
+
+The payload lives in exactly one file: [`rules/preferences.md`](rules/preferences.md).
+
+Cursor reads that file natively as an always-apply rule. Every other harness
+gets it through its global instruction file, written by
+[`scripts/leo-install.py`](scripts/leo-install.py) into a marker block:
+
+```
+<leos-agent version="10.1.0">
+...the payload...
+</leos-agent>
 ```
 
-Update or remove it with:
+Updating replaces that block and nothing else, so anything you wrote in those
+files by hand survives an upgrade untouched. The script writes only when the
+bytes actually differ, so running it twice is a no-op, and it writes through a
+temporary file and an atomic rename, so an interrupted run cannot leave a
+half-written instruction file behind.
 
-```sh
+If it ever finds markers it cannot pair — an opener with no closer, a stray
+closer, two blocks — it refuses to touch that file and tells you what to fix.
+Guessing there would mean deleting whatever sits between the markers, which is
+exactly the content it exists to protect.
+
+| Harness | Global file the installer writes |
+|---|---|
+| Claude Code | `~/.claude/CLAUDE.md` |
+| Codex | `~/.codex/AGENTS.md` (plus `~/.codex/agents/leo-executor.toml`) |
+| Cursor | none — the plugin's always-apply rule delivers it |
+| Hermes | `~/.hermes/SOUL.md` (edited only if it already exists) |
+| Pi | `~/.pi/agent/AGENTS.md` |
+| OpenCode | `~/.config/opencode/AGENTS.md` (plus copied skills and commands) |
+
+**The installer is per-harness and manual.** Running it inside Codex installs Codex and
+nothing else; it never writes to another harness's files behind your back, and
+it never runs on its own at session start. Install the plugin, then run the
+installer once in that harness.
+
+Requires Python 3.9+ and macOS, Linux, or WSL. No symlinks are used anywhere —
+installs are real clones and copies.
+
+---
+
+## Claude Code
+
+**Install**
+
+```bash
+claude plugin marketplace add foxhatleo/leos-agent
+```
+
+```bash
+claude plugin install leos-agent@leos-agent --scope user
+```
+
+Then, in a Claude Code session, run `/leo-install` (or ask it to use the `install`
+skill). That writes the block into `~/.claude/CLAUDE.md`.
+
+**Upgrade**
+
+```bash
 claude plugin marketplace update leos-agent
-claude plugin update leo@leos-agent
+```
+
+```bash
+claude plugin install leos-agent@leos-agent --scope user
+```
+
+Re-run `/leo-install` afterwards to refresh the block, then start a new session.
+Both commands are safe to repeat; installing an already-current version reports
+that it is already installed and changes nothing.
+
+**Uninstall**
+
+Run the installer's uninstall first, while the script is still on disk:
+
+```bash
+python3 ~/.claude/plugins/cache/leos-agent/leos-agent/10.1.0/scripts/leo-install.py claude --uninstall
+```
+
+```bash
+claude plugin uninstall leos-agent@leos-agent
+```
+
+Optionally drop the marketplace too:
+
+```bash
+claude plugin marketplace remove leos-agent
+```
+
+---
+
+## Codex
+
+**Install**
+
+```bash
+codex plugin marketplace add foxhatleo/leos-agent
+```
+
+```bash
+codex plugin add leos-agent@leos-agent
+```
+
+Then run the `install` skill in a Codex session (`$leos-agent`, then `install`), or
+run the script directly:
+
+```bash
+python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.1.0/scripts/leo-install.py codex
+```
+
+This writes `~/.codex/AGENTS.md` and installs `~/.codex/agents/leo-executor.toml`,
+the `gpt-5.6-terra` subagent the economical tier routes to. Codex plugins
+cannot ship agent definitions themselves, which is why the installer writes it.
+
+**Upgrade**
+
+```bash
+codex plugin marketplace upgrade leos-agent
+```
+
+```bash
+codex plugin add leos-agent@leos-agent
+```
+
+Re-run the installer, then start a new thread — Codex picks up plugin changes on new
+threads only. Re-adding an already-installed plugin is idempotent.
+
+**Uninstall**
+
+```bash
+python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.1.0/scripts/leo-install.py codex --uninstall
+```
+
+```bash
+codex plugin remove leos-agent@leos-agent
+```
+
+```bash
+codex plugin marketplace remove leos-agent
+```
+
+---
+
+## Cursor
+
+Cursor has no on-disk global rules file — its User Rules live in your synced
+Cursor account — so there is nothing for the installer to write. The plugin ships the
+payload as an always-apply rule instead, which takes effect as soon as the
+plugin is installed.
+
+**Install** — either through the UI, or as a local clone.
+
+In the IDE: open the **Customize** sidebar, add the marketplace
+`foxhatleo/leos-agent`, and install **Leo's Agent** at user scope.
+
+Or clone it into Cursor's local plugin directory (a clone, not a symlink):
+
+```bash
+git clone https://github.com/foxhatleo/leos-agent ~/.cursor/plugins/local/leos-agent
+```
+
+Cursor does not currently expose a reliable non-interactive per-plugin install
+command, so those two paths are the supported ones.
+
+**Upgrade**
+
+Refresh the marketplace from the Customize panel, or for a local clone:
+
+```bash
+git -C ~/.cursor/plugins/local/leos-agent pull
+```
+
+**Uninstall**
+
+Remove the plugin from the Customize panel, or delete the clone:
+
+```bash
+rm -rf ~/.cursor/plugins/local/leos-agent
+```
+
+There is no block to remove — nothing was written outside the plugin directory.
+
+---
+
+## Hermes
+
+**Install**
+
+If the plugin resolves through the community index:
+
+```bash
+hermes plugins install leos-agent
+```
+
+Otherwise clone it into the Hermes plugin directory:
+
+```bash
+git clone https://github.com/foxhatleo/leos-agent ~/.hermes/plugins/leos-agent
+```
+
+Hermes plugins are opt-in, so enable it by adding `leos-agent` to
+`plugins.enabled` in `~/.hermes/config.yaml`:
+
+```yaml
+plugins:
+  enabled:
+    - leos-agent
+```
+
+**Run Hermes once before installing.** The payload goes into `~/.hermes/SOUL.md`,
+the agent's identity prompt, and Hermes writes its own starter version of that
+file on first run. The installer deliberately never creates it — if `SOUL.md` is
+missing it reports `skipped` and leaves Hermes' bootstrap alone. Once it exists:
+
+```bash
+/leo-install
+```
+
+**Upgrade**
+
+```bash
+hermes plugins update leos-agent
+```
+
+or, for a clone:
+
+```bash
+git -C ~/.hermes/plugins/leos-agent pull
+```
+
+Then re-run `/leo-install`.
+
+**Uninstall**
+
+```bash
+python3 ~/.hermes/plugins/leos-agent/scripts/leo-install.py hermes --uninstall
+```
+
+```bash
+hermes plugins remove leos-agent
+```
+
+Remove the `leos-agent` entry from `plugins.enabled`, and delete the clone if
+you made one. Your own `SOUL.md` content is left intact — only the block goes.
+
+**Note on model routing:** Hermes applies a single `delegation.model` to every
+child of a `delegate_task` call, so it cannot vary the model per spawn. The
+policy therefore routes all Hermes work to the current model.
+
+---
+
+## Pi
+
+**Install**
+
+```bash
+pi install git:github.com/foxhatleo/leos-agent
+```
+
+Then run the install skill in a pi session:
+
+```
+/skill:install
+```
+
+Pi pins the git ref it installed and records the package in
+`~/.pi/agent/settings.json`; re-running install is idempotent.
+
+**Upgrade**
+
+```bash
+pi update git:github.com/foxhatleo/leos-agent
+```
+
+Pinned refs are reconciled, never silently advanced — to move to a new tag,
+install it explicitly:
+
+```bash
+pi install git:github.com/foxhatleo/leos-agent@v10.1.0
+```
+
+Re-run `/skill:install` afterwards.
+
+**Uninstall**
+
+```bash
+python3 ~/.pi/agent/git/github.com/foxhatleo/leos-agent/scripts/leo-install.py pi --uninstall
+```
+
+```bash
+pi remove git:github.com/foxhatleo/leos-agent
+```
+
+---
+
+## OpenCode
+
+OpenCode loads plugins as npm packages, so this one is published to npm as
+`leos-agent`.
+
+**Install**
+
+```bash
+opencode plugin leos-agent -g
+```
+
+That adds the package to the `plugin` array in `~/.config/opencode/opencode.json`
+(or `.jsonc`) and caches it. Bootstrap the installer once by running the script from
+the cache — OpenCode's plugin API cannot register skills or commands, so the
+first run has to come from the package itself:
+
+```bash
+python3 ~/.cache/opencode/packages/leos-agent@latest/node_modules/leos-agent/scripts/leo-install.py opencode
+```
+
+That writes `~/.config/opencode/AGENTS.md` and copies the skill and command into
+`~/.config/opencode/skills/leo-install/` and `~/.config/opencode/commands/`. From
+then on `/leo-install` works inside OpenCode.
+
+**Upgrade**
+
+```bash
+opencode plugin leos-agent -g -f
+```
+
+If the cache holds a stale copy, clear it and let OpenCode refetch:
+
+```bash
+rm -rf ~/.cache/opencode/packages/leos-agent@*
+```
+
+Re-run the bootstrap install command above to refresh the copied files.
+
+**Uninstall**
+
+```bash
+python3 ~/.cache/opencode/packages/leos-agent@latest/node_modules/leos-agent/scripts/leo-install.py opencode --uninstall
+```
+
+OpenCode has no plugin-remove command, so delete the `"leos-agent"` entry from
+the `plugin` array in `~/.config/opencode/opencode.json` **by hand**. The installer
+never edits that file: it is JSONC, with your comments in it, and rewriting it
+would destroy them. Then clear the cache:
+
+```bash
+rm -rf ~/.cache/opencode/packages/leos-agent@*
+```
+
+---
+
+## Migrating from v8
+
+Version 10 renames the plugin from `leo` to `leos-agent`, so the old install
+does not upgrade in place — remove it first. Most skills that were invoked
+as `leo:<name>` are gone; v10 ships a deliberately lean payload plus the three
+GitHub skills above, now unprefixed (`review-pr`, not `leo:review-pr`). The
+watcher no longer runs under `/loop`: it is a shell process streaming into
+Claude Code's Monitor tool, so idle polling costs nothing.
+
+**Claude Code.** The old plugin will show as `failed to load` once the
+marketplace points at v10 (`Plugin leo not found in marketplace leos-agent`).
+Remove it:
+
+```bash
 claude plugin uninstall leo@leos-agent
 ```
 
-Start a new session after installing or updating. Claude loads the plugin's
-native agents, skills, and the guard hook from the cache. `plugins/leo/settings.json`
-is a reference configuration for Leo, not a plugin component; apply any values
-you want yourself.
+**Codex.** The v8 marketplace entry is pinned to an old commit, and Codex
+refuses to re-add a marketplace from a different source. Remove and re-add:
 
-Verify the installed version and component inventory with `claude plugin list` and `claude plugin details leo@leos-agent`. That second command also reports the plugin's always-on token cost, which is the number this project is built around keeping small.
-
-### Codex
-
-```sh
-codex plugin marketplace add foxhatleo/leos-agent
-codex plugin add leo@leos-agent
+```bash
+codex plugin marketplace remove leos-agent && codex plugin marketplace add foxhatleo/leos-agent
 ```
 
-Update or remove it with:
+**OpenCode.** The existing `"leos-agent"` plugin entry stays valid; clear the
+cache so it refetches v10.
 
-```sh
-codex plugin marketplace upgrade leos-agent
-codex plugin add leo@leos-agent
-codex plugin remove leo@leos-agent
+**Leftover files.** v8 wrote `*.leo-backup` files next to the instruction files
+it touched. v10 does not create backups — the block replacement is surgical, and
+`--dry-run` shows you any change before it happens. These are safe to delete:
+
+```bash
+rm -f ~/.claude/CLAUDE.md.leo-backup ~/.codex/AGENTS.md.leo-backup ~/.config/opencode/AGENTS.md.leo-backup
 ```
 
-Start a new task after installing or updating. Codex loads the skills and the guard hook; Leo's Agent dispatches generic subagents with an explicit role prompt, model, and reasoning effort instead of installing global agent TOMLs.
+---
 
-Verify that `leo@leos-agent` is installed with:
+## Extending it
 
-```sh
-codex plugin list --json
+The repo root is the plugin. Each harness reads its own manifest from the same
+tree, and the three payload directories are shared between them.
+
+**Skills** live in `skills/<name>/SKILL.md`, or `skills-claude/<name>/SKILL.md`
+for one only Claude Code can use; commands mirror that with `commands/` and
+`commands-claude/`. The two `-claude` directories are listed in
+`.claude-plugin/plugin.json` and nowhere else. Keep the frontmatter of a
+portable skill to `name` and `description`, plus
+`disable-model-invocation: true` on a skill that must never fire on its own
+(Codex reads that from a sibling `agents/openai.yaml`; harnesses without a
+control for it get the constraint stated in the description) — that subset is what all five skill-loading harnesses accept, and
+anything richer will parse on Claude Code and be ignored or rejected elsewhere.
+Claude Code, Codex, Cursor, and Pi load `skills/` straight from their manifests;
+OpenCode gets a copy from the installer.
+
+**Commands** live in `commands/<name>.md`. Claude Code and Cursor read the
+directory from their manifests; OpenCode gets a copy. Codex dropped custom
+prompts in favour of skills, so add a skill there instead.
+
+### Two conventions, both enforced by `scripts/check.py`
+
+**Progressive disclosure.** `SKILL.md` is the *dispatch contract* — what the
+main thread does. The procedure a subagent follows goes in
+`skills/<name>/reference/*.md`, which the brief points at by path. `review-pr`
+is the worked example: the main thread loads a 2.5 KB contract, the reviewer
+subagent reads `reference/procedure.md`, and the lens sub-subagents read
+`reference/lenses.md` that the reviewer itself never loads. Before the split the
+main thread and the reviewer each loaded the same 21 KB file, and every turn
+after that re-read it. Split a file out only when some run genuinely does not
+read it; moving prose around costs the same tokens.
+
+**Invocation split.** A skill is either *user-invoked* — reached by typing its
+slash command, and carrying `disable-model-invocation: true` — or *deliberately
+model-invocable*, reached when the model decides the task fits. On Claude Code
+the flag also drops the skill's description from the always-loaded skill
+listing, which is the larger saving: a description is context in every session,
+invoked or not. Only `review-pr` and `handon` are model-invocable here, because
+they are the two you would phrase in words ("review PR 41", "pick up where I
+left off") rather than by name; `check.py` fails the build on any other skill
+that omits the flag. A user-invoked skill may invoke a model-invoked one, but
+never chains another user-invoked skill.
+
+A description says **when to reach for this** and **what it is not** — never how
+the skill works. The mechanism is what the body is for, and every word of it in
+the description is paid for in sessions that never invoke the skill.
+
+**Hooks** live in `hooks/`, wired but empty — v10 enforces its policy through
+the payload rather than by intercepting tool calls. There are two files because
+the formats genuinely differ: `hooks.json` (PascalCase events) serves Claude
+Code and Codex, which both auto-load it and must never name it in their
+manifests, and `hooks-cursor.json` (camelCase, `version: 1`) serves Cursor,
+which does name it. See [`hooks/README.md`](hooks/README.md) for how to add one,
+including the Hermes, OpenCode, and Pi equivalents, which are code rather than
+JSON.
+
+## Development
+
+Run the checks:
+
+```bash
+python3 scripts/check.py
 ```
 
-Then review Leo's hook commands in `/hooks`, start a new task after granting
-trust, and invoke `leo:routing` to confirm the policy is reachable.
+It asserts that the version matches across every manifest, the marketplace
+entry, and this README; that each manifest carries what its harness requires and
+that every path it points at exists; that both hook files are present and parse
+in their own format; and that injection is idempotent, uninstall round-trips,
+and malformed markers are refused rather than silently resolved.
 
-### Cursor
+Preview any install without writing:
 
-Once Leo's Agent is listed in Cursor's public marketplace:
-
-```text
-/add-plugin leo
+```bash
+python3 scripts/leo-install.py <harness> --dry-run
 ```
 
-Before marketplace approval, install it directly from this public repository:
+**Both Claude Code and Codex cache a plugin by version**, so reinstalling while
+the version is unchanged is a no-op and quietly leaves the old code in place —
+you will be testing the previous build without being told. While iterating,
+either uninstall and reinstall:
 
-```text
-/add-plugin leo@https://github.com/foxhatleo/leos-agent
+```bash
+claude plugin uninstall leos-agent@leos-agent && claude plugin install leos-agent@leos-agent --scope user
 ```
 
-Use Cursor's Customize → Plugins screen to verify, update, disable, or remove it. Cursor agents inherit the model selected in the UI; Leo's Agent recommends a tier but does not claim to enforce an arbitrary model name per subagent.
+or bump a cachebuster suffix in the manifest (`10.1.0+dev.3`) and re-add. Either
+way, plugin changes only reach a **new** session or thread.
 
-### Hermes
+`--check` exits non-zero when a file is out of date, and `--force` replaces a
+copied file that something else has since overwritten.
 
-OpenRouter authentication must already be configured, then run:
+To release: bump the version in `package.json`, the three `plugin.json` files,
+`.claude-plugin/marketplace.json`, `plugin.yaml`, and every mention in this
+README (the uninstall commands embed it in cache paths — `check.py` fails on any
+stale one); run `scripts/check.py`; tag; and publish to npm for OpenCode.
 
-```sh
-hermes plugins install foxhatleo/leos-agent --enable
-```
-
-Update, disable, or remove it with:
-
-```sh
-hermes plugins update leo
-hermes plugins disable leo
-hermes plugins remove leo
-```
-
-Hermes installs the Git repository into its plugin directory and loads the root
-`plugin.yaml` and `__init__.py` entrypoint — it is the one harness whose plugin
-root is this repository rather than `plugins/leo/`. On load, the entrypoint
-registers Leo's portable skills as `leo:<skill>` and installs the
-catastrophic-command guard, and nothing else. No policy is injected: start with
-`leo:routing`, the same as everywhere else.
-
-Verify the enabled state with `hermes plugins list`; inside a running session, `/plugins` shows the loaded plugin.
-
-### OpenCode
-
-OpenCode has no GitHub-based plugin marketplace — the plugin is distributed on npm as `leos-agent` and installed by module name:
-
-```sh
-opencode plugin leos-agent --global
-```
-
-That resolves the package and adds it to the global config for you. On OpenCode builds without the `plugin` subcommand, add it by hand instead — the global config file is `~/.config/opencode/opencode.json` or `opencode.jsonc`:
-
-```json
-{ "$schema": "https://opencode.ai/config.json", "plugin": ["leos-agent"] }
-```
-
-Start a new OpenCode session after installing. On startup the plugin registers a generated shadow copy of the skills directory, seven generated `leo-<role>` subagent roles, and the bash deletion tripwire. It writes no instructions of its own. A pre-existing user agent with the same namespaced key is preserved and reported rather than overwritten.
-
-Configure and authenticate the OpenRouter provider before using the mapped
-models: run `opencode auth login` and choose OpenRouter. Leo does not receive,
-store, or write provider credentials. Update with
-`opencode plugin leos-agent --global --force`, then start a new session.
-OpenCode currently has no plugin removal command; remove the `"leos-agent"`
-entry from the resolved configuration to uninstall.
-
-OpenCode names each skill from its own frontmatter, requires that name to match the containing directory, and applies no plugin namespace, so there is no `leo:` prefix to register directly. Instead the plugin builds a shadow copy of the skills directory with every skill's directory and frontmatter `name:` renamed to `leo-<name>` and registers that copy, so skills are invoked as `leo-routing` and `leo-verification` rather than `leo:routing`. The harness reference says to read every `leo:<skill>` as `leo-<skill>` here.
-
-If skills don't appear, run `opencode debug skill` — every Leo skill should
-list a `location` under the machine-local state root
-(`${LEOS_AGENT_LOCAL_PATH:-$HOME/.leos-agent-local}/opencode-skills-<hash>/leo-<name>/`).
-Those are generated shadow skills, not the installed package. The generated
-agents are registered from `adapters/opencode/agents.json`; `opencode debug
-config` shows the resolved skill paths and agents. The plugin derives and
-writes only these Leo-owned registrations. Do not hand-write its paths; if
-they are absent, the plugin did not load.
-
-## Model tiers
-
-Tier names describe work, not a universal provider model. A tier is a model **and** a reasoning effort, so escalating a rung buys a wider thinking budget rather than only a bigger model. The canonical defaults live in [`plugins/leo/config/models.json`](plugins/leo/config/models.json).
-
-| Tier | Typical work | Claude Code | Codex | Cursor | OpenCode via OpenRouter |
-|---|---|---|---|---|---|
-| Opus | Planning, investigation, review | `opus`, high | `gpt-5.6-sol`, high | Grok 4.5 | `moonshotai/kimi-k3` |
-| Sonnet | Implementation | `sonnet`, medium | `gpt-5.6-terra`, medium | Grok 4.5 | `z-ai/glm-5.2` |
-| Haiku | Exploration and mechanical work | `haiku`, low | `gpt-5.6-terra`, low | Composer 2.5 | `z-ai/glm-5.2` |
-
-The role mapping is planner, investigator, and reviewer → Opus; implementer and review-lens → Sonnet; executor and explore → Haiku.
-
-Only Claude Code and Codex can pin effort. Cursor agents are `model: inherit` with no effort control, and OpenCode pins a model per registered agent but no effort — on both, a tier is a recommendation, and the harness reference says so rather than implying a pin that does not exist.
-
-There is no rung above Opus. Escalation caps there and reports, instead of handing a stuck question sideways.
-
-### Change model defaults
-
-- Maintainers edit only `plugins/leo/config/models.json`, then run `python3 plugins/leo/scripts/render_adapters.py`. CI runs the same command with `--check` to reject generated-file drift.
-- Claude tiers are not configurable per install. Claude Code does not interpolate plugin options into agent frontmatter, so model and effort are baked into the generated agents: retier by editing the config, re-running the renderer, bumping the plugin version, and running `claude plugin update leo@leos-agent`. The version bump matters — the plugin cache keys on it, so an unbumped edit never reaches an installed plugin.
-- Claude agent models are bare aliases, never `opus[1m]`. Agent frontmatter accepts an alias, a full model id, or `inherit`; the extended-context suffix is `/model` syntax and belongs only in *skill* frontmatter, which is why the Claude-only skill still carries it. The renderer now rejects a suffixed model outright.
-- `plugins/leo/settings.json` is a reference copy of Leo's own Claude Code settings, not a plugin component — no harness loads it. Apply those values by hand if you want them.
-- Codex users can override a model for one request in the prompt, or persist a tier override in native `AGENTS.md`. Explicit user instructions take precedence over bundled defaults.
-- Cursor users select the mapped model in the native model picker before starting a homogeneous tier batch. Generated Cursor agents use `model: inherit`.
-- OpenCode collapses Sonnet and Haiku onto one model. Moving between collapsed rungs changes which role does the work, not how much thinking it gets.
-
-## What the plugin provides
-
-- `leo:routing`: the operating policy — tiering, delegation economy, fan-out authorisation, machine-local state, and the index of every other skill. An ordinary skill, loaded on demand.
-- `leo:review-gate`: what counts as reviewed before a change may be called done, the two exemptions, and the rubric a verdict is judged on. It lives in a skill rather than inside one role's prompt so the gate survives a harness with no reviewer agent and no bundled review skill.
-- Seven roles: planner, investigator, reviewer, review-lens, implementer, executor, and explore. Which of them a harness registers depends on what it already has — see below.
-- Process skills: `brainstorming`, `writing-plans`, `executing-plans`, `debugging`, `test-first`, `verification`, `delegation`, `worktrees`, `visual-verification`, `freshness`, and `finishing-a-branch`.
-- Operational skills, portable to every harness: `resolve-ticket`, `review-pr`, and `watch-review`. `attach-pr` alone stays Claude Code only — its entire product is a side effect in Claude Code Desktop's PR-card detector, so elsewhere the same commands would succeed and produce nothing observable. It ships from a separate `skills-claude/` root that the Cursor, Codex, and OpenCode manifests do not read.
-- A shared bash guard that blocks a narrow class of accidental home/system-scale destructive commands. It is the only hook Leo ships.
-
-The bash guard is an accident-prevention tripwire, not an adversarial shell sandbox. It deliberately does not try to enumerate every obfuscation or malicious-command technique; each harness's permissions and sandbox remain the security boundary.
-
-### Native substitutions
-
-Leo does not ship a second copy of something the harness already does well. On Claude Code, `explore`, `planner`, `reviewer`, and `review-lens` are not registered at all — the built-in Explore and Plan agents and `/code-review` cover them — and `leo:worktrees` and `leo:visual-verification` ship as reference while the policy points at `EnterWorktree`/`ExitWorktree` and `/run`/`/verify`. The other three harnesses have none of those natives and get Leo's own versions.
-
-Every substitution is recorded in `config/models.json` with the native it defers to and the reason, and rendered into the generated harness reference, so a session can see what is installed here and what to reach for instead. A substitution that names a native missing from your install falls back to Leo's version.
-
-Skills can only be hard-excluded where packaging allows it. The Codex validator reads a single `skills` directory and Cursor's requires one directory, so only Claude's array-valued manifest and OpenCode's own tree walk can leave a skill out; elsewhere a substitution ships the skill and points at the native instead. The renderer refuses to record an exclusion the build cannot deliver.
-
-## MCP integrations
-
-Leo's Agent bundles no MCP servers, installs nothing, and holds no credentials. Register whatever servers you want through each harness's own configuration — `claude mcp add`, `codex mcp add`, Cursor's `~/.cursor/mcp.json`, or OpenCode's config file. Leo's skills use the tools they find and document a fallback when a server is absent.
-
-That separation keeps workflow policy apart from personal services, credentials, and organization-specific access.
-
-## Machine-local state
-
-Skills that persist state write JSON under:
-
-```text
-${LEOS_AGENT_LOCAL_PATH:-$HOME/.leos-agent-local}/<skill-or-agent-name>.json
-```
-
-`~/.leos-agent-local` is a dedicated data directory, not an installation clone, so there's no nested `local/` segment inside it. State is separated by repository or project, remains outside plugin caches, and survives plugin upgrades. `LEOS_AGENT_LOCAL_PATH` can redirect it.
-
-Where the harness owns a task list of its own, that list is the better ledger for in-flight progress, and the policy says to use it rather than keeping a second one alongside.
-
-## Uninstall and recovery
-
-Uninstalling a harness plugin removes its cached plugin payload but preserves
-machine-local state. This is intentional: an update or reinstall should not
-erase a ledger mid-run. To remove Leo completely, first export or copy
-`${LEOS_AGENT_LOCAL_PATH:-$HOME/.leos-agent-local}/` somewhere safe, uninstall
-the plugin from each harness, then explicitly remove that state directory.
-Review the target carefully: full purge is manual and irreversible.
-
-For the 8.0 upgrade: the memory store, `leo:setup`, and `leo:doctor` are gone,
-and so is the injected policy block. Start with `leo:routing`, which is an
-ordinary skill you or the model can invoke. Durable facts you kept in Leo's
-memory store belong in the harness's own memory surface — `~/.claude/CLAUDE.md`,
-`~/.codex/AGENTS.md`, a Cursor rules file — which is where they were being
-copied to anyway; move anything you want to keep before removing the old
-`memory/` directory. Ledgers under the state root are untouched. If Codex
-policy is still absent, revisit `/hooks` and confirm trust.
-
-## Repository layout
-
-```text
-.claude-plugin/marketplace.json      Claude marketplace catalog
-.agents/plugins/marketplace.json     Codex marketplace catalog
-.cursor-plugin/marketplace.json      Cursor marketplace catalog
-plugin.yaml __init__.py              Hermes plugin root: manifest and entrypoint
-.github/workflows/                   CI and release automation
-plugins/leo/                          self-contained cached plugin payload, also published to npm as leos-agent
-  .claude-plugin/plugin.json
-  .codex-plugin/plugin.json
-  .cursor-plugin/plugin.json
-  package.json                        npm manifest for the OpenCode distribution
-  README.md                           generated npm landing page (not a copy of this file)
-  config/models.json                  canonical matrix: tiers, roles, capabilities, native substitutions
-  roles/                              canonical role prompts, carrying no model or effort
-  agents/                             generated Claude agents (conventional path)
-  adapters/                           generated agent definitions for other harnesses
-  adapters/opencode/                  OpenCode plugin.js bridge + generated agents.json
-  skills/                             portable skills (every harness)
-  skills/routing/references/          generated harness reference, one section per harness
-  skills-claude/                      attach-pr (Claude Code only)
-  hooks/ scripts/ workflows/          the guard, support scripts, and reusable workflow features
-tools/                                release and pinned validation tooling
-  release.py                          version checks, archives, npm staging, and GitHub Release sync
-  vendor/                             pinned Codex and Cursor validators
-local/                                ignored maintainer-only snapshots; never shipped
-tests/                                stdlib packaging and behavior tests
-```
-
-Nothing in `plugins/leo/` depends on files outside that directory. This matters because plugin systems copy or cache the payload independently of the marketplace repository.
-
-## Development and release
-
-Run the complete local checks with:
-
-```sh
-python3 plugins/leo/scripts/render_adapters.py --check
-python3 -m unittest discover -s tests -v
-claude plugin validate .
-python3 tools/vendor/codex/validate_plugin.py plugins/leo
-node tools/vendor/cursor/validate-template.mjs
-```
-
-The vendored validators are pinned and documented in
-[`tools/vendor/VALIDATORS.md`](tools/vendor/VALIDATORS.md); do not replace
-them with a mutable download. `tools/release.py` verifies manifest alignment,
-builds a reproducible archive, stages the npm package, and syncs the GitHub
-Release. A `vX.Y.Z` tag triggers the release workflow, which runs those steps
-and publishes `plugins/leo` to npm as `leos-agent` through Trusted Publishing
-/ OIDC. Creating or pushing the tag remains a deliberate maintainer action.
-
-Release history and generated notes live in
-[GitHub Releases](https://github.com/foxhatleo/leos-agent/releases); this
-repository intentionally has no hand-maintained changelog.
-
-Contributor guidance, including how to author a skill in this shape and the
-listing-text budget every skill is held to, is in
-[`CONTRIBUTING.md`](CONTRIBUTING.md).
-
-For local harness testing, point each harness's development-plugin facility at `plugins/leo/`. For OpenCode, point the `plugin` array at the working tree instead of the npm package name:
-
-```json
-{ "plugin": ["/absolute/path/to/leos-agent/plugins/leo"] }
-```
+MIT licensed.
