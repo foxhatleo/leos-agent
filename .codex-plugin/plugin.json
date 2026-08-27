@@ -1,6 +1,6 @@
 {
   "name": "leos-agent",
-  "version": "10.2.0",
+  "version": "10.2.1",
   "description": "Leo's portable agent operating policy: orchestrator main thread, subagent-first execution, cost-tiered model routing.",
   "author": {
     "name": "Leo Liang",
@@ -19,7 +19,7 @@
   "interface": {
     "displayName": "Leo's Agent",
     "shortDescription": "Orchestrator main thread, subagent-first execution",
-    "longDescription": "Leo's operating policy: keep the main thread an orchestrator, push investigation, debugging, execution, and testing into briefed subagents, and route thinking work to the standard tier and doing work and fan-outs to the economical tier.",
+    "longDescription": "Leo's operating policy: keep the main thread an orchestrator, push investigation, debugging, and search into briefed subagents, and route thinking work to the standard tier and doing work and fan-outs to the economical tier.",
     "developerName": "Leo Liang",
     "category": "Developer Tools",
     "capabilities": [

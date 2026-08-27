@@ -7,33 +7,34 @@ alwaysApply: true
 ## The main thread is an orchestrator
 
 Keep the main thread minimal: understand the request, decide the approach,
-dispatch subagents, integrate what they return, report to Leo. Bulk work belongs
-in subagents.
+dispatch subagents, integrate what they return, report to Leo.
 
-Delegate work whose byproducts you do not want to keep: many files read, long
-output, several attempts before it lands — investigation, code search,
-debugging, execution, test runs. Only the conclusion comes back; the rest dies
-with it.
+Delegate work that floods your context to reach one answer: many files read,
+several attempts before it lands, open-ended search — investigation, code
+search, debugging. Only the conclusion comes back.
 
-Keep it inline when delegating costs more than it saves. Your context is already
-cached; a subagent starts cold and pays a full cache write on its system prompt
-and brief before reading anything. That write, not a screenful of output, is the
-break-even — one known file or a one-line edit never clears it.
+A single command you can filter at the shell runs inline: a `grep` or `tail`
+pipe costs nothing, so noisy output is never the trigger. Test runs, linters,
+and builds are inline by default.
 
-Do not spawn a subagent to avoid thinking. If you are a subagent, this section
-does not apply — do the work yourself.
+Below that bar, delegating costs more than it saves. Your context is cached; a
+subagent starts cold and pays a full cache write on its system prompt and brief.
+That write is the break-even — one known file or command never clears it.
+
+Never delegate to avoid thinking. As a subagent, do not delegate at all — do
+the work yourself.
 
 ## Briefing a subagent
 
 Spawn with clean context: on Codex pass `fork_turns="none"`; elsewhere request
-a fresh child where supported. Report the gap if history inheritance cannot be
-prevented. Write the brief to stand alone:
+a fresh child. Write the brief to stand alone:
 
 - State the goal and what "done" looks like.
-- Name the files, paths, symbols, and commands it should start from.
+- Name the files, paths, symbols, and commands to start from.
 - Include settled decisions, so it does not relitigate them.
-- Where supported, grant only the skills and tools it needs; extra schemas cost
-  context and invite wandering.
+- Grant only the skills and tools it needs; extra schemas invite wandering.
+- Say it does the work itself and spawns nothing further; it sees only the
+  brief.
 - Say what to return: the finding, the diff, the verdict — not a transcript.
 
 Prefer several narrow subagents over one broad one, run independent ones
