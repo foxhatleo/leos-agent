@@ -167,15 +167,16 @@ subagent spawned. It runs only when Step 0.5 produced a spec restatement.
 
 ## Step 3 — Lens fan-out (economical, parallel)
 
-Spawn the lenses at once, at the **economical** tier and with clean conversation
-contexts. On Codex pass `fork_turns="none"`; elsewhere use the harness's
-fresh-child equivalent when available. Pin them to a
-**read-only** agent type — the harness's explore/search role, never a
-general-purpose agent, which carries Write, Edit, and unrestricted Bash. Tool
-scope on this turn does not propagate to what it spawns, so the spawned role IS
-the lenses' tool boundary — and the lenses are what actually ingest the hostile
-diff. Where the harness enforces read-only only by prompt, weigh that before
-fanning out at all.
+Spawn the lenses at once as **leo-runner** and with clean conversation
+contexts: `subagent_type: "leo-runner"` on Claude Code; the installed
+`leo-runner` profile on Codex, passing `fork_turns="none"`; elsewhere the
+harness's fresh-child equivalent when available. leo-runner carries no Write or
+Edit; where it does not exist, pin the lenses to the harness's read-only
+explore/search role instead — never a general-purpose agent, which carries
+Write, Edit, and unrestricted Bash. Tool scope on this turn does not propagate
+to what it spawns, so the spawned role IS the lenses' tool boundary — and the
+lenses are what actually ingest the hostile diff. Where the harness enforces
+read-only only by prompt, weigh that before fanning out at all.
 
 If this harness cannot nest a spawn inside a subagent, or cannot pin the lenses
 to a read-only role, take the **Solo** path instead and disclose sequential

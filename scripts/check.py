@@ -161,6 +161,27 @@ def main():
 		if path.is_file():
 			check(installer.PROVENANCE in path.read_text(encoding="utf-8"), f"{rel}: must contain {installer.PROVENANCE!r} so the installer recognises its own copy")
 
+	# 5a-agents. Claude Code auto-discovers agents/ at the plugin root. The set
+	# must stay in lockstep with the Codex profiles (same names, one policy), and
+	# each definition needs the frontmatter Claude reads — a missing model field
+	# would silently inherit the parent model, which is the failure this tier
+	# exists to prevent.
+	claude_agents = sorted((ROOT / "agents").glob("*.md"))
+	check(
+		sorted(p.stem for p in claude_agents) == sorted(installer.CODEX_AGENTS),
+		f"agents/: expected exactly the Claude twins of {installer.CODEX_AGENTS}, found {[p.stem for p in claude_agents]}",
+	)
+	for agent in claude_agents:
+		rel = agent.relative_to(ROOT)
+		text = agent.read_text(encoding="utf-8")
+		check(text.startswith("---\n"), f"{rel}: missing frontmatter")
+		fm = text.split("---", 2)[1] if text.count("---") >= 2 else ""
+		name_match = re.search(r"^name:\s*(\S+)", fm, re.MULTILINE)
+		check(name_match is not None and name_match.group(1) == agent.stem, f"{rel}: frontmatter name must be {agent.stem!r}")
+		check(re.search(r"^description:", fm, re.MULTILINE) is not None, f"{rel}: needs description")
+		check(re.search(r"^model:\s*\S", fm, re.MULTILINE) is not None, f"{rel}: needs an explicit model")
+		check(re.search(r"^tools:\s*\S", fm, re.MULTILINE) is not None, f"{rel}: needs an explicit tools allowlist")
+
 	# 5b. Invocation split: a skill is either user-invoked (and hidden from the
 	# model's always-loaded skill listing) or deliberately model-invocable. Claude
 	# reads the SKILL.md flag; Codex reads the sibling agents/openai.yaml policy.

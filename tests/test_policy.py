@@ -19,6 +19,22 @@ class TestRouting(unittest.TestCase):
         self.assertIn('model = "gpt-5.6-terra"', executor)
         self.assertIn('model_reasoning_effort = "medium"', executor)
 
+    def test_claude_agents_match_their_work(self):
+        # The Claude twins bake the tier's model into the agent type, so a brief
+        # that names the profile cannot silently inherit the parent model.
+        runner = (ROOT / "agents" / "leo-runner.md").read_text(encoding="utf-8")
+        executor = (ROOT / "agents" / "leo-executor.md").read_text(encoding="utf-8")
+        self.assertIn("model: haiku", runner)
+        self.assertIn("model: sonnet", executor)
+        runner_tools = re.search(r"(?m)^tools:\s*(.+)$", runner).group(1)
+        executor_tools = re.search(r"(?m)^tools:\s*(.+)$", executor).group(1)
+        # The runner is the lens role for hostile-diff fan-outs: no Write, no Edit.
+        self.assertNotIn("Edit", runner_tools)
+        self.assertNotIn("Write", runner_tools)
+        self.assertIn("Bash", runner_tools)
+        self.assertIn("Edit", executor_tools)
+        self.assertIn("Write", executor_tools)
+
     def test_clean_fork_flag_is_stated_everywhere_spawning_is_described(self):
         # A harness flag, not prose: every file that tells the model to spawn has
         # to name it, or one spawn path silently inherits the parent's history.

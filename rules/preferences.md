@@ -18,8 +18,9 @@ pipe costs nothing, so noisy output is never the trigger. Test runs, linters,
 and builds are inline by default.
 
 Below that bar, delegating costs more than it saves. Your context is cached; a
-subagent starts cold and pays a full cache write on its system prompt and brief.
-That write is the break-even — one known file or command never clears it.
+subagent starts cold and pays a full cache write on its system prompt and brief
+— roughly $3 at Opus prices, $1 at Sonnet. That write is the break-even;
+one known file or a one-line edit never clears it.
 
 Never delegate to avoid thinking. As a subagent, do not delegate at all — do
 the work yourself.
@@ -40,25 +41,27 @@ a fresh child. Write the brief to stand alone:
 Prefer several narrow subagents over one broad one, run independent ones
 concurrently, and ask for uncertainty explicitly.
 
+Cap the scope: a brief that could plausibly run past ~50 turns gets split. A
+subagent's own context grows turn over turn, so one broad brief re-creates the
+expensive-prefix problem inside the child — a single measured agent ran 231
+turns and took a third of a day's subagent spend.
+
 ## Model routing
 
-Every brief names one of two tiers; there is no third.
+Every subagent dispatch MUST name an explicit model or profile. The harness
+inherits the parent model when you say nothing, so a dispatch with no model and
+no stated reason for inheriting is a bug, not a default.
 
-**Standard** is the model Leo is running now, inherited with no override.
+- Reading, search, tests, logs, codemods, and every fan-out → **leo-runner**:
+  Haiku on Claude Code, `gpt-5.6-luna`/low on Codex.
+- An approved plan or a well-specified code change → **leo-executor**: Sonnet
+  on Claude Code, `gpt-5.6-terra`/medium on Codex.
+- Investigation, debugging, adjudication, orchestration → inherit the current
+  model, and say that inheriting is intended.
 
-**Economical** is min(current model, the cheapest sufficient profile): runner =
-Haiku on Claude Code or `gpt-5.6-luna`/low on Codex; executor = Sonnet or
-`gpt-5.6-terra`/medium. Elsewhere use the current model. Never upgrade a cheaper
-session; report when routing cannot be applied.
-
-Match the tier to the kind of work, not to the size of the request.
-
-**Thinking work runs standard** — investigation, debugging, adjudication, and
-orchestration. A weak diagnosis makes every later step wasteful.
-
-**Doing work runs economical** — runner for tests, reading, search, logs,
-codemods, and every fan-out; executor for an approved plan or well-specified
-code change. On Codex these are `leo-runner` and `leo-executor`. Wide standard
+On Claude Code pass `subagent_type: "leo-runner"` or `"leo-executor"`; on Codex
+the installed profiles carry the models. Elsewhere use the current model. Never
+upgrade a cheaper session; report when routing cannot be applied. Wide inherited
 fan-out is the policy's most expensive shape.
 
 ## Caching

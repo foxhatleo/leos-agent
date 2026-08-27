@@ -22,6 +22,7 @@ LIMITS = {
 	"codex_implicit_skill_metadata_bytes": 600,
 	"claude_implicit_skill_metadata_bytes": 800,
 	"codex_agent_description_bytes": 550,
+	"claude_agent_description_bytes": 550,
 	"review_dispatch_bytes": 3_500,
 }
 
@@ -77,11 +78,19 @@ def measurements():
 	review_fm, review_body = frontmatter(ROOT / "skills" / "review-pr" / "SKILL.md")
 	del review_fm
 	agent_paths = sorted((ROOT / "payload" / "codex-agents").glob("*.toml"))
+	# Claude Code lists every plugin agent's name and description in the parent's
+	# always-loaded agent roster, so they are part of the static footprint too.
+	claude_agent_paths = sorted((ROOT / "agents").glob("*.md"))
+	claude_agent_bytes = 0
+	for path in claude_agent_paths:
+		fm, _ = frontmatter(path)
+		claude_agent_bytes += byte_len(field(fm, "name")) + byte_len(field(fm, "description"))
 	return {
 		"global_policy_bytes": byte_len(policy_body.strip()),
 		"codex_implicit_skill_metadata_bytes": skill_metadata_bytes(portable, codex_implicit),
 		"claude_implicit_skill_metadata_bytes": skill_metadata_bytes(portable + claude_only, claude_implicit),
 		"codex_agent_description_bytes": sum(byte_len(agent_description(path)) for path in agent_paths),
+		"claude_agent_description_bytes": claude_agent_bytes,
 		"review_dispatch_bytes": byte_len(review_body.strip()),
 	}
 

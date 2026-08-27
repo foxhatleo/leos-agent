@@ -25,11 +25,11 @@ Two tiers, three levels:
 | Level | Who | Tier |
 |---|---|---|
 | Main thread | dispatches, relays | — |
-| **Reviewer** subagent | the whole procedure; judges; owns every mutation | **standard** |
-| **Lens** sub-subagents | the fan-out; read and report only | **economical** |
+| **Reviewer** subagent | the whole procedure; judges; owns every mutation | **standard** (inherit) |
+| **Lens** sub-subagents | the fan-out; read and report only | **leo-runner** (`subagent_type: "leo-runner"` on Claude Code; the installed profile on Codex) |
 
-Where the harness has no per-spawn model override, agents run at whatever they
-are registered with — say so in the report.
+Where the harness has no `leo-runner` agent and no per-spawn model override,
+agents run at whatever they are registered with — say so in the report.
 
 ## Dispatch — the main thread's entire job
 
