@@ -25,14 +25,15 @@ does not apply — do the work yourself.
 
 ## Briefing a subagent
 
-A subagent has no conversation history. Its brief is the only context it
-gets, so write it to stand alone:
+Spawn with clean context: on Codex pass `fork_turns="none"`; elsewhere request
+a fresh child where supported. Report the gap if history inheritance cannot be
+prevented. Write the brief to stand alone:
 
 - State the goal and what "done" looks like.
 - Name the files, paths, symbols, and commands it should start from.
-- Include the decisions already made, so it does not relitigate them.
-- Grant only the skills and MCP tools the task needs — every extra schema is
-  context it pays for and a door it may wander through.
+- Include settled decisions, so it does not relitigate them.
+- Where supported, grant only the skills and tools it needs; extra schemas cost
+  context and invite wandering.
 - Say what to return: the finding, the diff, the verdict — not a transcript.
 
 Prefer several narrow subagents over one broad one, run independent ones
@@ -40,30 +41,24 @@ concurrently, and ask for uncertainty explicitly.
 
 ## Model routing
 
-Two tiers, and only two. Every skill and subagent brief names one; there
-is no third tier and no per-model instruction anywhere else.
+Every brief names one of two tiers; there is no third.
 
 **Standard** is the model Leo is running now, inherited with no override.
 
-**Economical** is min(current model, this harness's cheaper model) — Sonnet on
-Claude Code, `gpt-5.6-terra` on Codex, elsewhere the current model. Never
-upgrade: a Haiku session stays on Haiku; say so rather than pretending the
-routing happened.
+**Economical** is min(current model, the cheapest sufficient profile): runner =
+Haiku on Claude Code or `gpt-5.6-luna`/low on Codex; executor = Sonnet or
+`gpt-5.6-terra`/medium. Elsewhere use the current model. Never upgrade a cheaper
+session; report when routing cannot be applied.
 
 Match the tier to the kind of work, not to the size of the request.
 
-**Thinking work runs standard** — investigation, debugging, and judging what
-findings add up to. Diagnosis is where a weaker model costs most: it misreads
-evidence, and a wrong root cause sends every later step astray. The orchestrator
-is standard work.
+**Thinking work runs standard** — investigation, debugging, adjudication, and
+orchestration. A weak diagnosis makes every later step wasteful.
 
-**Doing work runs economical** — execution, testing, reading, search, and every
-fan-out: parallel readers feeding one judge are the case economical exists for.
-A wide fan-out at standard is the most expensive shape this policy can take.
-
-On Codex, prefer the `leo-executor` agent; it pins the tier. Where a harness
-cannot choose a model per spawn, name the intended tier anyway and report the
-gap.
+**Doing work runs economical** — runner for tests, reading, search, logs,
+codemods, and every fan-out; executor for an approved plan or well-specified
+code change. On Codex these are `leo-runner` and `leo-executor`. Wide standard
+fan-out is the policy's most expensive shape.
 
 ## Caching
 
@@ -95,6 +90,8 @@ fails in a way that suggests a larger blast radius.
 
 ## Reporting
 
-Report what happened, not what should have happened. A completion claim needs
-evidence from a command run in this turn; a subagent's self-reported success is
-its claim, not proof. If something was skipped or unverified, say so plainly.
+Report what happened. Completion needs current-turn evidence. A bare subagent
+success summary is only a claim; its returned command, relevant output, and exit
+status are evidence, so do not rerun them in the main thread. Rerun only when
+evidence is missing, stale, or misses the final diff. State skipped or
+unverified work plainly.

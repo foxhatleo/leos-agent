@@ -9,8 +9,9 @@ Investigation, brainstorming, debugging, execution, testing, and mechanical work
 all run in briefed subagents, so the main thread never fills up with the files,
 retries, and logs that produced an answer — only the answer. Work runs at one of two
 named tiers: **standard**, the model you are already using, for thinking and
-judging; **economical**, the cheaper model where the harness has one, for doing
-work and for every fan-out.
+judging; **economical**, the cheapest sufficient profile where the harness can
+select one. Narrow search, reading, testing, and mechanical work use the runner
+profile; well-specified implementation uses the executor profile.
 
 ## What it ships
 
@@ -67,7 +68,7 @@ exactly the content it exists to protect.
 | Harness | Global file the installer writes |
 |---|---|
 | Claude Code | `~/.claude/CLAUDE.md` |
-| Codex | `~/.codex/AGENTS.md` (plus `~/.codex/agents/leo-executor.toml`) |
+| Codex | `~/.codex/AGENTS.md` (plus `~/.codex/agents/leo-runner.toml` and `leo-executor.toml`) |
 | Cursor | none — the plugin's always-apply rule delivers it |
 | Hermes | `~/.hermes/SOUL.md` (edited only if it already exists) |
 | Pi | `~/.pi/agent/AGENTS.md` |
@@ -151,9 +152,11 @@ run the script directly:
 python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.1.0/scripts/leo-install.py codex
 ```
 
-This writes `~/.codex/AGENTS.md` and installs `~/.codex/agents/leo-executor.toml`,
-the `gpt-5.6-terra` subagent the economical tier routes to. Codex plugins
-cannot ship agent definitions themselves, which is why the installer writes it.
+This writes `~/.codex/AGENTS.md` and installs two economical agents:
+`leo-runner` (`gpt-5.6-luna`, low effort) for narrow repeatable work and
+`leo-executor` (`gpt-5.6-terra`, medium effort) for well-specified
+implementation. Codex plugins cannot ship agent definitions themselves, which
+is why the installer writes them.
 
 **Upgrade**
 
@@ -438,9 +441,10 @@ for one only Claude Code can use; commands mirror that with `commands/` and
 `commands-claude/`. The two `-claude` directories are listed in
 `.claude-plugin/plugin.json` and nowhere else. Keep the frontmatter of a
 portable skill to `name` and `description`, plus
-`disable-model-invocation: true` on a skill that must never fire on its own
-(Codex reads that from a sibling `agents/openai.yaml`; harnesses without a
-control for it get the constraint stated in the description) — that subset is what all five skill-loading harnesses accept, and
+`disable-model-invocation: true` on a skill that must never fire on its own.
+Codex uses the matching sibling `agents/openai.yaml` with
+`policy.allow_implicit_invocation: false`; harnesses without a control for it
+get the constraint stated in the description. That subset is what all five skill-loading harnesses accept, and
 anything richer will parse on Claude Code and be ignored or rejected elsewhere.
 Claude Code, Codex, Cursor, and Pi load `skills/` straight from their manifests;
 OpenCode gets a copy from the installer.
@@ -454,7 +458,7 @@ prompts in favour of skills, so add a skill there instead.
 **Progressive disclosure.** `SKILL.md` is the *dispatch contract* — what the
 main thread does. The procedure a subagent follows goes in
 `skills/<name>/reference/*.md`, which the brief points at by path. `review-pr`
-is the worked example: the main thread loads a 2.5 KB contract, the reviewer
+is the worked example: the main thread loads a 3.2 KB contract, the reviewer
 subagent reads `reference/procedure.md`, and the lens sub-subagents read
 `reference/lenses.md` that the reviewer itself never loads. Before the split the
 main thread and the reviewer each loaded the same 21 KB file, and every turn
@@ -493,11 +497,29 @@ Run the checks:
 python3 scripts/check.py
 ```
 
-It asserts that the version matches across every manifest, the marketplace
-entry, and this README; that each manifest carries what its harness requires and
-that every path it points at exists; that both hook files are present and parse
-in their own format; and that injection is idempotent, uninstall round-trips,
-and malformed markers are refused rather than silently resolved.
+The structural check asserts that the version matches across every manifest,
+the marketplace entry, and this README; that each manifest carries what its
+harness requires and every declared path exists; that both hook files parse in
+their own format; and that injection is idempotent, uninstall round-trips, and
+malformed markers are refused.
+
+Run the behavioral tests:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+Measure the repository-controlled static prompt footprint and enforce its
+committed ceilings:
+
+```bash
+python3 scripts/measure_context.py --check
+```
+
+The measurement is a byte-based proxy for always-listed or dispatch-loaded
+text. It deliberately does not claim to measure total task tokens or credits,
+which also depend on conversation history, cache state, tool output, and the
+number and model of spawned agents.
 
 Preview any install without writing:
 
@@ -514,8 +536,9 @@ either uninstall and reinstall:
 claude plugin uninstall leos-agent@leos-agent && claude plugin install leos-agent@leos-agent --scope user
 ```
 
-or bump a cachebuster suffix in the manifest (`10.1.0+dev.3`) and re-add. Either
-way, plugin changes only reach a **new** session or thread.
+or replace the cachebuster suffix in the Codex manifest with one in the form
+`10.1.0+codex.local-YYYYMMDD-HHMMSS` and re-add. Either way, plugin changes only
+reach a **new** session or thread.
 
 `--check` exits non-zero when a file is out of date, and `--force` replaces a
 copied file that something else has since overwritten.

@@ -162,11 +162,25 @@ def snap_line(diffmap, side, line):
 def validate_comments(comments, maps):
     staged, snapped, dropped = [], [], []
     for c in comments:
-        path, body = c.get("path"), c.get("body", "").strip()
+        if not isinstance(c, dict):
+            dropped.append({"value": c, "reason": "comment must be an object"})
+            continue
+        path = c.get("path")
+        raw_body = c.get("body")
+        body = raw_body.strip() if isinstance(raw_body, str) else ""
         side = c.get("side", "RIGHT")
         line = c.get("line")
-        if not path or not body or not isinstance(line, int):
+        if (
+            not isinstance(path, str)
+            or not path
+            or not body
+            or not isinstance(line, int)
+            or isinstance(line, bool)
+        ):
             dropped.append({**c, "reason": "missing path/line/body"})
+            continue
+        if side not in ("RIGHT", "LEFT"):
+            dropped.append({**c, "reason": f"invalid side {side!r}; expected RIGHT or LEFT"})
             continue
         diffmap = maps.get(path)
         if diffmap is None:
@@ -180,7 +194,7 @@ def validate_comments(comments, maps):
         # Multi-line ranges: keep only if the start anchors cleanly before the
         # end on the same side; otherwise degrade to a single-line comment.
         start = c.get("start_line")
-        if isinstance(start, int):
+        if isinstance(start, int) and not isinstance(start, bool):
             start_side = c.get("start_side", side)
             snapped_start = snap_line(maps[path], start_side, start)
             if snapped_start is not None and snapped_start < new_line and start_side == side:

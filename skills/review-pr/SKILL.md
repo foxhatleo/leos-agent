@@ -38,7 +38,9 @@ are registered with — say so in the report.
    `$PLUGIN_ROOT`. A brief that repeats an unexpanded placeholder hands the
    reviewer a path that expands to nothing.
 
-2. Spawn **one** reviewer subagent at the **standard** tier. Give it:
+2. Spawn **one** reviewer subagent at the **standard** tier with a clean
+   conversation context. On Codex pass `fork_turns="none"`; on another harness
+   use its fresh-child equivalent when available. Give it:
 
    - the PR number, or "the current branch's PR" when Leo passed none
    - any focus hints Leo passed

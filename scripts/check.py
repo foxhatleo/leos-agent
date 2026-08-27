@@ -149,7 +149,8 @@ def main():
 	# it will mistake its own installed copy for a stranger's file and refuse to
 	# upgrade or remove it. The list is derived from the installer's own copy sets,
 	# so a skill added there can never slip past this check.
-	copied = ["skills/install/SKILL.md", "commands/leo-install.md", "payload/codex-agents/leo-executor.toml"]
+	copied = ["skills/install/SKILL.md", "commands/leo-install.md"]
+	copied.extend(f"payload/codex-agents/{name}.toml" for name in installer.CODEX_AGENTS)
 	for name in installer.OPENCODE_SKILLS:
 		copied.append(f"skills/{name}/SKILL.md")
 		copied.extend(str(p.relative_to(ROOT)) for p in sorted((ROOT / "skills" / name / "reference").glob("*.md")))
@@ -161,8 +162,10 @@ def main():
 			check(installer.PROVENANCE in path.read_text(encoding="utf-8"), f"{rel}: must contain {installer.PROVENANCE!r} so the installer recognises its own copy")
 
 	# 5b. Invocation split: a skill is either user-invoked (and hidden from the
-	# model's always-loaded skill listing) or deliberately model-invocable. An
-	# unlisted skill that forgets the flag is a permanent per-session token cost.
+	# model's always-loaded skill listing) or deliberately model-invocable. Claude
+	# reads the SKILL.md flag; Codex reads the sibling agents/openai.yaml policy.
+	# Missing either half makes an explicit-only portable skill an unintended
+	# permanent per-session token cost in one of the harnesses.
 	MODEL_INVOCABLE = {"review-pr", "handon"}
 	for skill in sorted((ROOT / "skills").glob("*/SKILL.md")) + sorted((ROOT / "skills-claude").glob("*/SKILL.md")):
 		rel = skill.relative_to(ROOT)
@@ -174,6 +177,26 @@ def main():
 			check(not disabled, f"{rel}: {name} is meant to be model-invocable; remove disable-model-invocation")
 		else:
 			check(disabled, f"{rel}: needs `disable-model-invocation: true`, or add {name!r} to MODEL_INVOCABLE in check.py")
+
+		# Claude-only skills are never surfaced to Codex. Portable explicit-only
+		# skills need the corresponding Codex policy file as well.
+		if skill.parent.parent.name == "skills":
+			openai_yaml = skill.parent / "agents" / "openai.yaml"
+			if name in MODEL_INVOCABLE:
+				if openai_yaml.exists():
+					text = openai_yaml.read_text(encoding="utf-8")
+					check(
+						"allow_implicit_invocation: false" not in text,
+						f"{openai_yaml.relative_to(ROOT)}: {name} is meant to be model-invocable",
+					)
+			else:
+				check(openai_yaml.is_file(), f"{openai_yaml.relative_to(ROOT)}: explicit-only Codex skill policy is missing")
+				if openai_yaml.is_file():
+					text = openai_yaml.read_text(encoding="utf-8")
+					check(
+						re.search(r"(?m)^policy:\s*\n\s+allow_implicit_invocation:\s*false\s*$", text) is not None,
+						f"{openai_yaml.relative_to(ROOT)}: needs policy.allow_implicit_invocation false",
+					)
 
 	# 7. Injection is idempotent, and uninstall round-trips exactly.
 	block = installer.build_block(ROOT)

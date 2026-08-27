@@ -42,6 +42,11 @@ PROVENANCE = "leos-agent"
 OPENCODE_SKILLS = ("doctor", "review-pr", "handoff", "handon")
 OPENCODE_COMMANDS = ("leo-doctor", "leo-install", "review-pr", "handoff", "handon")
 
+# Codex plugins cannot package custom agent definitions directly, so these are
+# copied into ~/.codex/agents. Keep this tuple authoritative: check.py and the
+# installer tests derive the expected payload from it.
+CODEX_AGENTS = ("leo-runner", "leo-executor")
+
 
 class BlockError(Exception):
 	"""The target file's markers are malformed; editing it could destroy content."""
@@ -313,18 +318,19 @@ def run(harness, root, args):
 
 	elif harness == "codex":
 		targets.append(("~/.codex/AGENTS.md", lambda: install_codex_agents_md(home, block, args)))
-		label = "~/.codex/agents/leo-executor.toml"
-		targets.append(
-			(
-				label,
-				lambda: install_file_copy(
-					root / "payload" / "codex-agents" / "leo-executor.toml",
-					home / ".codex" / "agents" / "leo-executor.toml",
-					args,
+		for agent_name in CODEX_AGENTS:
+			label = f"~/.codex/agents/{agent_name}.toml"
+			targets.append(
+				(
 					label,
-				),
+					lambda n=agent_name, l=label: install_file_copy(
+						root / "payload" / "codex-agents" / f"{n}.toml",
+						home / ".codex" / "agents" / f"{n}.toml",
+						args,
+						l,
+					),
+				)
 			)
-		)
 
 	elif harness == "cursor":
 		targets.append(

@@ -1,0 +1,5 @@
+interface:
+  display_name: "Handoff"
+  short_description: "Write resumable session context"
+policy:
+  allow_implicit_invocation: false

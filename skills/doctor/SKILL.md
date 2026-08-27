@@ -39,7 +39,7 @@ Then confirm by hand, since `--check` only sees disk, not what got loaded:
 | Harness | Global file |
 |---|---|
 | claude | `~/.claude/CLAUDE.md` |
-| codex | `~/.codex/AGENTS.md` (plus `~/.codex/agents/leo-executor.toml`) |
+| codex | `~/.codex/AGENTS.md` (plus `~/.codex/agents/leo-runner.toml` and `leo-executor.toml`) |
 | cursor | none — the always-apply rule carries the payload |
 | hermes | `~/.hermes/SOUL.md` |
 | pi | `~/.pi/agent/AGENTS.md` |

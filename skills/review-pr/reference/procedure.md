@@ -167,7 +167,9 @@ subagent spawned. It runs only when Step 0.5 produced a spec restatement.
 
 ## Step 3 — Lens fan-out (economical, parallel)
 
-Spawn the lenses at once, at the **economical** tier. Pin them to a
+Spawn the lenses at once, at the **economical** tier and with clean conversation
+contexts. On Codex pass `fork_turns="none"`; elsewhere use the harness's
+fresh-child equivalent when available. Pin them to a
 **read-only** agent type — the harness's explore/search role, never a
 general-purpose agent, which carries Write, Edit, and unrestricted Bash. Tool
 scope on this turn does not propagate to what it spawns, so the spawned role IS
