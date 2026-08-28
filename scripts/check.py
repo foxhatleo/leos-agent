@@ -182,6 +182,37 @@ def main():
 		check(re.search(r"^model:\s*\S", fm, re.MULTILINE) is not None, f"{rel}: needs an explicit model")
 		check(re.search(r"^tools:\s*\S", fm, re.MULTILINE) is not None, f"{rel}: needs an explicit tools allowlist")
 
+	# 5a-routing. The routing region is what makes the economical tier
+	# configurable per machine. Rendering must be total (every harness gets a
+	# stanza), deterministic (or a second install would not report "unchanged"),
+	# and cheaper than the multi-harness prose it replaced.
+	prefs_body = installer.payload_body(ROOT)
+	for marker in (installer.ROUTING_OPEN, installer.ROUTING_CLOSE):
+		check(prefs_body.count(marker) == 1, f"rules/preferences.md: expected exactly one {marker}")
+	check(
+		prefs_body.find(installer.ROUTING_OPEN) < prefs_body.find(installer.ROUTING_CLOSE),
+		"rules/preferences.md: the routing region's closer precedes its opener",
+	)
+	for harness in installer.HARNESSES:
+		rendered = installer.payload_body(ROOT, harness, {})
+		check(bool(installer.routing.stanza(harness, {}).strip()), f"routing: {harness} renders an empty stanza")
+		check(
+			installer.ROUTING_OPEN not in rendered and installer.ROUTING_CLOSE not in rendered,
+			f"routing: {harness}'s rendered payload still carries the region markers",
+		)
+		check(
+			rendered == installer.payload_body(ROOT, harness, {}),
+			f"routing: rendering {harness} twice is not byte-identical",
+		)
+		check(
+			len(rendered.encode("utf-8")) < len(prefs_body.encode("utf-8")),
+			f"routing: {harness}'s rendered payload is not smaller than the unrendered file",
+		)
+	check(
+		installer.PROVENANCE in installer.cursor_routing_rule("cursor", {}),
+		f"routing: the Cursor rule must contain {installer.PROVENANCE!r} so the installer recognises its own copy",
+	)
+
 	# 5b. Invocation split: a skill is either user-invoked (and hidden from the
 	# model's always-loaded skill listing) or deliberately model-invocable. Claude
 	# reads the SKILL.md flag; Codex reads the sibling agents/openai.yaml policy.

@@ -2,7 +2,7 @@
   "name": "leos-agent",
   "displayName": "Leo's Agent",
   "description": "Leo's portable agent operating policy: orchestrator main thread, subagent-first execution, cost-tiered model routing.",
-  "version": "10.3.0",
+  "version": "10.4.0",
   "author": {
     "name": "Leo Liang"
   },
