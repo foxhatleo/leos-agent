@@ -1,5 +1,6 @@
 """Cost and routing properties the plugin promises to users."""
 
+import importlib.util
 import re
 import subprocess
 import sys
@@ -51,7 +52,7 @@ class TestRouting(unittest.TestCase):
 
 class TestInvocationPolicy(unittest.TestCase):
     def test_explicit_only_portable_skills_have_codex_policy(self):
-        for name in ("doctor", "handoff", "install"):
+        for name in ("doctor", "handoff", "install", "tune-routing"):
             path = ROOT / "skills" / name / "agents" / "openai.yaml"
             with self.subTest(skill=name):
                 text = path.read_text(encoding="utf-8")
@@ -77,6 +78,20 @@ class TestStaticPromptBudget(unittest.TestCase):
             timeout=30,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_tune_routing_costs_no_always_loaded_bytes(self):
+        # The skill's whole premise is that configuring the cheap tier must not
+        # itself cost always-loaded context. Assert it directly rather than
+        # relying on the aggregate ceilings happening to have headroom.
+        spec = importlib.util.spec_from_file_location(
+            "measure_policy_test", ROOT / "scripts" / "measure_context.py"
+        )
+        measure = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(measure)
+        path = ROOT / "skills" / "tune-routing" / "SKILL.md"
+        fm, _ = measure.frontmatter(path)
+        self.assertFalse(measure.codex_implicit(path, fm))
+        self.assertFalse(measure.claude_implicit(path, fm))
 
     def test_skill_descriptions_stay_single_line(self):
         for path in sorted((ROOT / "skills").glob("*/SKILL.md")):

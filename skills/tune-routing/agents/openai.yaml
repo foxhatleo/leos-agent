@@ -1,0 +1,5 @@
+interface:
+  display_name: "Tune routing"
+  short_description: "Choose this machine's economical-tier models"
+policy:
+  allow_implicit_invocation: false

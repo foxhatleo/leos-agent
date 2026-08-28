@@ -5,9 +5,12 @@ absent config changes nothing, that a typo is loud rather than silently
 expensive, and that installing twice writes nothing the second time.
 """
 
+import contextlib
 import importlib.util
+import io
 import json
 import os
+import re
 import tempfile
 import types
 import unittest
@@ -189,6 +192,196 @@ class TestInstallIdempotency(RoutingCase):
              mock.patch.object(Path, "home", staticmethod(lambda: home)):
             results = self.installer.run("codex", ROOT, args(check=True, writes=False))
         self.assertTrue([r.target for r in results if r.changed])
+
+
+class WriteCase(RoutingCase):
+    def run_cli(self, *argv):
+        """routing.py main() against the throwaway data root. Returns stdout."""
+        buffer = io.StringIO()
+        with mock.patch.dict(os.environ, {"LEOS_AGENT_LOCAL_PATH": str(self.data)}), \
+             contextlib.redirect_stdout(buffer):
+            self.routing.main(list(argv))
+        return buffer.getvalue()
+
+    def expect_refusal(self, *argv):
+        with self.assertRaises(SystemExit) as caught:
+            self.run_cli(*argv)
+        return str(caught.exception)
+
+    def raw(self):
+        return json.loads((self.data / "routing.json").read_text(encoding="utf-8"))
+
+
+class TestWriting(WriteCase):
+    def test_reads_create_nothing_and_set_creates_the_file(self):
+        # The data root must stay untouched by anything that only looks: a
+        # config appearing because someone ran `show` would be a write nobody
+        # asked for.
+        self.run_cli("path")
+        self.run_cli("show")
+        self.run_cli("set", "--harness", "pi", "--runner", "m", "--dry-run")
+        # Not even a lock file: reads and dry runs never enter the write path.
+        self.assertEqual(sorted(p.name for p in self.data.iterdir()), [])
+
+        self.run_cli("set", "--harness", "pi", "--runner", "m")
+        self.assertEqual(self.raw(), {"pi": {"runner": {"model": "m"}}})
+
+    def test_set_preserves_other_harnesses_and_their_shorthand(self):
+        # Writing load()'s output back would normalise every other harness's
+        # entry as a side effect of touching one. Leo's file is his.
+        self.write_config({"cursor": {"runner": "fast-1"}, "opencode": {"executor": {"model": "m"}}})
+        self.run_cli("set", "--harness", "codex", "--runner", "gpt-x")
+        after = self.raw()
+        self.assertEqual(after["cursor"], {"runner": "fast-1"})
+        self.assertEqual(after["opencode"], {"executor": {"model": "m"}})
+        self.assertEqual(after["codex"], {"runner": {"model": "gpt-x"}})
+
+    def test_set_replaces_a_role_wholesale_including_its_effort(self):
+        # Merging within a role would leave a stale effort silently attached to
+        # a model that was never chosen with it.
+        self.run_cli("set", "--harness", "codex", "--runner", "gpt-x", "--runner-effort", "low")
+        out = self.run_cli("set", "--harness", "codex", "--runner", "gpt-y")
+        self.assertEqual(self.raw()["codex"]["runner"], {"model": "gpt-y"})
+        self.assertIn("(was gpt-x effort=low)", out)
+
+    def test_roles_are_written_independently(self):
+        self.run_cli("set", "--harness", "cursor", "--runner", "a")
+        self.run_cli("set", "--harness", "cursor", "--executor", "b")
+        self.assertEqual(
+            self.raw()["cursor"], {"runner": {"model": "a"}, "executor": {"model": "b"}}
+        )
+
+    def test_effort_needs_its_model_and_a_role_is_required(self):
+        self.assertIn("--runner-effort needs --runner", self.expect_refusal(
+            "set", "--harness", "codex", "--runner-effort", "low"))
+        self.assertIn("needs --runner and/or --executor", self.expect_refusal(
+            "set", "--harness", "codex"))
+        self.assertFalse((self.data / "routing.json").exists())
+
+    def test_an_unknown_harness_never_reaches_the_file(self):
+        # argparse rejects it before anything is opened, so a typo cannot leave
+        # a harness silently on the expensive model.
+        with self.assertRaises(SystemExit) as caught:
+            self.run_cli("set", "--harness", "clod", "--runner", "x")
+        self.assertEqual(caught.exception.code, 2)
+        self.assertFalse((self.data / "routing.json").exists())
+
+    def test_an_empty_model_is_rejected(self):
+        self.assertIn("non-empty 'model'", self.expect_refusal(
+            "set", "--harness", "cursor", "--runner", "  "))
+        self.assertFalse((self.data / "routing.json").exists())
+
+    def test_set_is_idempotent_and_byte_stable(self):
+        # A re-run that rewrote the file would make the next install report a
+        # change it did not make.
+        self.run_cli("set", "--harness", "cursor", "--runner", "fast-1")
+        before = (self.data / "routing.json").read_bytes()
+        out = self.run_cli("set", "--harness", "cursor", "--runner", "fast-1")
+        self.assertIn("unchanged", out)
+        self.assertEqual((self.data / "routing.json").read_bytes(), before)
+
+    def test_a_malformed_config_is_never_silently_rewritten(self):
+        (self.data / "routing.json").write_text("{nope", encoding="utf-8")
+        self.assertIn("not valid JSON", self.expect_refusal(
+            "set", "--harness", "codex", "--runner", "gpt-x"))
+        self.assertEqual((self.data / "routing.json").read_text(encoding="utf-8"), "{nope")
+
+    def test_a_config_that_is_valid_json_but_not_a_config_is_refused(self):
+        (self.data / "routing.json").write_text("[1, 2, 3]", encoding="utf-8")
+        self.assertIn("expected an object keyed by harness", self.expect_refusal(
+            "set", "--harness", "codex", "--runner", "gpt-x"))
+        self.assertEqual((self.data / "routing.json").read_text(encoding="utf-8"), "[1, 2, 3]")
+
+    def test_an_existing_bad_key_blocks_the_write_rather_than_being_edited_around(self):
+        # Writing anyway would leave the typo -- and the harness it silently
+        # stranded on the expensive model -- in place.
+        self.write_config({"clod": {"runner": "x"}})
+        before = (self.data / "routing.json").read_bytes()
+        self.assertIn("not a harness", self.expect_refusal(
+            "set", "--harness", "codex", "--runner", "gpt-x"))
+        self.assertEqual((self.data / "routing.json").read_bytes(), before)
+
+    def test_unset_drops_a_role_then_the_harness_key(self):
+        self.run_cli("set", "--harness", "cursor", "--runner", "a", "--executor", "b")
+        self.run_cli("unset", "--harness", "cursor", "--runner")
+        self.assertEqual(self.raw(), {"cursor": {"executor": {"model": "b"}}})
+        self.run_cli("unset", "--harness", "cursor", "--executor")
+        # An empty harness key is a shape load() never produces, so never leave one.
+        self.assertEqual(self.raw(), {})
+
+    def test_unset_without_a_role_drops_the_whole_harness(self):
+        self.run_cli("set", "--harness", "pi", "--runner", "a", "--executor", "b")
+        self.run_cli("set", "--harness", "cursor", "--runner", "keep-me")
+        self.run_cli("unset", "--harness", "pi")
+        self.assertEqual(self.raw(), {"cursor": {"runner": {"model": "keep-me"}}})
+
+    def test_unset_with_no_config_writes_no_config(self):
+        # The write path takes state.py's flock, so it leaves that lock
+        # sentinel; what it must not do is conjure a config out of a no-op.
+        out = self.run_cli("unset", "--harness", "hermes")
+        self.assertIn("nothing configured", out)
+        self.assertFalse((self.data / "routing.json").exists())
+
+    def test_unset_says_what_the_harness_falls_back_to(self):
+        # The one thing a reader can misjudge: on codex an unset restores a
+        # shipped model, everywhere else it restores full price.
+        self.run_cli("set", "--harness", "codex", "--runner", "gpt-x")
+        self.run_cli("set", "--harness", "cursor", "--runner", "fast-1")
+        self.assertIn("shipped default", self.run_cli("unset", "--harness", "codex"))
+        self.assertIn("inherits the current model", self.run_cli("unset", "--harness", "cursor"))
+
+    def test_every_harness_round_trips_from_the_writer_to_the_reader(self):
+        for harness in self.routing.HARNESSES:
+            with self.subTest(harness=harness):
+                self.run_cli("set", "--harness", harness, "--runner", f"{harness}-m",
+                             "--runner-effort", "low")
+                entry = self.load_config()[harness]["runner"]
+                self.assertEqual(entry, {"model": f"{harness}-m", "effort": "low"})
+
+    def test_a_written_config_reaches_the_installed_payload(self):
+        # The whole feature in one test: set, install, and the model is in the
+        # file a session actually loads -- and a second install writes nothing.
+        home = Path(self.tmp.name) / "home-write"
+        home.mkdir()
+        self.run_cli("set", "--harness", "cursor", "--runner", "fast-9")
+        with mock.patch.dict(os.environ, {"LEOS_AGENT_LOCAL_PATH": str(self.data)}), \
+             mock.patch.object(Path, "home", staticmethod(lambda: home)):
+            self.installer.run("cursor", ROOT, args())
+            second = self.installer.run("cursor", ROOT, args())
+        rule = home / ".cursor" / "rules" / "leos-agent-routing.mdc"
+        self.assertIn("fast-9", rule.read_text())
+        self.assertFalse([r.target for r in second if r.changed])
+
+
+class TestSkillMatchesCLI(RoutingCase):
+    """The skill drives this script by name; drift between them is silent."""
+
+    def test_the_skill_only_names_subcommands_and_flags_the_script_has(self):
+        parser_modes = {"show", "render", "path", "set", "unset"}
+        sources = (
+            ROOT / "skills" / "tune-routing" / "SKILL.md",
+            ROOT / "skills" / "tune-routing" / "reference" / "harnesses.md",
+            ROOT / "skills" / "doctor" / "SKILL.md",
+        )
+        known = {
+            "show": {"--harness"},
+            "render": {"--harness"},
+            "path": set(),
+            "set": {"--harness", "--runner", "--runner-effort", "--executor",
+                    "--executor-effort", "--dry-run"},
+            "unset": {"--harness", "--runner", "--executor", "--dry-run"},
+        }
+        seen = set()
+        for path in sources:
+            text = path.read_text(encoding="utf-8")
+            for match in re.finditer(r"routing\.py (\w[\w-]*)((?:[^\n`]|\\\n)*)", text):
+                mode, tail = match.group(1), match.group(2)
+                with self.subTest(source=path.name, mode=mode):
+                    self.assertIn(mode, parser_modes)
+                    seen.add(mode)
+                    for flag in re.findall(r"--[a-z][a-z-]*", tail):
+                        self.assertIn(flag, known[mode])
+        self.assertTrue({"show", "set"} <= seen, "the skill stopped naming the script at all")
 
 
 if __name__ == "__main__":
