@@ -27,7 +27,7 @@ need `gh`, authenticated.
 | Skill | What it does | Where |
 |---|---|---|
 | `review-pr` | Reviews a pull request and stages inline comments as a **pending** review — visible only to you until you submit or discard on GitHub. Never submits. Resolves the originating ticket (Linear, Jira, GitHub issue) from the PR's title, body, or branch when one is named, and adds a spec lens that checks the diff against it. | every skill-loading harness |
-| `watch-review` | Arms a watcher that streams new direct review requests into the session, one notification per pull request, for `review-pr` to handle. Polling is a shell script (`scripts/watch_review.py`), not a model loop: an idle tick is one `gh` call and zero tokens. | **Claude Code only** — built on its Monitor tool |
+| `watch-review` | Arms a watcher that streams direct review requests into the session for `review-pr` to handle, and re-streams one when its head moves. Never surfaces a pull request someone else has approved. Polling is a shell script (`scripts/watch_review.py`), not a model loop: an idle tick is one `gh` call and zero tokens. | **Claude Code only** — built on its Monitor tool |
 | `doctor` | Diagnoses this harness's setup, read-only: whether the `<leos-agent>` block is injected and current, what else is loaded into every session (global instruction file, memories, settings, skills), and whether a local checkout passes `scripts/check.py`. Run it with `/doctor`. | every skill-loading harness |
 | `handoff` | Writes this session's context — goal, what landed, what is next, key files, decisions, gotchas — to a markdown document under `~/.leos-agent-local/handoffs/`, so a later session can pick the work up. Pointers, not contents: it names files rather than pasting them. Run it with `/handoff`. | every skill-loading harness |
 | `handon` | Loads a handoff written earlier — in this harness or a different one — and resumes from it, reporting any drift first when the directory, branch, or HEAD has moved since. Loading never consumes a handoff. Run it with `/handon <name>`. | every skill-loading harness |
@@ -37,9 +37,14 @@ The Claude-only pair live in `skills-claude/` and `commands-claude/`, listed in
 `.claude-plugin/plugin.json` and nowhere else. Hermes receives the preferences
 payload but no skills — it has no skill loader.
 
-The watcher records each reviewed pull request under `~/.leos-agent-local/`
-(override with `$LEOS_AGENT_LOCAL_PATH`), so it never surfaces the same one
-twice; `watch_review.py forget <n>` puts one back in play.
+The watcher records the **head commit** it reviewed each pull request at, under
+`~/.leos-agent-local/` (override with `$LEOS_AGENT_LOCAL_PATH`), so a pull
+request comes back when someone pushes to it and stays quiet otherwise;
+`watch_review.py forget <n>` puts one back in play at its current head. Two
+gates keep a continuous watch from being expensive: a pull request another user
+has already approved is never surfaced at all, and a new head must hold still
+for `--settle` seconds (default 120) before it is emitted, so a burst of pushes
+costs one review rather than one per commit.
 
 Handoffs live in the same place, at
 `~/.leos-agent-local/handoffs/<name>.md` — a fixed path that needs no plugin
