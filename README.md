@@ -1,6 +1,6 @@
 # leos-agent
 
-Leo's portable agent operating policy, version **10.2.1**, installable on Claude
+Leo's portable agent operating policy, version **10.3.0**, installable on Claude
 Code, Codex, Cursor, Hermes, Pi, and OpenCode through each harness's own plugin
 system.
 
@@ -9,15 +9,19 @@ Investigation, brainstorming, debugging, and mechanical work all run in briefed
 subagents, so the main thread never fills up with the files, retries, and logs
 that produced an answer — only the answer. A single command you can filter at
 the shell stays inline. Work runs at one of two named tiers: **standard**, the
-model you are already using, for thinking and judging; **economical**, the
-cheapest sufficient profile where the harness can select one. Narrow search,
-reading, testing, and mechanical work use the runner profile; well-specified
-implementation uses the executor profile.
+model you are already using, for thinking and judging; **economical**, two
+named agent profiles — `leo-runner` for narrow search, reading, testing, and
+mechanical work, `leo-executor` for well-specified implementation — shipped as
+first-class agent definitions on both Claude Code (`agents/`, Haiku and Sonnet)
+and Codex (installed TOML profiles), so the cheaper model is baked into the
+agent type rather than chosen per dispatch.
 
 ## What it ships
 
-Beyond the preferences payload: a setup diagnostic, a session handoff pair, and
-three GitHub skills. The GitHub ones need `gh`, authenticated.
+Beyond the preferences payload: the two economical-tier agent definitions
+(`agents/` for Claude Code, `payload/codex-agents/` for Codex), a setup
+diagnostic, a session handoff pair, and three GitHub skills. The GitHub ones
+need `gh`, authenticated.
 
 | Skill | What it does | Where |
 |---|---|---|
@@ -50,7 +54,7 @@ gets it through its global instruction file, written by
 [`scripts/leo-install.py`](scripts/leo-install.py) into a marker block:
 
 ```
-<leos-agent version="10.2.1">
+<leos-agent version="10.3.0">
 ...the payload...
 </leos-agent>
 ```
@@ -68,7 +72,7 @@ exactly the content it exists to protect.
 
 | Harness | Global file the installer writes |
 |---|---|
-| Claude Code | `~/.claude/CLAUDE.md` |
+| Claude Code | `~/.claude/CLAUDE.md` (the `leo-runner` / `leo-executor` agents need no installer step — the plugin's `agents/` directory delivers them) |
 | Codex | `~/.codex/AGENTS.md` (plus `~/.codex/agents/leo-runner.toml` and `leo-executor.toml`) |
 | Cursor | none — the plugin's always-apply rule delivers it |
 | Hermes | `~/.hermes/SOUL.md` (edited only if it already exists) |
@@ -119,7 +123,7 @@ that it is already installed and changes nothing.
 Run the installer's uninstall first, while the script is still on disk:
 
 ```bash
-python3 ~/.claude/plugins/cache/leos-agent/leos-agent/10.2.1/scripts/leo-install.py claude --uninstall
+python3 ~/.claude/plugins/cache/leos-agent/leos-agent/10.3.0/scripts/leo-install.py claude --uninstall
 ```
 
 ```bash
@@ -150,7 +154,7 @@ Then run the `install` skill in a Codex session (`$leos-agent`, then `install`),
 run the script directly:
 
 ```bash
-python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.2.1/scripts/leo-install.py codex
+python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.3.0/scripts/leo-install.py codex
 ```
 
 This writes `~/.codex/AGENTS.md` and installs two economical agents:
@@ -175,7 +179,7 @@ threads only. Re-adding an already-installed plugin is idempotent.
 **Uninstall**
 
 ```bash
-python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.2.1/scripts/leo-install.py codex --uninstall
+python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.3.0/scripts/leo-install.py codex --uninstall
 ```
 
 ```bash
@@ -323,7 +327,7 @@ Pinned refs are reconciled, never silently advanced — to move to a new tag,
 install it explicitly:
 
 ```bash
-pi install git:github.com/foxhatleo/leos-agent@v10.2.1
+pi install git:github.com/foxhatleo/leos-agent@v10.3.0
 ```
 
 Re-run `/skill:install` afterwards.
@@ -538,7 +542,7 @@ claude plugin uninstall leos-agent@leos-agent && claude plugin install leos-agen
 ```
 
 or replace the cachebuster suffix in the Codex manifest with one in the form
-`10.2.1+codex.local-YYYYMMDD-HHMMSS` and re-add. Either way, plugin changes only
+`10.3.0+codex.local-YYYYMMDD-HHMMSS` and re-add. Either way, plugin changes only
 reach a **new** session or thread.
 
 `--check` exits non-zero when a file is out of date, and `--force` replaces a
