@@ -143,7 +143,7 @@ def stanza(harness, config):
             for role, entry in (("runner", runner), ("executor", executor))
             if entry
         )
-        kept = "" if (runner and executor) else f'\nThe other profile keeps the model its agent definition carries.'
+        kept = "" if (runner and executor) else "\nThe other profile keeps the model its agent definition carries."
         return "On Claude Code pass " + overrides + "." + kept
 
     if harness == "codex":
@@ -161,14 +161,6 @@ def stanza(harness, config):
     else:
         assignment = f"Dispatch leo-executor at {_named(executor)}; leo-runner inherits."
     return assignment + "\nWhere this harness cannot set a model per spawn, inherit and say so."
-
-
-def codex_profile(config, role, default_model, default_effort):
-    """What a Codex profile TOML should carry: config first, shipped default second."""
-    entry = profile(config, "codex", role)
-    if not entry:
-        return default_model, default_effort
-    return entry["model"], entry.get("effort") or default_effort
 
 
 def cmd_show(args):
