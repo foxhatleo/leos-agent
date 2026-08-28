@@ -24,8 +24,18 @@ python3 <plugin-root>/scripts/leo-install.py <harness> --check
 
 Exit 0 means the `<leos-agent>` block is present and current. Non-zero means it
 is missing, stale, or the file is malformed — quote what it printed and offer
-`/leo-install`. Cursor legitimately reports `skipped`; Hermes skips until
-`~/.hermes/SOUL.md` exists.
+`/leo-install`. Hermes skips until `~/.hermes/SOUL.md` exists.
+
+Editing the machine's routing config also makes `--check` report out of date,
+because the block is rendered from it. Show what it holds:
+
+```
+python3 <plugin-root>/scripts/routing.py show
+```
+
+No config is normal — every harness then uses its shipped default, which for
+everything but Claude Code and Codex means inheriting the current model. Say so
+plainly rather than as a fault: it is the setting, not a break.
 
 Then confirm by hand, since `--check` only sees disk, not what got loaded:
 
@@ -40,7 +50,7 @@ Then confirm by hand, since `--check` only sees disk, not what got loaded:
 |---|---|
 | claude | `~/.claude/CLAUDE.md` |
 | codex | `~/.codex/AGENTS.md` (plus `~/.codex/agents/leo-runner.toml` and `leo-executor.toml`) |
-| cursor | none — the always-apply rule carries the payload |
+| cursor | `~/.cursor/rules/leos-agent-routing.mdc` — the always-apply plugin rule carries the payload itself |
 | hermes | `~/.hermes/SOUL.md` |
 | pi | `~/.pi/agent/AGENTS.md` |
 | opencode | `~/.config/opencode/AGENTS.md` (plus copied `skills/`, `commands/`) |

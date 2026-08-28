@@ -1,6 +1,6 @@
 # leos-agent
 
-Leo's portable agent operating policy, version **10.3.0**, installable on Claude
+Leo's portable agent operating policy, version **10.4.0**, installable on Claude
 Code, Codex, Cursor, Hermes, Pi, and OpenCode through each harness's own plugin
 system.
 
@@ -14,7 +14,8 @@ named agent profiles — `leo-runner` for narrow search, reading, testing, and
 mechanical work, `leo-executor` for well-specified implementation — shipped as
 first-class agent definitions on both Claude Code (`agents/`, Haiku and Sonnet)
 and Codex (installed TOML profiles), so the cheaper model is baked into the
-agent type rather than chosen per dispatch.
+agent type rather than chosen per dispatch. Every other harness inherits unless
+a machine-local [routing config](#per-machine-model-routing) names models for it.
 
 ## What it ships
 
@@ -26,7 +27,7 @@ need `gh`, authenticated.
 | Skill | What it does | Where |
 |---|---|---|
 | `review-pr` | Reviews a pull request and stages inline comments as a **pending** review — visible only to you until you submit or discard on GitHub. Never submits. Resolves the originating ticket (Linear, Jira, GitHub issue) from the PR's title, body, or branch when one is named, and adds a spec lens that checks the diff against it. | every skill-loading harness |
-| `watch-review` | Arms a watcher that streams new direct review requests into the session, one notification per pull request, for `review-pr` to handle. Polling is a shell script (`scripts/watch_review.py`), not a model loop: an idle tick is one `gh` call and zero tokens. | **Claude Code only** — built on its Monitor tool |
+| `watch-review` | Arms a watcher that streams direct review requests into the session for `review-pr` to handle, and re-streams one when its head moves. Never surfaces a pull request someone else has approved. Polling is a shell script (`scripts/watch_review.py`), not a model loop: an idle tick is one `gh` call and zero tokens. | **Claude Code only** — built on its Monitor tool |
 | `doctor` | Diagnoses this harness's setup, read-only: whether the `<leos-agent>` block is injected and current, what else is loaded into every session (global instruction file, memories, settings, skills), and whether a local checkout passes `scripts/check.py`. Run it with `/doctor`. | every skill-loading harness |
 | `handoff` | Writes this session's context — goal, what landed, what is next, key files, decisions, gotchas — to a markdown document under `~/.leos-agent-local/handoffs/`, so a later session can pick the work up. Pointers, not contents: it names files rather than pasting them. Run it with `/handoff`. | every skill-loading harness |
 | `handon` | Loads a handoff written earlier — in this harness or a different one — and resumes from it, reporting any drift first when the directory, branch, or HEAD has moved since. Loading never consumes a handoff. Run it with `/handon <name>`. | every skill-loading harness |
@@ -36,14 +37,72 @@ The Claude-only pair live in `skills-claude/` and `commands-claude/`, listed in
 `.claude-plugin/plugin.json` and nowhere else. Hermes receives the preferences
 payload but no skills — it has no skill loader.
 
-The watcher records each reviewed pull request under `~/.leos-agent-local/`
-(override with `$LEOS_AGENT_LOCAL_PATH`), so it never surfaces the same one
-twice; `watch_review.py forget <n>` puts one back in play.
+The watcher records the **head commit** it reviewed each pull request at, under
+`~/.leos-agent-local/` (override with `$LEOS_AGENT_LOCAL_PATH`), so a pull
+request comes back when someone pushes to it and stays quiet otherwise;
+`watch_review.py forget <n>` puts one back in play at its current head. Two
+gates keep a continuous watch from being expensive: a pull request another user
+has already approved is never surfaced at all, and a new head must hold still
+for `--settle` seconds (default 120) before it is emitted, so a burst of pushes
+costs one review rather than one per commit.
 
-Handoffs live in the same place, under `handoffs/`. Nothing there is ever pruned
-automatically: `handoff.py list [--all]` shows what exists and `handoff.py rm
-<name>` is the only way one goes away. The directory is deliberately outside
-the plugin, so upgrading or reinstalling can never take state with it.
+Handoffs live in the same place, at
+`~/.leos-agent-local/handoffs/<name>.md` — a fixed path that needs no plugin
+root, so `/handon` reads one with a single `cat` rather than going looking for
+it. Nothing there is ever pruned automatically: `handoff.py list [--all]` shows
+what exists and `handoff.py rm <name>` is the only way one goes away. The
+directory is deliberately outside the plugin, so upgrading or reinstalling can
+never take state with it.
+
+## Per-machine model routing
+
+The economical tier only ever had teeth on Claude Code and Codex, because those
+are the two harnesses whose model names the payload could hardcode. Everywhere
+else, every fan-out ran at the current model — the most expensive shape the
+policy has. Which models a harness offers varies by machine and by what an IT
+department allows, so the mapping is machine-local config rather than something
+the plugin can ship:
+
+```jsonc
+// ~/.leos-agent-local/routing.json  (override the directory with $LEOS_AGENT_LOCAL_PATH)
+{
+  "cursor":   {"runner": "grok-code-fast-1", "executor": "claude-sonnet-4.6"},
+  "opencode": {"runner": "anthropic/claude-haiku-4-5"},
+  "codex":    {"runner": {"model": "gpt-5.6-luna", "effort": "low"}}
+}
+```
+
+Keys are harness names; each holds `runner` and/or `executor`, independently —
+configuring only `runner` is the common case, since it is the fan-out that
+costs. A bare string is shorthand for `{"model": ...}`. Model strings are
+free-form and never checked against a known-model list: whatever the harness
+accepts goes in verbatim. A misspelled *key*, though, is a hard error, because a
+typo that silently left a harness on the expensive model is the one failure this
+is here to prevent.
+
+**Nothing reads it at run time.** `leo-install.py` renders the result into the
+`<leos-agent>` block it already writes, so a session pays nothing to know its own
+routing — no config read, no extra turn. It costs *less* than before: each
+machine now carries only its own harness's dispatch line instead of all of them,
+which took the installed payload from 4497 bytes to 4315–4344 depending on the
+harness. `scripts/measure_context.py` prints the per-harness figure and fails if
+an unconfigured harness ever grows past the old one.
+
+Edit the file, then re-run the installer to re-render — `leo-install.py <harness>
+--check` reports "out of date" until you do, and `/leo-doctor` surfaces it.
+Installing is idempotent: same config, same version, same bytes, so a second run
+reports `unchanged`. The config is yours, never the installer's — it is never
+created, migrated, rewritten, or removed, including by `--uninstall`, and it
+lives outside the plugin so an upgrade cannot take it. `routing.py show` prints
+what is configured; with no file at all, every harness uses its shipped default
+and behaviour is exactly what it was before this existed.
+
+Delivery differs by harness only in the last mile: Claude Code gets a `model:`
+override alongside `subagent_type:` (the plugin-owned `agents/*.md` are never
+rewritten), Codex gets the models substituted into its installed profile TOMLs,
+Cursor gets its own `~/.cursor/rules/leos-agent-routing.mdc` because its rules
+come straight out of the plugin directory, and the rest get the rendered line in
+their global instruction file.
 
 ## How it works
 
@@ -54,7 +113,7 @@ gets it through its global instruction file, written by
 [`scripts/leo-install.py`](scripts/leo-install.py) into a marker block:
 
 ```
-<leos-agent version="10.3.0">
+<leos-agent version="10.4.0">
 ...the payload...
 </leos-agent>
 ```
@@ -123,7 +182,7 @@ that it is already installed and changes nothing.
 Run the installer's uninstall first, while the script is still on disk:
 
 ```bash
-python3 ~/.claude/plugins/cache/leos-agent/leos-agent/10.3.0/scripts/leo-install.py claude --uninstall
+python3 ~/.claude/plugins/cache/leos-agent/leos-agent/10.4.0/scripts/leo-install.py claude --uninstall
 ```
 
 ```bash
@@ -154,7 +213,7 @@ Then run the `install` skill in a Codex session (`$leos-agent`, then `install`),
 run the script directly:
 
 ```bash
-python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.3.0/scripts/leo-install.py codex
+python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.4.0/scripts/leo-install.py codex
 ```
 
 This writes `~/.codex/AGENTS.md` and installs two economical agents:
@@ -179,7 +238,7 @@ threads only. Re-adding an already-installed plugin is idempotent.
 **Uninstall**
 
 ```bash
-python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.3.0/scripts/leo-install.py codex --uninstall
+python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.4.0/scripts/leo-install.py codex --uninstall
 ```
 
 ```bash
@@ -295,8 +354,9 @@ Remove the `leos-agent` entry from `plugins.enabled`, and delete the clone if
 you made one. Your own `SOUL.md` content is left intact — only the block goes.
 
 **Note on model routing:** Hermes applies a single `delegation.model` to every
-child of a `delegate_task` call, so it cannot vary the model per spawn. The
-policy therefore routes all Hermes work to the current model.
+child of a `delegate_task` call, so it cannot vary the model per spawn. A
+routing config still renders a stanza for it, and the stanza says to inherit and
+say so where a per-spawn model is not available.
 
 ---
 
@@ -327,7 +387,7 @@ Pinned refs are reconciled, never silently advanced — to move to a new tag,
 install it explicitly:
 
 ```bash
-pi install git:github.com/foxhatleo/leos-agent@v10.3.0
+pi install git:github.com/foxhatleo/leos-agent@v10.4.0
 ```
 
 Re-run `/skill:install` afterwards.
@@ -542,7 +602,7 @@ claude plugin uninstall leos-agent@leos-agent && claude plugin install leos-agen
 ```
 
 or replace the cachebuster suffix in the Codex manifest with one in the form
-`10.3.0+codex.local-YYYYMMDD-HHMMSS` and re-add. Either way, plugin changes only
+`10.4.0+codex.local-YYYYMMDD-HHMMSS` and re-add. Either way, plugin changes only
 reach a **new** session or thread.
 
 `--check` exits non-zero when a file is out of date, and `--force` replaces a

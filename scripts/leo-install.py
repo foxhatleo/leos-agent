@@ -23,7 +23,14 @@ import sys
 import tempfile
 from pathlib import Path
 
-HARNESSES = ("claude", "codex", "cursor", "hermes", "pi", "opencode")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import routing  # noqa: E402  owns the harness list and the machine-local model config
+
+HARNESSES = routing.HARNESSES
+
+# The routing region inside the payload, replaced per harness at install time.
+ROUTING_OPEN = "<!-- leos-agent:routing -->"
+ROUTING_CLOSE = "<!-- /leos-agent:routing -->"
 
 OPEN_RE = re.compile(r"^<leos-agent\b[^>]*>[ \t]*$", re.MULTILINE)
 CLOSE_RE = re.compile(r"^</leos-agent>[ \t]*$", re.MULTILINE)
@@ -100,19 +107,71 @@ def read_version(root):
 		sys.exit(f"leo-install: {manifest} has no version field")
 
 
-def payload_body(root):
-	"""The canonical payload: rules/preferences.md with its frontmatter stripped."""
+def render_routing(body, harness, config):
+	"""Replace the routing region with the stanza for this machine's config.
+
+	The payload ships with a default inside the region, so an un-rendered read of
+	rules/preferences.md -- Cursor's plugin-delivered rule, a human opening the
+	file -- still says something true. Rendering only ever narrows it to the one
+	harness being installed, which is why the installed payload is smaller than
+	the file on disk rather than larger.
+	"""
+	start = body.find(ROUTING_OPEN)
+	end = body.find(ROUTING_CLOSE)
+	if start < 0 or end < start:
+		sys.exit(f"leo-install: rules/preferences.md is missing its {ROUTING_OPEN} region")
+	return body[:start] + routing.stanza(harness, config) + body[end + len(ROUTING_CLOSE):]
+
+
+def payload_body(root, harness=None, config=None):
+	"""The canonical payload: rules/preferences.md with its frontmatter stripped.
+
+	With a harness, the routing region is rendered for it; without one the region
+	keeps its shipped default, markers and all.
+	"""
 	text = (root / "rules" / "preferences.md").read_text(encoding="utf-8")
 	body = re.sub(r"(?s)\A---\n.*?\n---\n", "", text, count=1).strip()
 	if not body:
 		sys.exit("leo-install: rules/preferences.md has no body below its frontmatter")
 	if OPEN_RE.search(body) or CLOSE_RE.search(body):
 		sys.exit("leo-install: rules/preferences.md contains a <leos-agent> marker; it must not")
+	if harness:
+		body = render_routing(body, harness, config if config is not None else routing.load())
 	return body
 
 
-def build_block(root):
-	return f'<leos-agent version="{read_version(root)}">\n{payload_body(root)}\n</leos-agent>\n'
+def build_block(root, harness=None, config=None):
+	return f'<leos-agent version="{read_version(root)}">\n{payload_body(root, harness, config)}\n</leos-agent>\n'
+
+
+def render_codex_agent(text, agent_name, config):
+	"""Substitute a Codex profile's model, leaving the shipped default when unset."""
+	entry = routing.profile(config, "codex", agent_name.split("-", 1)[1])
+	if not entry:
+		return text
+	text = re.sub(r'(?m)^model = ".*"$', f'model = "{entry["model"]}"', text, count=1)
+	if entry["effort"]:
+		text = re.sub(
+			r'(?m)^model_reasoning_effort = ".*"$',
+			f'model_reasoning_effort = "{entry["effort"]}"',
+			text,
+			count=1,
+		)
+	return text
+
+
+def cursor_routing_rule(harness, config):
+	"""Cursor reads its rules straight out of the plugin, so the per-machine half
+	has to arrive as its own always-applied rule file."""
+	return (
+		"---\n"
+		"description: leos-agent model routing for this machine.\n"
+		"alwaysApply: true\n"
+		"---\n"
+		"This supersedes the model-routing dispatch line in Leo's agent operating\n"
+		"preferences:\n\n"
+		f"{routing.stanza(harness, config)}\n"
+	)
 
 
 def scan_markers(text):
@@ -283,11 +342,16 @@ def install_markdown(path, block, args, label, create=True):
 	return write_if_changed(path, inject(current, block), current, existed, crlf, args, label)
 
 
-def install_file_copy(src, dest, args, label, owned_parent=False):
-	"""Install a payload file the harness's plugin system cannot deliver itself."""
+def install_file_copy(src, dest, args, label, owned_parent=False, payload=None):
+	"""Install a payload file the harness's plugin system cannot deliver itself.
+
+	`payload` overrides the source text for files rendered from the machine's
+	routing config rather than copied verbatim.
+	"""
 	dest = dest.expanduser()
 	existed = dest.is_file()
-	payload = src.read_text(encoding="utf-8")
+	if payload is None:
+		payload = src.read_text(encoding="utf-8")
 	current = dest.read_text(encoding="utf-8") if existed else ""
 
 	# Never clobber or delete a same-named file this tool did not put there.
@@ -308,7 +372,10 @@ def install_file_copy(src, dest, args, label, owned_parent=False):
 
 
 def run(harness, root, args):
-	block = build_block(root)
+	# Read once per run: rendering has to be a pure function of (version, config)
+	# or a second install would not come back "unchanged".
+	config = routing.load()
+	block = build_block(root, harness, config)
 	home = Path.home()
 	targets = []
 
@@ -328,18 +395,31 @@ def run(harness, root, args):
 						home / ".codex" / "agents" / f"{n}.toml",
 						args,
 						l,
+						payload=render_codex_agent(
+							(root / "payload" / "codex-agents" / f"{n}.toml").read_text(encoding="utf-8"),
+							n,
+							config,
+						),
 					),
 				)
 			)
 
 	elif harness == "cursor":
+		# The payload itself arrives natively through the plugin's alwaysApply
+		# rule, which is the file in the plugin directory -- so there is nothing
+		# per-machine in it. Only the routing stanza needs installing, and only
+		# as its own rule.
+		label = "~/.cursor/rules/leos-agent-routing.mdc"
 		targets.append(
 			(
-				"cursor",
-				lambda: Result(
-					"cursor",
-					"skipped",
-					"Cursor has no on-disk global rules file; the plugin's alwaysApply rule delivers the payload natively",
+				label,
+				lambda l=label: install_file_copy(
+					None,
+					home / ".cursor" / "rules" / "leos-agent-routing.mdc",
+					args,
+					l,
+					owned_parent=False,
+					payload=cursor_routing_rule(harness, config),
 				),
 			)
 		)

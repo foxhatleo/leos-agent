@@ -52,17 +52,18 @@ Every subagent dispatch MUST name an explicit model or profile. The harness
 inherits the parent model when you say nothing, so a dispatch with no model and
 no stated reason for inheriting is a bug, not a default.
 
-- Reading, search, tests, logs, codemods, and every fan-out → **leo-runner**:
-  Haiku on Claude Code, `gpt-5.6-luna`/low on Codex.
-- An approved plan or a well-specified code change → **leo-executor**: Sonnet
-  on Claude Code, `gpt-5.6-terra`/medium on Codex.
+- Reading, search, tests, logs, codemods, and every fan-out → **leo-runner**.
+- An approved plan or a well-specified code change → **leo-executor**.
 - Investigation, debugging, adjudication, orchestration → inherit the current
   model, and say that inheriting is intended.
 
+<!-- leos-agent:routing -->
 On Claude Code pass `subagent_type: "leo-runner"` or `"leo-executor"`; on Codex
-the installed profiles carry the models. Elsewhere use the current model. Never
-upgrade a cheaper session; report when routing cannot be applied. Wide inherited
-fan-out is the policy's most expensive shape.
+the installed profiles carry the models. Elsewhere use the current model.
+<!-- /leos-agent:routing -->
+
+Never upgrade a cheaper session; report when routing cannot be applied. Wide
+inherited fan-out is the policy's most expensive shape.
 
 ## Caching
 

@@ -15,8 +15,12 @@ harness on a different day. Write for that reader.
 the caching work", "the installer is a dead end, say why". It steers this
 document and is not stored; the handoff must stand alone without it.
 
-`<plugin-root>` is the directory holding `rules/preferences.md`, from
-`$LEOS_AGENT_ROOT`, `$CLAUDE_PLUGIN_ROOT`, or `$PLUGIN_ROOT`.
+Handoffs live at `${LEOS_AGENT_LOCAL_PATH:-$HOME/.leos-agent-local}/handoffs/<name>.md`.
+That path is fixed and needs no plugin root.
+
+`<plugin-root>`, where a step below uses it, is the directory holding
+`rules/preferences.md`, from `$LEOS_AGENT_ROOT`, `$CLAUDE_PLUGIN_ROOT`,
+`$PLUGIN_ROOT`, or the parent of the directory holding this `SKILL.md`.
 
 ## Steps
 
@@ -31,6 +35,10 @@ document and is not stored; the handoff must stand alone without it.
    It prints the de-collided name on the first line and the path to write on the
    second. Use the name it printed, not the slug you asked for — it may have
    appended a suffix.
+
+   No plugin root to run it from? Do the same by hand rather than searching for
+   the script: list `${LEOS_AGENT_LOCAL_PATH:-$HOME/.leos-agent-local}/handoffs/`
+   and, if `<slug>.md` is taken, append `-2`, `-3` until it is not.
 
 2. **Gather the frontmatter facts** in one batch:
 

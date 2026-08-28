@@ -8,6 +8,7 @@ regressions remain visible without a tokenizer or network access.
 """
 
 import argparse
+import importlib.util
 import json
 import re
 import sys
@@ -19,6 +20,12 @@ ROOT = Path(__file__).resolve().parent.parent
 # the before/after output in the change that raises it.
 LIMITS = {
 	"global_policy_bytes": 4_500,
+	# What an unconfigured machine actually installs. Rendering the routing region
+	# per harness dropped this below the old whole-file figure of 4497, and it must
+	# stay there: the model config exists to save money, so it may not cost
+	# always-loaded bytes to have. A configured harness exceeds this only by the
+	# length of the model names chosen, which is bounded and deliberate.
+	"rendered_policy_bytes": 4_497,
 	"codex_implicit_skill_metadata_bytes": 600,
 	"claude_implicit_skill_metadata_bytes": 800,
 	"codex_agent_description_bytes": 550,
@@ -70,6 +77,20 @@ def agent_description(path):
 	return match.group(1)
 
 
+def rendered_policy():
+	"""The installed payload body per harness, with no routing config present.
+
+	This is what a session actually loads -- rules/preferences.md on disk keeps a
+	harness-neutral default in its routing region, and the installer narrows it to
+	one harness. Measured with the config forced empty so the number is a property
+	of the repository, not of whoever runs it.
+	"""
+	spec = importlib.util.spec_from_file_location("leo_install_measure", ROOT / "scripts" / "leo-install.py")
+	installer = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(installer)
+	return {h: byte_len(installer.payload_body(ROOT, h, {})) for h in installer.HARNESSES}
+
+
 def measurements():
 	portable = sorted((ROOT / "skills").glob("*/SKILL.md"))
 	claude_only = sorted((ROOT / "skills-claude").glob("*/SKILL.md"))
@@ -87,6 +108,7 @@ def measurements():
 		claude_agent_bytes += byte_len(field(fm, "name")) + byte_len(field(fm, "description"))
 	return {
 		"global_policy_bytes": byte_len(policy_body.strip()),
+		"rendered_policy_bytes": max(rendered_policy().values()),
 		"codex_implicit_skill_metadata_bytes": skill_metadata_bytes(portable, codex_implicit),
 		"claude_implicit_skill_metadata_bytes": skill_metadata_bytes(portable + claude_only, claude_implicit),
 		"codex_agent_description_bytes": sum(byte_len(agent_description(path)) for path in agent_paths),
@@ -108,6 +130,9 @@ def main(argv=None):
 		print("Static prompt footprint (bytes; tokens are roughly bytes / 4 for this prose)")
 		for name, value in values.items():
 			print(f"  {name:38} {value:5}  limit {LIMITS[name]:5}")
+		print("  rendered_policy_bytes is the worst case across harnesses; each one installs:")
+		for harness, value in sorted(rendered_policy().items()):
+			print(f"    {harness:38} {value:5}")
 		print("This excludes conversation history, tool output, cache effects, and subagent work.")
 
 	over = {name: (value, LIMITS[name]) for name, value in values.items() if value > LIMITS[name]}

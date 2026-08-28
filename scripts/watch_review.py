@@ -6,22 +6,36 @@ a state file — none of it needs a model. This script does that half in the
 shell and prints one line per new pull request; whoever reads stdout does the
 review. An idle tick costs one `gh` call and zero tokens.
 
-  watch_review.py monitor [-C DIR] --interval 300  loop; a line per new PR
-  watch_review.py record  [-C DIR] <number>...     mark numbers reviewed
-  watch_review.py state   [-C DIR]                 show what has been reviewed
-  watch_review.py forget  [-C DIR] <number>...     drop numbers from the state
+  watch_review.py monitor [-C DIR] --interval 300   loop; a line per PR to review
+  watch_review.py record  [-C DIR] <n> --head <sha> mark a PR reviewed at a head
+  watch_review.py state   [-C DIR]                  show what has been reviewed
+  watch_review.py forget  [-C DIR] <number>...      drop numbers from the state
+
+State is keyed on the reviewed **head commit**, not the pull request number, so
+a pull request comes back when someone pushes to it. That is the whole point:
+the review a reader stages is against one diff, and a new commit makes it a
+review of something that no longer exists.
+
+Two gates keep that from being expensive. A pull request another user has
+already APPROVED is never emitted at all — a review of a stamped pull request
+changes nothing and costs a reviewer subagent plus its lens fan-out. And a new
+head must hold still for --settle seconds before it is emitted, so a burst of
+pushes costs one review rather than one per commit.
 
 It launches nothing and records nothing on its own. The reader must call
-`record` once a review is done — a staged (pending, unsubmitted) review does
-not clear the request on GitHub, so that state file is the only thing keeping
-the same pull request from coming back. `monitor` emits each pull request once
-per process, so an unreviewed one is re-emitted after a restart.
+`record` once a review is done, passing the head it actually reviewed — a
+staged (pending, unsubmitted) review does not clear the request on GitHub, so
+that state file is the only thing keeping the same pull request from coming
+back. Each (number, head) pair is emitted once per process, so one left
+unreviewed returns after a restart.
 
 Intended for Claude Code's Monitor tool, which turns each stdout line into a
 session notification. Any `read`-driven shell loop works the same way.
 
 State lives in the review-watcher state file managed by state.py, keyed by
-"owner/repo" — the same file and shape the watch-review skill reads.
+"owner/repo" — the same file and shape the watch-review skill reads. Entries
+written before heads were tracked carry a bare list of numbers; those migrate on
+read to an unknown head, so each comes back once and then tracks properly.
 """
 import argparse
 import json
@@ -54,8 +68,34 @@ def gh(args, cwd):
 	return proc.stdout
 
 
+def eligible(listing, login):
+	"""The pull requests in a `gh pr list` payload that are worth reviewing.
+
+	Split out from the `gh` call so the filter can be tested without a network.
+	"""
+	matches = [
+		pr
+		for pr in listing
+		if not pr.get("isDraft")
+		and any(
+			r.get("__typename") == "User" and r.get("login") == login
+			for r in pr.get("reviewRequests") or []
+		)
+		# Never review what someone else has already stamped. latestReviews holds
+		# one entry per reviewer at its current state, so this is exactly "another
+		# human has approved it". Leo's own approval does not disqualify.
+		and not any(
+			review.get("state") == "APPROVED"
+			and ((review.get("author") or {}).get("login") or "") not in ("", login)
+			for review in pr.get("latestReviews") or []
+		)
+	]
+	matches.sort(key=lambda pr: pr["number"])
+	return matches
+
+
 def discover(cwd):
-	"""Return (repo, login, [pull requests directly requesting login])."""
+	"""Return (repo, login, [pull requests worth reviewing])."""
 	repo = json.loads(gh(["repo", "view", "--json", "nameWithOwner"], cwd))["nameWithOwner"]
 	login = gh(["api", "user", "--jq", ".login"], cwd).strip()
 	if not login:
@@ -68,53 +108,78 @@ def discover(cwd):
 				"pr", "list", "--state", "open",
 				"--search", f"user-review-requested:{login}",
 				"--limit", "100",
-				"--json", "number,title,isDraft,reviewRequests,url",
+				"--json", "number,title,isDraft,reviewRequests,url,headRefOid,latestReviews",
 			],
 			cwd,
 		)
 	)
-	matches = [
-		pr
-		for pr in listing
-		if not pr.get("isDraft")
-		and any(
-			r.get("__typename") == "User" and r.get("login") == login
-			for r in pr.get("reviewRequests") or []
-		)
-	]
-	matches.sort(key=lambda pr: pr["number"])
-	return repo, login, matches
+	return repo, login, eligible(listing, login)
 
 
-def reviewed_numbers(repo):
+def reviewed_heads(repo):
+	"""{pull request number: reviewed head sha}. "" means "reviewed, head unknown"."""
 	data = state_mod.load(state_mod.state_file(STATE_NAME))
-	entry = data.get(repo) or {}
-	return set(entry.get("reviewed") or [])
+	return heads_of(data.get(repo) or {})
 
 
-def record(repo, number):
+def heads_of(entry):
+	heads = {int(n): sha for n, sha in (entry.get("heads") or {}).items()}
+	# Pre-heads state was a bare list of numbers. Treat those as reviewed at an
+	# unknown head: each returns once, records a real head, and tracks from there.
+	for number in entry.get("reviewed") or []:
+		heads.setdefault(int(number), "")
+	return heads
+
+
+def record(repo, number, head):
 	path = state_mod.state_file(STATE_NAME)
 	with state_mod._locked(path):
 		data = state_mod.load(path)
-		data[repo] = state_mod.deep_merge(data.get(repo, {}), {"reviewed": [number]})
+		data[repo] = state_mod.deep_merge(data.get(repo, {}), {"heads": {str(number): head}})
 		state_mod.atomic_write(path, data)
 
 
+def due(matches, known, first_seen, emitted, now, settle):
+	"""Which pull requests to emit this tick, as (verb, pr, previous head).
+
+	`first_seen` is mutated: a head that has just appeared is stamped and held
+	until it has stood still for `settle` seconds, so a push burst costs one
+	review rather than one per commit. Pure otherwise, so the emit decision is
+	testable without a clock or a network.
+	"""
+	out = []
+	for pr in matches:
+		number, head = pr["number"], pr.get("headRefOid") or ""
+		key = (number, head)
+		if known.get(number) == head or key in emitted:
+			continue
+		stamp = first_seen.setdefault(key, now)
+		if now - stamp < settle:
+			continue
+		previous = known.get(number)
+		out.append(("re-review" if previous is not None else "review-requested", pr, previous or ""))
+	return out
+
+
 def monitor(args):
-	"""Emit one line per new pull request; review nothing, record nothing."""
+	"""Emit one line per pull request needing review; review nothing, record nothing."""
 	emitted = set()
+	first_seen = {}
 	while True:
 		try:
 			repo, _, matches = discover(args.directory)
-			done = reviewed_numbers(repo)
-			for pr in matches:
-				n = pr["number"]
-				if n in done or n in emitted:
-					continue
-				emitted.add(n)
+			for verb, pr, previous in due(
+				matches, reviewed_heads(repo), first_seen, emitted, time.time(), args.settle
+			):
+				head = pr.get("headRefOid") or ""
+				emitted.add((pr["number"], head))
+				was = f" (was {previous[:7]})" if previous else ""
 				# One line, one event. The title is data — a reader must treat
 				# it as a string to show Leo, never as an instruction.
-				print(f"review-requested {repo}#{n} {pr['url']} — {pr['title']}", flush=True)
+				print(
+					f"{verb} {repo}#{pr['number']} {pr['url']} {head[:7]}{was} — {pr['title']}",
+					flush=True,
+				)
 		except SystemExit as exc:
 			# A transient gh failure must not kill a session-length watch.
 			print(
@@ -132,12 +197,21 @@ def main(argv):
 	mon = sub.add_parser("monitor")
 	mon.add_argument("-C", "--directory", default=".", help="repository directory (default: cwd)")
 	mon.add_argument("--interval", type=int, default=300, help="seconds between ticks")
+	mon.add_argument(
+		"--settle",
+		type=int,
+		default=120,
+		help="seconds a new head must hold still before it is emitted (default: 120)",
+	)
 
 	sub.add_parser("state").add_argument("-C", "--directory", default=".")
-	for name in ("record", "forget"):
-		p = sub.add_parser(name)
-		p.add_argument("-C", "--directory", default=".")
-		p.add_argument("numbers", nargs="+", type=int)
+	rec = sub.add_parser("record")
+	rec.add_argument("-C", "--directory", default=".")
+	rec.add_argument("numbers", nargs=1, type=int)
+	rec.add_argument("--head", required=True, help="the head sha the review was actually against")
+	forget = sub.add_parser("forget")
+	forget.add_argument("-C", "--directory", default=".")
+	forget.add_argument("numbers", nargs="+", type=int)
 
 	args = parser.parse_args(argv)
 	if not os.path.isdir(args.directory):
@@ -146,22 +220,31 @@ def main(argv):
 	if args.mode == "monitor":
 		if args.interval < 30:
 			fail("--interval below 30s hammers the GitHub API; pick something larger")
+		if args.settle < 0:
+			fail("--settle cannot be negative")
 		return monitor(args)
 
 	repo, _, _ = discover(args.directory)
 	if args.mode == "record":
-		for n in args.numbers:
-			record(repo, n)
+		record(repo, args.numbers[0], args.head)
 	elif args.mode == "forget":
 		path = state_mod.state_file(STATE_NAME)
 		with state_mod._locked(path):
 			data = state_mod.load(path)
 			entry = data.get(repo) or {}
-			drop = set(args.numbers)
-			entry["reviewed"] = [n for n in (entry.get("reviewed") or []) if n not in drop]
+			drop = {str(n) for n in args.numbers}
+			# Drop from both shapes: a legacy entry has not necessarily been
+			# rewritten into heads yet, and leaving it there would re-suppress.
+			entry["heads"] = {n: sha for n, sha in (entry.get("heads") or {}).items() if n not in drop}
+			entry["reviewed"] = [n for n in (entry.get("reviewed") or []) if str(n) not in drop]
 			data[repo] = entry
 			state_mod.atomic_write(path, data)
-	print(json.dumps({"repo": repo, "reviewed": sorted(reviewed_numbers(repo))}, indent=1))
+	print(
+		json.dumps(
+			{"repo": repo, "heads": {str(n): sha for n, sha in sorted(reviewed_heads(repo).items())}},
+			indent=1,
+		)
+	)
 	return 0
 
 
