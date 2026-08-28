@@ -15,7 +15,7 @@ go hunting for the script.
 
 `<plugin-root>`, where a step below uses it, is the directory holding
 `rules/preferences.md`, from `$LEOS_AGENT_ROOT`, `$CLAUDE_PLUGIN_ROOT`,
-`$PLUGIN_ROOT`, or the parent of the directory holding this `SKILL.md`. None of
+`$PLUGIN_ROOT`, or the nearest ancestor of this file that contains it. None of
 those being set costs you prefix matching and a nicer listing, nothing more.
 
 ## Steps

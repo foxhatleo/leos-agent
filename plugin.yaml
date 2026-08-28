@@ -1,7 +1,7 @@
 manifest_version: 2
 api_version: 1
 name: leos-agent
-version: 10.4.0
+version: 10.4.2
 description: >-
   Leo's portable agent operating policy: orchestrator main thread,
   subagent-first execution, cost-tiered model routing.

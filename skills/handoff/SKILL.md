@@ -20,7 +20,7 @@ That path is fixed and needs no plugin root.
 
 `<plugin-root>`, where a step below uses it, is the directory holding
 `rules/preferences.md`, from `$LEOS_AGENT_ROOT`, `$CLAUDE_PLUGIN_ROOT`,
-`$PLUGIN_ROOT`, or the parent of the directory holding this `SKILL.md`.
+`$PLUGIN_ROOT`, or the nearest ancestor of this file that contains it.
 
 ## Steps
 

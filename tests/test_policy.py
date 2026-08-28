@@ -67,6 +67,42 @@ class TestInvocationPolicy(unittest.TestCase):
                 self.assertFalse(path.exists())
 
 
+class TestPluginRootConvention(unittest.TestCase):
+    """Every skill resolves the plugin root; none builds a path from the env var.
+
+    `${CLAUDE_PLUGIN_ROOT}` is a *hook* substitution (hooks/README.md) — the
+    harness expands it in a hook command string. It is not exported to every
+    tool a skill drives: a subagent does not inherit it, and neither does a
+    process handed to Claude Code's Monitor tool. A skill that hardcodes it into
+    a command ships one that runs `python3 /scripts/….py`, and a model that
+    tries to expand it itself has nothing to expand it from but the directory
+    the SKILL.md was read out of -- which is never the plugin root.
+    """
+
+    DIRS = ("skills", "skills-claude", "commands", "commands-claude")
+
+    def docs(self):
+        for name in self.DIRS:
+            yield from sorted((ROOT / name).rglob("*.md"))
+
+    def test_the_env_var_is_never_used_as_a_path_prefix(self):
+        # Naming $CLAUDE_PLUGIN_ROOT in a resolution sentence is fine and
+        # expected; building a path out of it is the bug.
+        for path in self.docs():
+            with self.subTest(doc=path.relative_to(ROOT).as_posix()):
+                self.assertIsNone(
+                    re.search(r"CLAUDE_PLUGIN_ROOT\}?/", path.read_text(encoding="utf-8")),
+                    "use <plugin-root>/scripts/… and resolve it first",
+                )
+
+    def test_every_script_invocation_uses_the_placeholder(self):
+        for path in self.docs():
+            text = path.read_text(encoding="utf-8")
+            for prefix in re.findall(r"(?m)^\s*python3\s+\"?(\S+)/scripts/\S+\.py", text):
+                with self.subTest(doc=path.relative_to(ROOT).as_posix(), prefix=prefix):
+                    self.assertEqual(prefix.lstrip('"'), "<plugin-root>")
+
+
 class TestStaticPromptBudget(unittest.TestCase):
     def test_committed_context_ceilings(self):
         result = subprocess.run(

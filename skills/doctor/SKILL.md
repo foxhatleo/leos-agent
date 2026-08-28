@@ -15,8 +15,8 @@ on other versions; that is their business.
 ## 1. Injection and install
 
 Locate the plugin root (the directory holding `rules/preferences.md`):
-`$LEOS_AGENT_ROOT`, `$CLAUDE_PLUGIN_ROOT`, `$PLUGIN_ROOT`, or the parent of the
-directory holding this file. Then:
+`$LEOS_AGENT_ROOT`, `$CLAUDE_PLUGIN_ROOT`, `$PLUGIN_ROOT`, or the nearest
+ancestor of this file that contains it. Then:
 
 ```
 python3 <plugin-root>/scripts/leo-install.py <harness> --check
