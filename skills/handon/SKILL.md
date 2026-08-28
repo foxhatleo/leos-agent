@@ -9,24 +9,41 @@ argument-hint: "[name]"
 Loads a document a previous session wrote with `/handoff`, possibly in another
 harness, and makes it this session's starting context.
 
-`<plugin-root>` is the directory holding `rules/preferences.md`, from
-`$LEOS_AGENT_ROOT`, `$CLAUDE_PLUGIN_ROOT`, or `$PLUGIN_ROOT`.
+Handoffs live at `${LEOS_AGENT_LOCAL_PATH:-$HOME/.leos-agent-local}/handoffs/<name>.md`.
+That path is fixed and needs no plugin root: never glob for a handoff, and never
+go hunting for the script.
+
+`<plugin-root>`, where a step below uses it, is the directory holding
+`rules/preferences.md`, from `$LEOS_AGENT_ROOT`, `$CLAUDE_PLUGIN_ROOT`,
+`$PLUGIN_ROOT`, or the parent of the directory holding this `SKILL.md`. None of
+those being set costs you prefix matching and a nicer listing, nothing more.
 
 ## Steps
 
-1. **Resolve the name.** `$ARGUMENTS` is the handoff name; a unique prefix works.
+1. **Read it.** `$ARGUMENTS` is the handoff name. With a name in hand this is one
+   command — no resolution step, no script:
+
+   ```bash
+   cat "${LEOS_AGENT_LOCAL_PATH:-$HOME/.leos-agent-local}/handoffs/<name>.md"
+   ```
+
+   If that misses, the name was a prefix or a guess; `path` resolves a unique
+   prefix to the real file:
 
    ```bash
    python3 "<plugin-root>/scripts/handoff.py" path <name>
    ```
 
-   With no argument, or when the script reports the name is ambiguous or
-   missing, run `handoff.py list` (add `--all` to reach handoffs from other
-   directories) and **ask Leo which one**. Never pick for him, and never invent a
-   name — a wrong handoff is worse than none, because it reads as authoritative.
+   With no argument, or when the name is ambiguous or missing, list what exists
+   and **ask Leo which one**. Never pick for him, and never invent a name — a
+   wrong handoff is worse than none, because it reads as authoritative.
 
-2. **Read the file**, then **compare its frontmatter to reality** before trusting
-   any of it:
+   ```bash
+   python3 "<plugin-root>/scripts/handoff.py" list          # age, repo, title
+   ls -t "${LEOS_AGENT_LOCAL_PATH:-$HOME/.leos-agent-local}/handoffs/"   # if that is unavailable
+   ```
+
+2. **Compare its frontmatter to reality** before trusting any of it:
 
    ```bash
    pwd; git rev-parse --abbrev-ref HEAD; git rev-parse --short HEAD

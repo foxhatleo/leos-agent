@@ -18,7 +18,8 @@ it. Files land at <root>/handoffs/<name>.md.
 
 Nothing is ever pruned automatically; `rm` is the only way a handoff goes away.
 `list` shows only handoffs written in or under the current directory unless
---all is passed. Exit codes: 0 ok, non-zero on error.
+--all is passed; when that leaves nothing it falls back to showing all of them
+rather than sending the caller away to re-run. Exit codes: 0 ok, non-zero on error.
 """
 import datetime as dt
 import os
@@ -145,20 +146,32 @@ def cmd_list(argv):
         except (IndexError, ValueError):
             sys.exit("handoff: --limit needs a number")
     here = os.path.realpath(os.getcwd())
-    rows = []
-    for name, path, meta, _ in entries():
-        cwd = os.path.realpath(meta.get("cwd", "")) if meta.get("cwd") else ""
-        if not show_all and cwd:
-            related = here == cwd or here.startswith(cwd + os.sep) or cwd.startswith(here + os.sep)
-            if not related:
-                continue
-        rows.append((name, age_of(meta.get("created", "")), meta.get("repo", meta.get("cwd", "?")), title_of(path)))
-        if len(rows) >= limit:
-            break
+
+    def collect(unfiltered):
+        rows = []
+        for name, path, meta, _ in entries():
+            cwd = os.path.realpath(meta.get("cwd", "")) if meta.get("cwd") else ""
+            if not unfiltered and cwd:
+                related = here == cwd or here.startswith(cwd + os.sep) or cwd.startswith(here + os.sep)
+                if not related:
+                    continue
+            rows.append((name, age_of(meta.get("created", "")), meta.get("repo", meta.get("cwd", "?")), title_of(path)))
+            if len(rows) >= limit:
+                break
+        return rows
+
+    rows = collect(show_all)
+    note = ""
+    if not rows and not show_all:
+        # Falling back beats printing "try --all": the caller is usually a model
+        # one round trip from giving up and searching the filesystem instead.
+        rows = collect(True)
+        note = "none written in or under this directory; showing all"
     if not rows:
-        scope = "" if show_all else " for this directory (try --all)"
-        print(f"no handoffs{scope}")
+        print("no handoffs")
         return
+    if note:
+        print(note)
     width = max(len(row[0]) for row in rows)
     for name, age, repo, title in rows:
         print(f"{name.ljust(width)}  {age.rjust(4)}  {repo}  {title}")

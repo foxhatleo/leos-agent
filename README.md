@@ -40,10 +40,13 @@ The watcher records each reviewed pull request under `~/.leos-agent-local/`
 (override with `$LEOS_AGENT_LOCAL_PATH`), so it never surfaces the same one
 twice; `watch_review.py forget <n>` puts one back in play.
 
-Handoffs live in the same place, under `handoffs/`. Nothing there is ever pruned
-automatically: `handoff.py list [--all]` shows what exists and `handoff.py rm
-<name>` is the only way one goes away. The directory is deliberately outside
-the plugin, so upgrading or reinstalling can never take state with it.
+Handoffs live in the same place, at
+`~/.leos-agent-local/handoffs/<name>.md` — a fixed path that needs no plugin
+root, so `/handon` reads one with a single `cat` rather than going looking for
+it. Nothing there is ever pruned automatically: `handoff.py list [--all]` shows
+what exists and `handoff.py rm <name>` is the only way one goes away. The
+directory is deliberately outside the plugin, so upgrading or reinstalling can
+never take state with it.
 
 ## How it works
 
