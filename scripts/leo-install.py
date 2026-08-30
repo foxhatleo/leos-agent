@@ -46,7 +46,7 @@ PROVENANCE = "leos-agent"
 # OpenCode plugins cannot register skills or commands from JS, so these are
 # copied to disk instead. check.py asserts every file they name carries
 # PROVENANCE, without which the installer would refuse to upgrade its own copy.
-OPENCODE_SKILLS = ("doctor", "review-pr", "handoff", "handon")
+OPENCODE_SKILLS = ("doctor", "review-pr", "handoff", "handon", "tune-routing")
 OPENCODE_COMMANDS = ("review-pr", "handoff", "handon")
 
 # Codex plugins cannot package custom agent definitions directly, so these are

@@ -1,6 +1,6 @@
 {
   "name": "leos-agent",
-  "version": "10.4.2",
+  "version": "10.5.0",
   "description": "Leo's portable agent operating policy: orchestrator main thread, subagent-first execution, cost-tiered model routing.",
   "type": "module",
   "main": "index.js",
