@@ -22,14 +22,37 @@ the head commit that was reviewed, so a push brings the pull request back. The
 review you stage is against one diff, and a new commit makes it a review of
 something that no longer exists.
 
-`${CLAUDE_PLUGIN_ROOT}` below is exported for you — expand it in the shell.
+`<plugin-root>` is an absolute path you resolve before running anything: the
+directory holding `rules/preferences.md`, from `$LEOS_AGENT_ROOT`,
+`$CLAUDE_PLUGIN_ROOT`, `$PLUGIN_ROOT`, or the nearest ancestor of this file that
+contains it. Substitute the resolved path into every command below — a command
+still carrying `<plugin-root>`, or an unexpanded `${CLAUDE_PLUGIN_ROOT}` (a hook
+substitution, not something every tool inherits), runs against `/scripts/…` and
+fails. If none of the three resolve, say so rather than guessing a path from
+where this file lives. The script is at the plugin root's `scripts/`, a sibling
+of `skills-claude/` — never inside this skill's own directory.
 
 ## Arm it
 
-Call **Monitor** with `persistent: true` and a specific `description`:
+First prove the path, in one read-only call:
+
+```bash
+python3 "<plugin-root>/scripts/watch_review.py" state -C <repo>
+```
+
+On exit 0 it prints the reviewed head per pull request, which proves the whole
+chain a tick depends on: the interpreter, the resolved path, `-C <repo>`, and
+`gh` being installed, authed and able to resolve the repo. Any non-zero exit
+names what is missing — fix that before arming. Do this every time: Monitor is
+fire-and-forget, so getting it wrong means telling Leo the watcher is armed when
+it died on tick one.
+
+Only then call **Monitor** with `persistent: true` and a specific
+`description`, with the resolved absolute path substituted in — never a
+placeholder, never a `$VAR`:
 
 ```
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/watch_review.py" monitor -C <repo> --interval 300
+python3 "<plugin-root>/scripts/watch_review.py" monitor -C <repo> --interval 300
 ```
 
 `--interval` is seconds between ticks; below 30 the script refuses, to stay
@@ -62,7 +85,7 @@ re-review owner/repo#27532 https://github.com/… def5678 (was abc1234) — Fix 
 2. **Only after the review completes**, record it against the head it reviewed:
 
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/watch_review.py" record -C <repo> <N> --head <sha>
+   python3 "<plugin-root>/scripts/watch_review.py" record -C <repo> <N> --head <sha>
    ```
 
    The sha is the one the review actually anchored to, from review-pr's own
@@ -89,8 +112,8 @@ back after the watcher restarts.
 ## Inspect and reset
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/watch_review.py" state -C <repo>
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/watch_review.py" forget -C <repo> 27532
+python3 "<plugin-root>/scripts/watch_review.py" state -C <repo>
+python3 "<plugin-root>/scripts/watch_review.py" forget -C <repo> 27532
 ```
 
 `state` prints the reviewed head per pull request. `forget` drops entries so the

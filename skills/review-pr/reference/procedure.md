@@ -107,7 +107,7 @@ Two kinds of prior review state, handled differently:
 it carries the script's own marker (it embeds one in everything it stages):
 
 ```
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ghreview.py" clear-pending -R OWNER/REPO -n N
+python3 "<plugin-root>/scripts/ghreview.py" clear-pending -R OWNER/REPO -n N
 ```
 
 If it exits 0, note what was deleted in the final report. If it exits 3, it
@@ -120,7 +120,7 @@ stage step, `--replace-pending --force`) once he confirms. Still pass
 **Posted (submitted) review threads of mine** — fetch them:
 
 ```
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ghreview.py" threads -R OWNER/REPO -n N
+python3 "<plugin-root>/scripts/ghreview.py" threads -R OWNER/REPO -n N
 ```
 
 Returns unresolved threads whose root comment is mine (threads from pending
@@ -147,7 +147,7 @@ adjudication is complete.
 ## Step 2 — Map the diff and pick a route
 
 ```
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ghreview.py" map -R OWNER/REPO -n N
+python3 "<plugin-root>/scripts/ghreview.py" map -R OWNER/REPO -n N
 ```
 
 Returns per-file addressable-line ranges, `generated` flags (lockfiles, dist,
@@ -260,7 +260,7 @@ resolutions are public and go last, only once staging has succeeded):
    (`{"comments": [{path, line, side, body, start_line?, start_side?}]}`), then:
 
    ```
-   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ghreview.py" stage -R OWNER/REPO -n N \
+   python3 "<plugin-root>/scripts/ghreview.py" stage -R OWNER/REPO -n N \
      --commit <headRefOid> --input comments.json --replace-pending
    ```
 
@@ -281,7 +281,7 @@ resolutions are public and go last, only once staging has succeeded):
    scratchpad file:
 
    ```
-   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ghreview.py" reply -R OWNER/REPO -n N \
+   python3 "<plugin-root>/scripts/ghreview.py" reply -R OWNER/REPO -n N \
      --thread-id PRRT_… --body-file reply.txt
    ```
 
@@ -292,7 +292,7 @@ resolutions are public and go last, only once staging has succeeded):
 3. **Resolve stale threads** — one call per Step 1 resolve action:
 
    ```
-   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ghreview.py" resolve-thread -R OWNER/REPO -n N \
+   python3 "<plugin-root>/scripts/ghreview.py" resolve-thread -R OWNER/REPO -n N \
      --thread-id PRRT_…
    ```
 

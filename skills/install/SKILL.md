@@ -24,7 +24,7 @@ that harness's business.
 
 2. **Locate the plugin root**, the directory holding `rules/preferences.md`. In
    order of preference: `$LEOS_AGENT_ROOT`, `$CLAUDE_PLUGIN_ROOT`,
-   `$PLUGIN_ROOT`, or the parent of the directory holding this `SKILL.md`. The
+   `$PLUGIN_ROOT`, or the nearest ancestor of this file that contains it. The
    script finds it on its own in most cases, so a bare path usually works.
 
 3. **Run the installer**, substituting your harness:
