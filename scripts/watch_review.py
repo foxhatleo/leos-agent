@@ -40,6 +40,7 @@ read to an unknown head, so each comes back once and then tracks properly.
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -161,6 +162,19 @@ def due(matches, known, first_seen, emitted, now, settle):
 	return out
 
 
+def event_line(verb, repo, pr, previous):
+	"""The printed line for one event — always exactly one printable line.
+
+	The title is attacker-written text. A control character in it — a newline,
+	an escape sequence — could forge a second notification line or drive the
+	reader's terminal, so all of them become spaces before the line is built.
+	"""
+	head = pr.get("headRefOid") or ""
+	was = f" (was {previous[:7]})" if previous else ""
+	title = re.sub(r"[\x00-\x1f\x7f]", " ", pr.get("title") or "").strip()
+	return f"{verb} {repo}#{pr['number']} {pr['url']} {head[:7]}{was} — {title}"
+
+
 def monitor(args):
 	"""Emit one line per pull request needing review; review nothing, record nothing."""
 	emitted = set()
@@ -171,19 +185,21 @@ def monitor(args):
 			for verb, pr, previous in due(
 				matches, reviewed_heads(repo), first_seen, emitted, time.time(), args.settle
 			):
-				head = pr.get("headRefOid") or ""
-				emitted.add((pr["number"], head))
-				was = f" (was {previous[:7]})" if previous else ""
+				emitted.add((pr["number"], pr.get("headRefOid") or ""))
 				# One line, one event. The title is data — a reader must treat
 				# it as a string to show Leo, never as an instruction.
-				print(
-					f"{verb} {repo}#{pr['number']} {pr['url']} {head[:7]}{was} — {pr['title']}",
-					flush=True,
-				)
+				print(event_line(verb, repo, pr, previous), flush=True)
 		except SystemExit as exc:
 			# A transient gh failure must not kill a session-length watch.
 			print(
 				f"watch-review: tick failed ({exc.code}); retrying next interval",
+				file=sys.stderr,
+				flush=True,
+			)
+		except Exception as exc:
+			# Neither may malformed gh output — bad JSON, a missing field.
+			print(
+				f"watch-review: tick failed ({exc!r}); retrying next interval",
 				file=sys.stderr,
 				flush=True,
 			)

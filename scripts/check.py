@@ -210,9 +210,31 @@ def main():
 			len(rendered.encode("utf-8")) < len(prefs_body.encode("utf-8")),
 			f"routing: {harness}'s rendered payload is not smaller than the unrendered file",
 		)
+	# The rule is only ever installed when cursor routing is configured, so the
+	# provenance requirement is checked on a configured render.
+	configured_cursor = {"cursor": {"runner": {"model": "example-model", "effort": None}}}
 	check(
-		installer.PROVENANCE in installer.cursor_routing_rule("cursor", {}),
+		installer.PROVENANCE in installer.cursor_routing_rule("cursor", configured_cursor),
 		f"routing: the Cursor rule must contain {installer.PROVENANCE!r} so the installer recognises its own copy",
+	)
+
+	# 5c. Plugin-root references. Skill and command text points at plugin files
+	# through the <plugin-root> placeholder, and the OpenCode installer bakes the
+	# absolute root into its copies — so every referenced path must actually
+	# exist, or an install ships a command that can only fail.
+	for base in ("skills", "skills-claude", "commands", "commands-claude"):
+		for doc in sorted((ROOT / base).rglob("*.md")):
+			text = doc.read_text(encoding="utf-8")
+			for ref in sorted({r.rstrip(".") for r in re.findall(r"<plugin-root>/([\w./-]+)", text)}):
+				check((ROOT / ref).exists(), f"{doc.relative_to(ROOT)}: <plugin-root>/{ref} does not exist")
+
+	# The OpenCode copy of the install skill is renamed to leo-install by a
+	# targeted regex in the installer; if the source name ever changes, that
+	# regex would silently no-op and ship a dir/name mismatch.
+	install_fm = (ROOT / "skills" / "install" / "SKILL.md").read_text(encoding="utf-8").split("---", 2)[1]
+	check(
+		re.search(r"(?m)^name:\s*install\s*$", install_fm) is not None,
+		"skills/install/SKILL.md: frontmatter name must stay 'install' — leo-install.py's OpenCode rename keys on it",
 	)
 
 	# 5b. Invocation split: a skill is either user-invoked (and hidden from the

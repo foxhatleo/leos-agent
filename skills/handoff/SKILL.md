@@ -32,13 +32,15 @@ That path is fixed and needs no plugin root.
    python3 "<plugin-root>/scripts/handoff.py" new <slug>
    ```
 
-   It prints the de-collided name on the first line and the path to write on the
-   second. Use the name it printed, not the slug you asked for — it may have
-   appended a suffix.
+   It prints the de-collided name on the first line, the path to write on the
+   second, and the `created:` timestamp on the third. Use the name it printed,
+   not the slug you asked for — it may have appended a suffix — and copy the
+   timestamp verbatim rather than composing one.
 
    No plugin root to run it from? Do the same by hand rather than searching for
-   the script: list `${LEOS_AGENT_LOCAL_PATH:-$HOME/.leos-agent-local}/handoffs/`
-   and, if `<slug>.md` is taken, append `-2`, `-3` until it is not.
+   the script: list `${LEOS_AGENT_LOCAL_PATH:-$HOME/.leos-agent-local}/handoffs/`,
+   if `<slug>.md` is taken append `-2`, `-3` until it is not, and take the
+   timestamp from `date -u +%Y-%m-%dT%H:%M:%SZ`.
 
 2. **Gather the frontmatter facts** in one batch:
 
@@ -56,7 +58,7 @@ That path is fixed and needs no plugin root.
    ```
    ---
    name: <the name step 1 printed>
-   created: <ISO 8601 UTC>
+   created: <the timestamp step 1 printed>
    harness: claude
    repo: foxhatleo/leos-agent
    cwd: /Users/leoliang/workspace/leos-agent

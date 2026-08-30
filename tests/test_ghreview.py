@@ -96,6 +96,29 @@ class TestPendingReviewSafety(unittest.TestCase):
         self.assertIsNone(result)
         self.assertTrue(refusal["refused"])
 
+    def test_stage_refuses_more_comments_than_the_cap(self):
+        # Blast-radius backstop: even a reviewer talked past its own 15-comment
+        # cap cannot blanket a pull request. Refusal happens before any gh call.
+        import tempfile
+
+        comment = {"path": "a.py", "line": 1, "side": "RIGHT", "body": "x"}
+        payload = {"comments": [comment] * (ghreview.MAX_STAGE_COMMENTS + 1)}
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+            json.dump(payload, fh)
+            path = fh.name
+        original_gh = ghreview.gh
+        ghreview.gh = lambda *args, **kwargs: self.fail("no gh call may happen past the cap")
+        try:
+            import types
+
+            args = types.SimpleNamespace(repo="o/r", pr=4, input=path, commit="abc",
+                                         replace_pending=False, force=False, dry_run=False)
+            with self.assertRaises(SystemExit) as ctx:
+                ghreview.cmd_stage(args)
+        finally:
+            ghreview.gh = original_gh
+        self.assertEqual(ctx.exception.code, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

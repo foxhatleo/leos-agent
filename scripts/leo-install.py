@@ -43,6 +43,14 @@ CODEX_SOFT_CAP = 28 * 1024
 # copies apart from a file the user happens to have put at the same path.
 PROVENANCE = "leos-agent"
 
+# Skill and command text refers to scripts as <plugin-root>/scripts/… and the
+# model resolves the root once. OpenCode copies live apart from the scripts,
+# and OpenCode sets no resolution env var, so their copies are installed with
+# the token already replaced by this machine's absolute plugin root. Installing
+# alternately from a checkout and a cache re-bakes the root each time — last
+# install wins, and --check reports a stale root as out of date.
+PLUGIN_ROOT_TOKEN = "<plugin-root>"
+
 # OpenCode plugins cannot register skills or commands from JS, so these are
 # copied to disk instead. check.py asserts every file they name carries
 # PROVENANCE, without which the installer would refuse to upgrade its own copy.
@@ -183,16 +191,19 @@ def scan_markers(text):
 	into a permanent "two blocks" error, so fenced regions are skipped.
 	"""
 	opens, closes = [], []
-	fence = None
+	fence = None  # (char, run length) of the currently open fence
 	offset = 0
 	for line in text.splitlines(keepends=True):
 		stripped = line.lstrip()
-		marker = stripped[:3]
-		if marker in ("```", "~~~"):
-			token = marker
+		run = re.match(r"(`{3,}|~{3,})", stripped)
+		if run:
+			token = run.group(1)
 			if fence is None:
-				fence = token
-			elif fence == token:
+				fence = (token[0], len(token))
+			# CommonMark: only a run of the same character at least as long as
+			# the opener closes a fence; a shorter run is fence content, so a
+			# ``` line inside a ```` example must not end the example.
+			elif fence[0] == token[0] and len(token) >= fence[1]:
 				fence = None
 		elif fence is None:
 			if OPEN_RE.match(line.rstrip("\n")):
@@ -371,6 +382,22 @@ def install_file_copy(src, dest, args, label, owned_parent=False, payload=None):
 	return write_if_changed(dest, payload, current, existed, False, args, label)
 
 
+def opencode_payload(src, root, rename_install=False):
+	"""An OpenCode copy's content: the plugin root baked in, optionally renamed.
+
+	OpenCode reads the copies out of ~/.config/opencode, far from the scripts
+	they invoke, and sets none of the resolution env vars — so the placeholder
+	is resolved here, at install time, where the root is known for certain.
+	The install skill is additionally renamed to match the leo-install/
+	directory it is copied into, keeping directory and frontmatter in
+	agreement whichever one OpenCode keys on.
+	"""
+	text = src.read_text(encoding="utf-8").replace(PLUGIN_ROOT_TOKEN, str(root))
+	if rename_install:
+		text = re.sub(r"(?m)^name:\s*install\s*$", "name: leo-install", text, count=1)
+	return text
+
+
 def run(harness, root, args):
 	# Read once per run: rendering has to be a pure function of (version, config)
 	# or a second install would not come back "unchanged".
@@ -408,21 +435,29 @@ def run(harness, root, args):
 		# The payload itself arrives natively through the plugin's alwaysApply
 		# rule, which is the file in the plugin directory -- so there is nothing
 		# per-machine in it. Only the routing stanza needs installing, and only
-		# as its own rule.
+		# as its own rule -- and only when something is actually configured: an
+		# unconfigured rule would restate the payload's default, an always-loaded
+		# no-op that costs context on every turn.
 		label = "~/.cursor/rules/leos-agent-routing.mdc"
-		targets.append(
-			(
-				label,
-				lambda l=label: install_file_copy(
-					None,
-					home / ".cursor" / "rules" / "leos-agent-routing.mdc",
-					args,
-					l,
-					owned_parent=False,
-					payload=cursor_routing_rule(harness, config),
-				),
-			)
+		dest = home / ".cursor" / "rules" / "leos-agent-routing.mdc"
+		configured = bool(
+			routing.profile(config, "cursor", "runner") or routing.profile(config, "cursor", "executor")
 		)
+
+		def cursor_rule_target(l=label):
+			if args.uninstall or configured:
+				return install_file_copy(None, dest, args, l, payload=cursor_routing_rule(harness, config))
+			# Unconfigured install: write nothing, and take back a stale rule a
+			# previous config left behind -- but only one that is provably ours.
+			if not dest.is_file():
+				return Result(l, "skipped", "no routing configured for cursor")
+			if PROVENANCE not in dest.read_text(encoding="utf-8"):
+				return Result(l, "skipped", "no routing configured; leaving the unrelated file at this path")
+			if args.writes:
+				dest.unlink()
+			return Result(l, "removed", "no routing configured; stale rule removed")
+
+		targets.append((label, cursor_rule_target))
 
 	elif harness == "hermes":
 		# Never create SOUL.md: Hermes writes its own starter identity file on
@@ -454,6 +489,9 @@ def run(harness, root, args):
 					args,
 					skill_label,
 					owned_parent=True,
+					payload=opencode_payload(
+						root / "skills" / "install" / "SKILL.md", root, rename_install=True
+					),
 				),
 			)
 		)
@@ -474,6 +512,7 @@ def run(harness, root, args):
 							args,
 							l,
 							owned_parent=True,
+							payload=opencode_payload(s, root),
 						),
 					)
 				)
@@ -487,6 +526,7 @@ def run(harness, root, args):
 						args,
 						l,
 						owned_parent=True,
+						payload=opencode_payload(root / "skills" / n / "SKILL.md", root),
 					),
 				)
 			)
@@ -500,6 +540,7 @@ def run(harness, root, args):
 						cfg / "commands" / f"{n}.md",
 						args,
 						l,
+						payload=opencode_payload(root / "commands" / f"{n}.md", root),
 					),
 				)
 			)

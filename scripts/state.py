@@ -43,13 +43,16 @@ def state_file(name):
     if "/" in name or "\\" in name or ".." in name or os.path.isabs(name):
         sys.exit(f"state: {name!r} is not a valid state name (no slashes, no .., not absolute)")
     root = _data_root()
-    os.makedirs(root, exist_ok=True)
+    # 0700: the root holds handoffs and per-repo state — project context that
+    # is nobody else's business on a shared machine. Applies on creation only;
+    # an existing directory keeps whatever Leo set on it.
+    os.makedirs(root, mode=0o700, exist_ok=True)
     return os.path.join(root, f"{name}.json")
 
 
 @contextlib.contextmanager
 def _locked(path):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
     fd = os.open(path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
@@ -88,12 +91,14 @@ def deep_merge(base, patch):
 
 
 def atomic_write(path, data):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as fh:
             json.dump(data, fh, indent=1, sort_keys=True)
             fh.write("\n")
+            fh.flush()
+            os.fsync(fh.fileno())
         os.replace(tmp, path)
     except BaseException:
         os.unlink(tmp)

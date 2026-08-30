@@ -33,8 +33,13 @@ SLUG = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
 
 
 def handoff_dir():
-    path = os.path.join(_data_root(), "handoffs")
-    os.makedirs(path, exist_ok=True)
+    # 0700 on creation, matching state.py: handoffs carry project context that
+    # is nobody else's business on a shared machine. The root is created first
+    # so it gets the mode too — makedirs applies mode to the leaf only.
+    root = _data_root()
+    os.makedirs(root, mode=0o700, exist_ok=True)
+    path = os.path.join(root, "handoffs")
+    os.makedirs(path, mode=0o700, exist_ok=True)
     return path
 
 
@@ -61,15 +66,17 @@ def frontmatter(path):
 
 
 def title_of(path):
+    """The first `# ` heading — after the frontmatter when there is one, from
+    the top of the file when there is not."""
     try:
         with open(path) as fh:
-            seen_open = False
-            for line in fh:
-                if line.strip() == "---":
-                    if seen_open:
+            first = fh.readline()
+            if first.strip() == "---":
+                for line in fh:
+                    if line.strip() == "---":
                         break
-                    seen_open = True
-                    continue
+            elif first.startswith("# "):
+                return first[2:].strip()
             for line in fh:
                 if line.startswith("# "):
                     return line[2:].strip()
@@ -129,6 +136,9 @@ def cmd_new(argv):
         suffix += 1
     print(name)
     print(file_for(name))
+    # The `created:` value, ready to copy verbatim — a model asked to invent
+    # "now" gets it wrong often enough to matter.
+    print(dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
 
 def cmd_path(argv):

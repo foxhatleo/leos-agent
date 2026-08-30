@@ -16,7 +16,10 @@ on other versions; that is their business.
 
 Locate the plugin root (the directory holding `rules/preferences.md`):
 `$LEOS_AGENT_ROOT`, `$CLAUDE_PLUGIN_ROOT`, `$PLUGIN_ROOT`, or the nearest
-ancestor of this file that contains it. Then:
+ancestor of this file that contains it. Confirm
+`<plugin-root>/scripts/leo-install.py` actually exists at the resolved root
+before running anything — a root that resolves but holds no `scripts/` is
+itself a finding (a stale env var, or a copy separated from its plugin). Then:
 
 ```
 python3 <plugin-root>/scripts/leo-install.py <harness> --check
@@ -43,14 +46,19 @@ Then confirm by hand, since `--check` only sees disk, not what got loaded:
   version="...">` block, with the version matching `package.json` in the plugin
   root.
 - Confirm the plugin's skills and commands are actually registered in this
-  session — `install` and `doctor` should both be listed. If they are not, the
+  session — `install` and `doctor` should both be listed (on OpenCode the
+  installed copy is named `leo-install`, not `install`). If they are not, the
   plugin is on disk but not loaded.
+- On OpenCode only: the copied skills under `~/.config/opencode/skills/` are
+  installed with the plugin root baked in as an absolute path. Spot-check one —
+  the path it names must still exist on disk; a dead path means the plugin
+  cache moved and `/leo-install` needs a re-run.
 
 | Harness | Global file |
 |---|---|
 | claude | `~/.claude/CLAUDE.md` |
 | codex | `~/.codex/AGENTS.md` (plus `~/.codex/agents/leo-runner.toml` and `leo-executor.toml`) |
-| cursor | `~/.cursor/rules/leos-agent-routing.mdc` — the always-apply plugin rule carries the payload itself |
+| cursor | `~/.cursor/rules/leos-agent-routing.mdc`, present only when cursor routing is configured — the always-apply plugin rule carries the payload itself |
 | hermes | `~/.hermes/SOUL.md` |
 | pi | `~/.pi/agent/AGENTS.md` |
 | opencode | `~/.config/opencode/AGENTS.md` (plus copied `skills/`, `commands/`) |

@@ -48,6 +48,11 @@ SNAP_MAX_DISTANCE = 10  # beyond this from the requested line, drop instead of s
 
 MARKER = "<!-- leos-agent:review-pr -->"
 
+# The reviewer's procedure caps a review at 15 comments; this is the script's
+# own backstop well above it, so a reviewer talked past its cap by a hostile
+# diff still cannot blanket a pull request.
+MAX_STAGE_COMMENTS = 50
+
 
 def _mark(body):
     """Tag a comment body as tool-created, so clear-pending can tell it apart
@@ -462,6 +467,13 @@ def cmd_stage(a):
     if not comments:
         print(json.dumps({"staged": 0, "note": "no comments provided; nothing created"}))
         return
+    if len(comments) > MAX_STAGE_COMMENTS:
+        print(
+            f"input error: {len(comments)} comments exceeds the cap of {MAX_STAGE_COMMENTS}; "
+            "a review this wide should be narrowed, not staged",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     files = fetch_files(a.repo, a.pr)
     staged, snapped, dropped = validate_comments(comments, build_maps(files))

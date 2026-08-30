@@ -171,9 +171,11 @@ Spawn the lenses at once as **leo-runner** and with clean conversation
 contexts: `subagent_type: "leo-runner"` on Claude Code; the installed
 `leo-runner` profile on Codex, passing `fork_turns="none"`; elsewhere the
 harness's fresh-child equivalent when available. leo-runner carries no Write or
-Edit; where it does not exist, pin the lenses to the harness's read-only
-explore/search role instead — never a general-purpose agent, which carries
-Write, Edit, and unrestricted Bash. Tool scope on this turn does not propagate
+Edit — but it does carry Bash, which the lenses need to fetch their diff slice
+and which can do more than read, so the boundary is narrower than true
+read-only. Where leo-runner does not exist, pin the lenses to the harness's
+read-only explore/search role instead — never a general-purpose agent, which
+adds Write and Edit on top. Tool scope on this turn does not propagate
 to what it spawns, so the spawned role IS the lenses' tool boundary — and the
 lenses are what actually ingest the hostile diff. Where the harness enforces
 read-only only by prompt, weigh that before fanning out at all.

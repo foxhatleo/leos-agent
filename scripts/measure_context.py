@@ -30,6 +30,9 @@ LIMITS = {
 	"claude_implicit_skill_metadata_bytes": 800,
 	"codex_agent_description_bytes": 550,
 	"claude_agent_description_bytes": 550,
+	# Command descriptions are listed alongside skills in Claude Code and Cursor,
+	# so they are always-loaded context on the same terms as skill metadata.
+	"command_description_bytes": 400,
 	"review_dispatch_bytes": 3_500,
 }
 
@@ -106,6 +109,11 @@ def measurements():
 	for path in claude_agent_paths:
 		fm, _ = frontmatter(path)
 		claude_agent_bytes += byte_len(field(fm, "name")) + byte_len(field(fm, "description"))
+	command_paths = sorted((ROOT / "commands").glob("*.md")) + sorted((ROOT / "commands-claude").glob("*.md"))
+	command_bytes = 0
+	for path in command_paths:
+		fm, _ = frontmatter(path)
+		command_bytes += byte_len(field(fm, "description"))
 	return {
 		"global_policy_bytes": byte_len(policy_body.strip()),
 		"rendered_policy_bytes": max(rendered_policy().values()),
@@ -113,6 +121,7 @@ def measurements():
 		"claude_implicit_skill_metadata_bytes": skill_metadata_bytes(portable + claude_only, claude_implicit),
 		"codex_agent_description_bytes": sum(byte_len(agent_description(path)) for path in agent_paths),
 		"claude_agent_description_bytes": claude_agent_bytes,
+		"command_description_bytes": command_bytes,
 		"review_dispatch_bytes": byte_len(review_body.strip()),
 	}
 

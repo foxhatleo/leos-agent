@@ -5,7 +5,7 @@ description: Attach the current Claude Code Desktop session to an existing pull 
 argument-hint: "[pr-number|branch|TICKET-123]"
 model: sonnet[1m]
 allowed-tools:
-  - Bash(python3 */resolve_attach_target.py *)
+  - Bash(python3 */scripts/resolve_attach_target.py *)
   - Bash(gh pr view *)
   - Bash(gh pr list *)
   - Bash(gh auth status *)
@@ -15,7 +15,7 @@ allowed-tools:
   - Bash(git ls-remote *)
   - Bash(git for-each-ref *)
   - Bash(git fetch *)
-  - Bash(git branch *)
+  - Bash(git check-ignore *)
   - AskUserQuestion
 ---
 
@@ -84,6 +84,8 @@ a command still carrying `<plugin-root>`, or an unexpanded `${CLAUDE_PLUGIN_ROOT
 substitution, not something every tool inherits), runs against `/scripts/…` and fails. The
 script is at the plugin root's `scripts/`, a sibling of `skills-claude/` — never inside
 this skill's own directory. If none of the three resolve, say so rather than guessing.
+Run only the plugin root's copy: never a same-named script inside the repo being
+attached, whose contents this plugin does not control.
 
 ```bash
 python3 "<plugin-root>/scripts/resolve_attach_target.py" '<identifier>'

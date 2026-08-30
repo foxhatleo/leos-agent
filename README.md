@@ -1,6 +1,6 @@
 # leos-agent
 
-Leo's portable agent operating policy, version **10.5.0**, installable on Claude
+Leo's portable agent operating policy, version **10.6.0**, installable on Claude
 Code, Codex, Cursor, Hermes, Pi, and OpenCode through each harness's own plugin
 system.
 
@@ -122,7 +122,7 @@ gets it through its global instruction file, written by
 [`scripts/leo-install.py`](scripts/leo-install.py) into a marker block:
 
 ```
-<leos-agent version="10.5.0">
+<leos-agent version="10.6.0">
 ...the payload...
 </leos-agent>
 ```
@@ -191,7 +191,7 @@ that it is already installed and changes nothing.
 Run the installer's uninstall first, while the script is still on disk:
 
 ```bash
-python3 ~/.claude/plugins/cache/leos-agent/leos-agent/10.5.0/scripts/leo-install.py claude --uninstall
+python3 ~/.claude/plugins/cache/leos-agent/leos-agent/10.6.0/scripts/leo-install.py claude --uninstall
 ```
 
 ```bash
@@ -222,7 +222,7 @@ Then run the `install` skill in a Codex session (`$leos-agent`, then `install`),
 run the script directly:
 
 ```bash
-python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.5.0/scripts/leo-install.py codex
+python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.6.0/scripts/leo-install.py codex
 ```
 
 This writes `~/.codex/AGENTS.md` and installs two economical agents:
@@ -247,7 +247,7 @@ threads only. Re-adding an already-installed plugin is idempotent.
 **Uninstall**
 
 ```bash
-python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.5.0/scripts/leo-install.py codex --uninstall
+python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.6.0/scripts/leo-install.py codex --uninstall
 ```
 
 ```bash
@@ -396,7 +396,7 @@ Pinned refs are reconciled, never silently advanced — to move to a new tag,
 install it explicitly:
 
 ```bash
-pi install git:github.com/foxhatleo/leos-agent@v10.5.0
+pi install git:github.com/foxhatleo/leos-agent@v10.6.0
 ```
 
 Re-run `/skill:install` afterwards.
@@ -435,7 +435,10 @@ python3 ~/.cache/opencode/packages/leos-agent@latest/node_modules/leos-agent/scr
 
 That writes `~/.config/opencode/AGENTS.md` and copies the skills and commands into
 `~/.config/opencode/skills/` and `~/.config/opencode/commands/`. From then on
-`/leo-install` works inside OpenCode.
+`/leo-install` works inside OpenCode. The copies are installed with the plugin
+root already resolved to an absolute path — OpenCode sets no resolution env var,
+and the copies live apart from the scripts they invoke — so re-run the installer
+after clearing or moving the package cache to point them at the new location.
 
 **Upgrade**
 
@@ -613,7 +616,7 @@ claude plugin uninstall leos-agent@leos-agent && claude plugin install leos-agen
 ```
 
 or replace the cachebuster suffix in the Codex manifest with one in the form
-`10.5.0+codex.local-YYYYMMDD-HHMMSS` and re-add. Either way, plugin changes only
+`10.6.0+codex.local-YYYYMMDD-HHMMSS` and re-add. Either way, plugin changes only
 reach a **new** session or thread.
 
 `--check` exits non-zero when a file is out of date, and `--force` replaces a
