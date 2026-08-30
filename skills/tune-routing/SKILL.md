@@ -20,8 +20,10 @@ plugin, and never taken by an upgrade or an uninstall.
 Leo may be on a different version there, and each machine's file is its own.
 
 Locate the plugin root, the directory holding `rules/preferences.md`:
-`$LEOS_AGENT_ROOT`, `$CLAUDE_PLUGIN_ROOT`, `$PLUGIN_ROOT`, or the parent of the
-directory holding this file. Every command below is relative to it.
+`$LEOS_AGENT_ROOT`, `$CLAUDE_PLUGIN_ROOT`, `$PLUGIN_ROOT`, or the nearest
+ancestor of this file that contains it. Resolve it to a real path first — the
+env vars are hook substitutions and are not exported to every tool a skill
+drives. Every command below is relative to it.
 
 ## Steps
 

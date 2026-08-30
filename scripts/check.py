@@ -110,7 +110,9 @@ def main():
 	# 5. Skills and commands exist and carry the portable frontmatter subset.
 	skills = sorted((ROOT / "skills").glob("*/SKILL.md"))
 	check(len(skills) >= 1, "skills/: no SKILL.md found; the plugin must ship at least one skill")
-	for skill in skills:
+	# skills-claude/ ships through .claude-plugin/plugin.json on the same terms, so
+	# it is validated on the same terms -- an unguarded tree is where conventions rot.
+	for skill in skills + sorted((ROOT / "skills-claude").glob("*/SKILL.md")):
 		text = skill.read_text(encoding="utf-8")
 		check(text.startswith("---\n"), f"{skill.relative_to(ROOT)}: missing frontmatter")
 		fm = text.split("---", 2)[1] if text.count("---") >= 2 else ""
