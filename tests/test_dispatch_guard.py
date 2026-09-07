@@ -161,6 +161,24 @@ class TestDecision(GuardCase):
             with self.subTest(agent=agent):
                 self.assertEqual(self.decide(dispatch_event(agent=agent)), self.guard.ALLOW)
 
+    def test_a_namespaced_tier_is_still_a_tier(self):
+        """A plugin install namespaces the type: Claude Code dispatches
+        `leos-agent:leo-runner`, not `leo-runner`. 10.7.0 tested the bare form
+        only and shipped a guard that refused the very path its own refusal
+        message recommends -- every tier dispatch blocked on a plugin install."""
+        for agent in ("leo-runner", "leo-executor",
+                      "leos-agent:leo-runner", "leos-agent:leo-executor",
+                      "leos-agent/leo-runner"):
+            with self.subTest(agent=agent):
+                self.assertEqual(self.decide(dispatch_event(agent=agent)), self.guard.ALLOW)
+
+    def test_a_namespace_alone_does_not_make_a_tier(self):
+        """Stripping the namespace must not turn any namespaced agent into a
+        tier -- only one whose bare name really is leo-*."""
+        for agent in ("leos-agent:general-purpose", "other:Explore", "leonardo", "leos-runner"):
+            with self.subTest(agent=agent):
+                self.assertEqual(self.decide(dispatch_event(agent=agent)), self.guard.BLOCK)
+
     def test_a_harness_that_cannot_route_is_never_blocked(self):
         """The payload itself tells such a harness to inherit and say so, so a
         block there would demand something impossible."""

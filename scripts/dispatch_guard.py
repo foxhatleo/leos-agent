@@ -192,11 +192,21 @@ def routable(name):
         return False
 
 
+def _is_tier(agent):
+    try:
+        from dispatch_log import is_tier
+        return is_tier(agent)
+    except Exception:
+        # Never let a missing sibling module turn a compliant dispatch into a
+        # refusal: fall back to allowing anything that looks like a tier.
+        return bool(agent) and agent.rsplit(":", 1)[-1].startswith("leo-")
+
+
 def decide(dispatch, name, is_routable):
     """(action, reason). The entire policy, and deliberately four lines of it."""
     if dispatch is None:
         return ALLOW, "not-a-dispatch"
-    if dispatch.agent.startswith("leo-"):
+    if _is_tier(dispatch.agent):
         return ALLOW, "leo-tier"          # the agent definition carries the model
     if dispatch.model:
         return ALLOW, "explicit-model"    # a choice was typed; cheap or not
@@ -212,6 +222,7 @@ def render_block(dispatch):
         "silently inherit the parent's. Re-dispatch with one of:\n"
         '  subagent_type "leo-runner"    reading, search, tests, logs, codemods, fan-out\n'
         '  subagent_type "leo-executor"  an approved plan or a specified change\n'
+        '    (a plugin install namespaces these: "leos-agent:leo-runner")\n'
         '  model: "<name>"               investigation/debugging - naming it IS the reason\n'
         "Set LEOS_AGENT_DISPATCH_GUARD=off to disable, =warn to log only."
     ) % dispatch.agent

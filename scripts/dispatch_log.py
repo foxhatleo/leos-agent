@@ -47,6 +47,23 @@ MAX_BYTES = 1 << 20
 RECORD_VERSION = 1
 
 
+TIER_PREFIX = "leo-"
+
+
+def is_tier(agent):
+    """Is this one of the economical-tier agents?
+
+    Match the bare name after any namespace. A plugin install namespaces the
+    type -- Claude Code dispatches `leos-agent:leo-runner`, not `leo-runner` --
+    and a raw prefix test rejects that, which blocked the exact path the refusal
+    message recommends. That is the worst false positive this guard can have, so
+    the one place that decides it is shared rather than repeated.
+    """
+    if not agent:
+        return False
+    return agent.rsplit(":", 1)[-1].rsplit("/", 1)[-1].startswith(TIER_PREFIX)
+
+
 def path():
     return os.path.join(_data_root(), LOG_NAME)
 
@@ -149,7 +166,7 @@ def summarise(entries):
     tiers = collections.Counter()
     for entry in entries:
         agent = entry.get("agent") or ""
-        if agent.startswith("leo-"):
+        if is_tier(agent):
             tiers[agent] += 1
         elif entry.get("model"):
             tiers["explicit model"] += 1

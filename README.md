@@ -1,6 +1,6 @@
 # leos-agent
 
-Leo's portable agent operating policy, version **10.7.0**, installable on Claude
+Leo's portable agent operating policy, version **10.7.1**, installable on Claude
 Code, Codex, Cursor, Hermes, Pi, and OpenCode through each harness's own plugin
 system.
 
@@ -119,7 +119,7 @@ their global instruction file.
 The payload has always said that a subagent dispatch must name a model. Prose
 alone did not hold: a forgotten dispatch inherits the parent's expensive model
 and pays a cold cache write per child, which is the single most expensive shape
-this policy has. From 10.7.0 that half of the rule is enforced by a hook instead,
+this policy has. From 10.7.1 that half of the rule is enforced by a hook instead,
 and the prose it replaced came out of the always-loaded payload — enforcement in
 code costs **zero** context per turn, so the guard paid for itself in bytes
 before saving a cent.
@@ -133,6 +133,9 @@ can name one. Three ways to comply, all of them one word:
 | a generic agent, no model | `subagent_type: "leo-runner"` | reading, search, tests, logs, codemods, fan-out |
 | a generic agent, no model | `subagent_type: "leo-executor"` | an approved plan, a well-specified change |
 | a generic agent, no model | `model: "<name>"` | investigation and debugging — naming it *is* the stated reason |
+
+A plugin install namespaces the type — dispatch `leos-agent:leo-runner` rather
+than `leo-runner`; the guard accepts either.
 
 It never picks a model for you. It cannot force cheap work onto an expensive
 problem, so it cannot cause a quality regression — only an explicit choice. It
@@ -158,7 +161,7 @@ LEOS_AGENT_DISPATCH_LOG_PROMPTS=1  debug only: keep 200 chars of brief text in t
 Hermes and OpenCode are wired with the same policy but their dispatch argument
 shapes are unconfirmed; there the guard is best-effort and no-ops rather than
 misfires. Pi has no hook surface and gets nothing. **Codex hash-pins hooks**, so
-upgrading to 10.7.0 — and every later edit to the guard — needs re-approval
+upgrading to 10.7.1 — and every later edit to the guard — needs re-approval
 through `/hooks` there. Until you do, Codex silently enforces nothing; zero Codex
 rows in the report is the symptom.
 
@@ -187,7 +190,7 @@ gets it through its global instruction file, written by
 [`scripts/leo-install.py`](scripts/leo-install.py) into a marker block:
 
 ```
-<leos-agent version="10.7.0">
+<leos-agent version="10.7.1">
 ...the payload...
 </leos-agent>
 ```
@@ -256,7 +259,7 @@ that it is already installed and changes nothing.
 Run the installer's uninstall first, while the script is still on disk:
 
 ```bash
-python3 ~/.claude/plugins/cache/leos-agent/leos-agent/10.7.0/scripts/leo-install.py claude --uninstall
+python3 ~/.claude/plugins/cache/leos-agent/leos-agent/10.7.1/scripts/leo-install.py claude --uninstall
 ```
 
 ```bash
@@ -287,7 +290,7 @@ Then run the `install` skill in a Codex session (`$leos-agent`, then `install`),
 run the script directly:
 
 ```bash
-python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.7.0/scripts/leo-install.py codex
+python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.7.1/scripts/leo-install.py codex
 ```
 
 This writes `~/.codex/AGENTS.md` and installs two economical agents:
@@ -312,7 +315,7 @@ threads only. Re-adding an already-installed plugin is idempotent.
 **Uninstall**
 
 ```bash
-python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.7.0/scripts/leo-install.py codex --uninstall
+python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.7.1/scripts/leo-install.py codex --uninstall
 ```
 
 ```bash
@@ -461,7 +464,7 @@ Pinned refs are reconciled, never silently advanced — to move to a new tag,
 install it explicitly:
 
 ```bash
-pi install git:github.com/foxhatleo/leos-agent@v10.7.0
+pi install git:github.com/foxhatleo/leos-agent@v10.7.1
 ```
 
 Re-run `/skill:install` afterwards.
@@ -681,7 +684,7 @@ claude plugin uninstall leos-agent@leos-agent && claude plugin install leos-agen
 ```
 
 or replace the cachebuster suffix in the Codex manifest with one in the form
-`10.7.0+codex.local-YYYYMMDD-HHMMSS` and re-add. Either way, plugin changes only
+`10.7.1+codex.local-YYYYMMDD-HHMMSS` and re-add. Either way, plugin changes only
 reach a **new** session or thread.
 
 `--check` exits non-zero when a file is out of date, and `--force` replaces a

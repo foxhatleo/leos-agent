@@ -336,6 +336,16 @@ def scan_guard():
         return {"error": "%s: %s" % (type(exc).__name__, exc)}
 
 
+def _is_tier(agent):
+    """Shared with the guard, so the report cannot disagree with enforcement
+    about what counts as a tier -- namespaced plugin types included."""
+    try:
+        import dispatch_log
+        return dispatch_log.is_tier(agent)
+    except Exception:
+        return bool(agent) and agent.rsplit(":", 1)[-1].startswith("leo-")
+
+
 def routing_compliance(dispatches):
     """Problem (c), quantified: how many dispatches named a tier, and how many
     let the parent's model ride along."""
@@ -343,7 +353,7 @@ def routing_compliance(dispatches):
     inherited_bytes = 0
     for d in dispatches:
         agent = d.get("agent") or "-"
-        if agent.startswith("leo-"):
+        if _is_tier(agent):
             tiers[agent] += 1
         elif d.get("model"):
             tiers["explicit model"] += 1

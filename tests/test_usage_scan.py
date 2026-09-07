@@ -197,6 +197,17 @@ class TestReport(ScanCase):
         self.assertEqual(stats["tiers"]["explicit model"], 1)
         self.assertEqual(stats["inherited_share"], 0.5)
 
+    def test_namespaced_tiers_are_not_counted_as_inherited(self):
+        """The report must agree with the guard about what a tier is, or a
+        plugin install reads as 100% non-compliant while being fully compliant."""
+        stats = self.scan.routing_compliance([
+            {"agent": "leos-agent:leo-runner", "model": None, "prompt_bytes": 10},
+            {"agent": "leo-executor", "model": None, "prompt_bytes": 10},
+            {"agent": "Explore", "model": None, "prompt_bytes": 10},
+        ])
+        self.assertEqual(stats["tiers"]["inherited"], 1)
+        self.assertEqual(stats["inherited_share"], round(1 / 3, 3))
+
     def test_an_empty_window_renders_without_dividing_by_zero(self):
         with mock.patch.dict(os.environ, {"LEOS_AGENT_LOCAL_PATH": str(self.root)}), \
                 mock.patch.dict(self.scan.SOURCES, {k: str(self.root / "absent") for k in self.scan.SOURCES}):
