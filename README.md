@@ -1,6 +1,6 @@
 # leos-agent
 
-Leo's portable agent operating policy, version **10.6.0**, installable on Claude
+Leo's portable agent operating policy, version **10.7.0**, installable on Claude
 Code, Codex, Cursor, Hermes, Pi, and OpenCode through each harness's own plugin
 system.
 
@@ -30,6 +30,7 @@ The GitHub ones need `gh`, authenticated.
 | `watch-review` | Arms a watcher that streams direct review requests into the session for `review-pr` to handle, and re-streams one when its head moves. Never surfaces a pull request someone else has approved. Polling is a shell script (`scripts/watch_review.py`), not a model loop: an idle tick is one `gh` call and zero tokens. | **Claude Code only** — built on its Monitor tool |
 | `doctor` | Diagnoses this harness's setup, read-only: whether the `<leos-agent>` block is injected and current, what else is loaded into every session (global instruction file, memories, settings, skills), and whether a local checkout passes `scripts/check.py`. Run it with `/doctor`. | every skill-loading harness |
 | `tune-routing` | Picks the concrete models behind `leo-runner` and `leo-executor` on this machine, writes them to `~/.leos-agent-local/routing.json`, re-renders the install, and proves the choice with one live dispatch — model strings are never checked against a known-model list, so a typo surfaces at dispatch time and nowhere earlier. Run it with `/tune-routing`. | every skill-loading harness |
+| `review-usage` | Reads many sessions across every harness on this machine — a time window, not one session — and reports where the tokens went and how well the policy actually held: routing compliance, guard blocks and whether they were re-dispatched, over- and under-delegation, cache health. The scan is a script, not a prompt, so it costs a second rather than a model's worth of transcript reading. Run it with `/review-usage`. | every skill-loading harness |
 | `handoff` | Writes this session's context — goal, what landed, what is next, key files, decisions, gotchas — to a markdown document under `~/.leos-agent-local/handoffs/`, so a later session can pick the work up. Pointers, not contents: it names files rather than pasting them. Run it with `/handoff`. | every skill-loading harness |
 | `handon` | Loads a handoff written earlier — in this harness or a different one — and resumes from it, reporting any drift first when the directory, branch, or HEAD has moved since. Loading never consumes a handoff. Run it with `/handon <name>`. | every skill-loading harness |
 | `attach-pr` | Attaches the current desktop session to an existing pull request so the app shows its PR card. Creates nothing and pushes nothing. | **Claude Code only** — it drives that app's card |
@@ -113,6 +114,70 @@ Cursor gets its own `~/.cursor/rules/leos-agent-routing.mdc` because its rules
 come straight out of the plugin directory, and the rest get the rendered line in
 their global instruction file.
 
+## The dispatch guard
+
+The payload has always said that a subagent dispatch must name a model. Prose
+alone did not hold: a forgotten dispatch inherits the parent's expensive model
+and pays a cold cache write per child, which is the single most expensive shape
+this policy has. From 10.7.0 that half of the rule is enforced by a hook instead,
+and the prose it replaced came out of the always-loaded payload — enforcement in
+code costs **zero** context per turn, so the guard paid for itself in bytes
+before saving a cent.
+
+`scripts/dispatch_guard.py` runs before a subagent dispatch and refuses exactly
+one thing: an agent selected with a brief, **no model named**, on a harness that
+can name one. Three ways to comply, all of them one word:
+
+| Instead of | Use | For |
+|---|---|---|
+| a generic agent, no model | `subagent_type: "leo-runner"` | reading, search, tests, logs, codemods, fan-out |
+| a generic agent, no model | `subagent_type: "leo-executor"` | an approved plan, a well-specified change |
+| a generic agent, no model | `model: "<name>"` | investigation and debugging — naming it *is* the stated reason |
+
+It never picks a model for you. It cannot force cheap work onto an expensive
+problem, so it cannot cause a quality regression — only an explicit choice. It
+is also deliberately narrow: a false block costs one re-dispatch, while a caught
+inherited fan-out saves the cold prefix of every child, so the margin only holds
+while the rule refuses to make judgment calls.
+
+Detection is by **argument shape**, not tool name — only Claude Code's dispatch
+tool is verified, so an unanticipated one degrades to a no-op rather than a
+broken harness. MCP tools are never guarded. Anything that goes wrong inside the
+guard allows the call and records `decision: "error"`, kept distinct from a
+decision to allow, because a guard that dies quietly is worse than no guard.
+
+```
+LEOS_AGENT_DISPATCH_GUARD=on       block (default)
+                          warn     record, never block
+                          off      disabled entirely
+                          verbose  also put the over-delegation notice in front of the model
+LEOS_AGENT_DISPATCH_LOG_PROMPTS=1  debug only: keep 200 chars of brief text in the log
+```
+
+**Coverage is honest, not uniform.** Claude Code is verified. Codex, Cursor,
+Hermes and OpenCode are wired with the same policy but their dispatch argument
+shapes are unconfirmed; there the guard is best-effort and no-ops rather than
+misfires. Pi has no hook surface and gets nothing. **Codex hash-pins hooks**, so
+upgrading to 10.7.0 — and every later edit to the guard — needs re-approval
+through `/hooks` there. Until you do, Codex silently enforces nothing; zero Codex
+rows in the report is the symptom.
+
+### What it records
+
+`~/.leos-agent-local/dispatch.jsonl`, one line per dispatch, mode `0600`,
+rotated at 1 MiB with one generation kept — bounded at 2 MiB forever.
+
+It stores **no prompt text and no paths.** Prompts, sessions and working
+directories are truncated SHA-256. The prompt hash is what makes the report
+meaningful: a blocked brief whose hash comes back naming a tier is a block that
+worked, and one that never returns was abandoned work rather than a saving.
+Delete it whenever you like — nothing depends on its history.
+
+```bash
+python3 scripts/dispatch_log.py report
+python3 scripts/usage_scan.py --since 7d
+```
+
 ## How it works
 
 The payload lives in exactly one file: [`rules/preferences.md`](rules/preferences.md).
@@ -122,7 +187,7 @@ gets it through its global instruction file, written by
 [`scripts/leo-install.py`](scripts/leo-install.py) into a marker block:
 
 ```
-<leos-agent version="10.6.0">
+<leos-agent version="10.7.0">
 ...the payload...
 </leos-agent>
 ```
@@ -191,7 +256,7 @@ that it is already installed and changes nothing.
 Run the installer's uninstall first, while the script is still on disk:
 
 ```bash
-python3 ~/.claude/plugins/cache/leos-agent/leos-agent/10.6.0/scripts/leo-install.py claude --uninstall
+python3 ~/.claude/plugins/cache/leos-agent/leos-agent/10.7.0/scripts/leo-install.py claude --uninstall
 ```
 
 ```bash
@@ -222,7 +287,7 @@ Then run the `install` skill in a Codex session (`$leos-agent`, then `install`),
 run the script directly:
 
 ```bash
-python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.6.0/scripts/leo-install.py codex
+python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.7.0/scripts/leo-install.py codex
 ```
 
 This writes `~/.codex/AGENTS.md` and installs two economical agents:
@@ -247,7 +312,7 @@ threads only. Re-adding an already-installed plugin is idempotent.
 **Uninstall**
 
 ```bash
-python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.6.0/scripts/leo-install.py codex --uninstall
+python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.7.0/scripts/leo-install.py codex --uninstall
 ```
 
 ```bash
@@ -396,7 +461,7 @@ Pinned refs are reconciled, never silently advanced — to move to a new tag,
 install it explicitly:
 
 ```bash
-pi install git:github.com/foxhatleo/leos-agent@v10.6.0
+pi install git:github.com/foxhatleo/leos-agent@v10.7.0
 ```
 
 Re-run `/skill:install` afterwards.
@@ -616,7 +681,7 @@ claude plugin uninstall leos-agent@leos-agent && claude plugin install leos-agen
 ```
 
 or replace the cachebuster suffix in the Codex manifest with one in the form
-`10.6.0+codex.local-YYYYMMDD-HHMMSS` and re-add. Either way, plugin changes only
+`10.7.0+codex.local-YYYYMMDD-HHMMSS` and re-add. Either way, plugin changes only
 reach a **new** session or thread.
 
 `--check` exits non-zero when a file is out of date, and `--force` replaces a

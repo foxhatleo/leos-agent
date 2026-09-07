@@ -1,4 +1,11 @@
 {
   "version": 1,
-  "hooks": {}
+  "hooks": {
+    "preToolUse": [
+      {
+        "command": "python3 ./scripts/dispatch_guard.py",
+        "timeout": 10
+      }
+    ]
+  }
 }

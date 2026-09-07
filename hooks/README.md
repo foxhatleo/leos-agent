@@ -1,8 +1,22 @@
 # Hooks
 
-Both files here ship empty on purpose. v10 enforces its policy through the
-payload and the skills, not by intercepting tool calls — but the wiring is in
-place, so adding a hook is an edit rather than a plumbing exercise.
+Both files carry exactly one hook: the dispatch guard, which refuses a subagent
+dispatch that names no model. See [the README](../README.md#the-dispatch-guard).
+
+**v10 shipped these empty on purpose** — policy was enforced through the payload
+and the skills, not by intercepting tool calls. 10.7.0 reversed that for one
+narrow rule, and the reason is worth keeping: the always-loaded budget in
+`scripts/measure_context.py` had 56 bytes of headroom, so the prose could not be
+strengthened, while a hook costs nothing per turn. Moving the mechanical half of
+the routing rule into code let the prose that restated it come *out* of the
+payload. The doctrine still holds for anything a machine cannot check: judgment
+stays in `rules/preferences.md`, where a model can read it.
+
+**Hook scripts live in `scripts/`, not here.** `hooks/` was absent from
+`package.json`'s `files` until 10.7.0, so a script placed here reached nobody who
+installed from npm — and it would have failed silently, since the guard fails
+open. `scripts/check.py` now asserts every hook `command` resolves to a file
+inside a shipped directory. These JSON files are pointers.
 
 **There are two files because the harnesses disagree on the format.** Claude
 Code and Codex use PascalCase event names and no version key; Cursor uses
@@ -24,7 +38,9 @@ Cursor is the exception, and only because its file has a different name: naming
 it explicitly overrides Cursor's auto-discovery, which is what keeps Cursor from
 trying to read the PascalCase `hooks.json` it cannot parse.
 
-Hermes hooks are different again — they are Python callbacks registered from
+Hermes and OpenCode already carry the guard through their own mechanisms, and
+both call into `scripts/dispatch_guard.py` so that one policy has one
+implementation. Hermes hooks are Python callbacks registered from
 `register(ctx)` in `__init__.py` (`pre_tool_call`, `post_tool_call`,
 `on_session_start`, and so on), not JSON. OpenCode's are JavaScript hooks
 returned from the plugin factory in `index.js`. Pi's are extension event
@@ -43,7 +59,7 @@ Claude Code and Codex (`hooks.json`):
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/my-check.py",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/my-check.py\"",
             "timeout": 10
           }
         ]
@@ -65,7 +81,7 @@ Cursor (`hooks-cursor.json`) uses the same idea with its own names:
   "version": 1,
   "hooks": {
     "preToolUse": [
-      { "command": "./hooks/my-check.py", "timeout": 10 }
+      { "command": "python3 ./scripts/my-check.py", "timeout": 10 }
     ]
   }
 }

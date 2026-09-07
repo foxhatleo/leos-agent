@@ -147,6 +147,51 @@ def main():
 		check(data.get("version") == 1, "hooks/hooks-cursor.json: Cursor requires version 1")
 		check(isinstance(data.get("hooks"), dict), "hooks/hooks-cursor.json: needs a top-level `hooks` object")
 
+	# 6b. The dispatch guard must actually be wired, and reachable once shipped.
+	# A matcher is not decoration: without one the guard spawns a python3 per
+	# Read and per Grep, which costs more than the routing it enforces. And a
+	# command pointing outside package.json's `files` runs fine from a git
+	# checkout and silently does nothing for anyone who installed from npm --
+	# the failure that put this script in scripts/ rather than hooks/.
+	shipped = tuple(entry for entry in json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["files"] if not entry.startswith("!"))
+	pre = (json.loads(shared_hooks.read_text(encoding="utf-8")).get("hooks") or {}).get("PreToolUse") or []
+	check(bool(pre), "hooks/hooks.json: no PreToolUse entry (the dispatch guard is not wired)")
+	cursor_pre = (json.loads(cursor_hooks.read_text(encoding="utf-8")).get("hooks") or {}).get("preToolUse") or []
+	check(bool(cursor_pre), "hooks/hooks-cursor.json: no preToolUse entry (Cursor gets no guard)")
+	for entry in pre:
+		check(bool(entry.get("matcher")), "hooks/hooks.json: PreToolUse needs a matcher, or it spawns on every tool call")
+	commands = [h.get("command", "") for entry in pre for h in entry.get("hooks") or []]
+	commands += [entry.get("command", "") for entry in cursor_pre]
+	for timeout in [h.get("timeout") for entry in pre for h in entry.get("hooks") or []] + [e.get("timeout") for e in cursor_pre]:
+		check(timeout is not None and timeout <= 10, f"hook timeout {timeout!r} exceeds the 10s a harness will wait")
+	for command in commands:
+		match = re.search(r"(?:\$\{[A-Z_]+\}|\./)?/?((?:scripts|hooks)/[\w./-]+\.py)", command)
+		check(match is not None, f"hooks: cannot find a script path in command {command!r}")
+		if match:
+			target = match.group(1)
+			check((ROOT / target).is_file(), f"hooks: command points at {target}, which does not exist")
+			check(any(target.startswith(entry) for entry in shipped), f"hooks: {target} is outside package.json files; npm installs would not get it")
+
+	# The guard's own modules must import cleanly: a hook that cannot even load
+	# fails open on every dispatch, silently, which is the one failure mode that
+	# looks exactly like everything working.
+	for name in ("dispatch_guard", "dispatch_log", "usage_scan"):
+		path = ROOT / "scripts" / f"{name}.py"
+		check(path.is_file(), f"scripts/{name}.py is missing")
+		if path.is_file():
+			try:
+				spec = importlib.util.spec_from_file_location(f"check_{name}", path)
+				module = importlib.util.module_from_spec(spec)
+				spec.loader.exec_module(module)
+			except Exception as exc:
+				check(False, f"scripts/{name}.py does not import: {type(exc).__name__}: {exc}")
+
+	# The one sentence the payload must keep: the guard refuses a dispatch that
+	# names no model, and a model that does not know that wastes a turn finding
+	# out. Prose elsewhere may be trimmed; this line pays for itself.
+	payload_text = (ROOT / "rules" / "preferences.md").read_text(encoding="utf-8")
+	check("refused, not defaulted" in payload_text, "rules/preferences.md: lost the line telling the model a modelless dispatch is refused")
+
 	# Payload files copied by the installer must carry the provenance string, or
 	# it will mistake its own installed copy for a stranger's file and refuse to
 	# upgrade or remove it. The list is derived from the installer's own copy sets,

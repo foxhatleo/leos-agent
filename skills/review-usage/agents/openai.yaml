@@ -1,0 +1,5 @@
+interface:
+  display_name: "Review usage"
+  short_description: "Diagnose token spend and policy compliance across sessions"
+policy:
+  allow_implicit_invocation: false

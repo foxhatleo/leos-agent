@@ -1,3 +1,16 @@
 {
-  "hooks": {}
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "[Tt]ask|[Aa]gent|[Ss]ubagent|[Dd]ispatch|[Dd]elegate|[Ss]pawn",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_guard.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
 }

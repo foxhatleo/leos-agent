@@ -48,22 +48,21 @@ turns and took a third of a day's subagent spend.
 
 ## Model routing
 
-Every subagent dispatch MUST name an explicit model or profile. The harness
-inherits the parent model when you say nothing, so a dispatch with no model and
-no stated reason for inheriting is a bug, not a default.
-
 - Reading, search, tests, logs, codemods, and every fan-out → **leo-runner**.
 - An approved plan or a well-specified code change → **leo-executor**.
-- Investigation, debugging, adjudication, orchestration → inherit the current
-  model, and say that inheriting is intended.
+- Investigation, debugging, adjudication → name the inherited model outright.
+
+Floor and ceiling: a lone brief naming one file should have been inline; work
+whose every file you would not want to read should have been fanned out.
 
 <!-- leos-agent:routing -->
 On Claude Code pass `subagent_type: "leo-runner"` or `"leo-executor"`; on Codex
 the installed profiles carry the models. Elsewhere use the current model.
 <!-- /leos-agent:routing -->
 
-Never upgrade a cheaper session; report when routing cannot be applied. Wide
-inherited fan-out is the policy's most expensive shape.
+A dispatch naming no model is refused, not defaulted.
+Never upgrade a cheaper session; wide inherited fan-out is the policy's
+most expensive shape.
 
 ## Caching
 
