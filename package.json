@@ -1,6 +1,6 @@
 {
   "name": "leos-agent",
-  "version": "10.7.2",
+  "version": "11.202609070.0",
   "description": "Leo's portable agent operating policy: orchestrator main thread, subagent-first execution, cost-tiered model routing.",
   "type": "module",
   "main": "index.js",
@@ -23,6 +23,9 @@
   "pi": {
     "skills": [
       "./skills"
+    ],
+    "extensions": [
+      "./pi-extension.js"
     ]
   },
   "files": [
@@ -31,6 +34,7 @@
     "hooks/",
     "index.js",
     "payload/",
+    "pi-extension.js",
     "rules/",
     "scripts/",
     "skills-claude/",

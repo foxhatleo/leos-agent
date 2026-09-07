@@ -1,7 +1,7 @@
 ---
 name: doctor
 disable-model-invocation: true
-description: Audit Leo's agent setup in this harness — the injected leos-agent block, everything else always loaded into context, and the local plugin checkout. Read-only.
+description: Audit Leo's agent setup in this harness — whether the payload actually reached the session, everything else always loaded into context, and the local plugin checkout. Read-only.
 ---
 
 # Diagnose Leo's agent setup
@@ -19,49 +19,68 @@ Locate the plugin root (the directory holding `rules/preferences.md`):
 ancestor of this file that contains it. Confirm
 `<plugin-root>/scripts/leo-install.py` actually exists at the resolved root
 before running anything — a root that resolves but holds no `scripts/` is
-itself a finding (a stale env var, or a copy separated from its plugin). Then:
+itself a finding (a stale env var, or a copy separated from its plugin).
 
-```
-python3 <plugin-root>/scripts/leo-install.py <harness> --check
-```
+The payload is no longer rendered into a global file at install time — it is
+read live out of the plugin directory every session. Verify it actually
+arrived, not that some file was once written:
 
-Exit 0 means the `<leos-agent>` block is present and current. Non-zero means it
-is missing, stale, or the file is malformed — quote what it printed and offer
-`/leo-install`. Hermes skips until `~/.hermes/SOUL.md` exists.
+- **Claude Code and Codex**: confirm `hooks/hooks.json` declares a
+  `SessionStart` hook. Then run it exactly as the hook would:
 
-Editing the machine's routing config also makes `--check` report out of date,
-because the block is rendered from it. Show what it holds:
+  ```
+  python3 <plugin-root>/scripts/emit_payload.py </dev/null
+  ```
 
-```
-python3 <plugin-root>/scripts/routing.py show
-```
+  It must exit 0 and print non-empty output. Run it twice and diff the two —
+  they must be byte-identical. That determinism is the invariant the whole
+  design rests on: a byte that varies between runs turns a cached prompt
+  prefix into a full cache write every session, so a diff here is a real
+  finding, not a nitpick.
+- **Cursor**: unchanged from before — the always-apply rule at
+  `rules/preferences.md` is read straight from the plugin, no install step.
+- **Hermes**: `register(ctx)` calls `ctx.register_system_prompt_section` at
+  startup; confirm the section is present in this session's system prompt.
+- **Pi**: a JS extension's `before_agent_start` appends the payload; confirm
+  it shows up in this session.
+- **OpenCode**: confirm the advisory line is actually present in
+  `~/.config/opencode/opencode.json`:
 
-No config is normal — every harness then uses its shipped default, which for
-everything but Claude Code and Codex means inheriting the current model. Say so
-plainly rather than as a fault: it is the setting, not a break.
+  ```
+  "instructions": ["<abs plugin root>/rules/preferences.md"]
+  ```
 
-Then confirm by hand, since `--check` only sees disk, not what got loaded:
+  The installer never edits that file — it is JSONC with user comments — so it
+  only prints the line and reports it outstanding until someone adds it by
+  hand. Its absence is expected until Leo has done that once, not a bug.
 
-- Read the harness's global file and verify exactly one `<leos-agent
-  version="...">` block, with the version matching `package.json` in the plugin
-  root.
-- Confirm the plugin's skills and commands are actually registered in this
-  session — `install` and `doctor` should both be listed (on OpenCode the
-  installed copy is named `leo-install`, not `install`). If they are not, the
-  plugin is on disk but not loaded.
+Then check for a leftover from the old scheme — any global file an earlier
+version of this plugin wrote a `<leos-agent version="...">` block into:
+`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.hermes/SOUL.md`,
+`~/.pi/agent/AGENTS.md`, `~/.config/opencode/AGENTS.md`. These are no longer
+read for the payload — a block surviving in one is dead weight, not a source
+of truth — but if one is still there, say to run
+`python3 <plugin-root>/scripts/leo-install.py <harness>` to migrate it away.
+
+Also confirm, since none of the above proves the plugin loaded at all:
+
+- The plugin's skills and commands are actually registered in this session —
+  `install` and `doctor` should both be listed (on OpenCode the installed copy
+  is named `leo-install`, not `install`). If they are not, the plugin is on
+  disk but not loaded.
 - On OpenCode only: the copied skills under `~/.config/opencode/skills/` are
   installed with the plugin root baked in as an absolute path. Spot-check one —
   the path it names must still exist on disk; a dead path means the plugin
   cache moved and `/leo-install` needs a re-run.
 
-| Harness | Global file |
+| Harness | How the payload arrives |
 |---|---|
-| claude | `~/.claude/CLAUDE.md` |
-| codex | `~/.codex/AGENTS.md` (plus `~/.codex/agents/leo-runner.toml` and `leo-executor.toml`) |
-| cursor | `~/.cursor/rules/leos-agent-routing.mdc`, present only when cursor routing is configured — the always-apply plugin rule carries the payload itself |
-| hermes | `~/.hermes/SOUL.md` |
-| pi | `~/.pi/agent/AGENTS.md` |
-| opencode | `~/.config/opencode/AGENTS.md` (plus copied `skills/`, `commands/`) |
+| claude | `SessionStart` hook runs `emit_payload.py`; stdout becomes session context |
+| codex | same `SessionStart` hook as Claude Code |
+| cursor | `rules/preferences.md`, an always-apply rule read straight from the plugin |
+| hermes | `register(ctx)` registers a system prompt section at `after_memory` |
+| pi | a JS extension's `before_agent_start` appends the payload to the system prompt |
+| opencode | an `instructions` line in `~/.config/opencode/opencode.json`, added by hand once |
 
 ## 2. Global context
 
@@ -89,9 +108,13 @@ python3 <plugin-root>/scripts/check.py
 ```
 
 Report the failures verbatim. Also note an uncommitted or behind-upstream
-checkout, and a `package.json` version that disagrees with the installed
-block — a same-version reinstall serves the cached build, so a version match
-with different content stays invisible here.
+checkout — the payload is read live from this checkout every session, so a
+dirty or stale one is served immediately, with no version mismatch to flag it.
+
+`leo-install.py <harness> --check` still exists; it no longer covers the
+payload, but it still reports whether the remaining installed files (Codex's
+`leo-runner.toml`/`leo-executor.toml`, Cursor's routing `.mdc`, OpenCode's
+skill and command copies) are current. Run it and quote a non-zero result.
 
 ## Report
 

@@ -12,7 +12,7 @@ from pathlib import Path
 
 PLUGIN_ROOT = Path(__file__).resolve().parent
 HARNESS = "hermes"
-_GUARD = []
+_MODULES = {}
 
 
 def _run_install(*args):
@@ -28,22 +28,44 @@ def _run_install(*args):
 	return output.strip()
 
 
-def _guard():
-	"""The shared dispatch guard, loaded by path.
+def _load(name):
+	"""Import scripts/<name>.py by path, memoized per process.
 
 	scripts/ is not an importable package from here, and Hermes runs in-process,
-	so this is the one way to share exactly the logic the command hooks run.
-	Memoised: this runs before every tool call, and re-executing the module each
-	time would put a file read on the hot path of an in-process harness.
+	so this is the one way to share exactly the logic the command hooks and the
+	system-prompt section below run. Memoised: the guard runs before every tool
+	call and the payload loader runs once per session, and re-executing a module
+	from disk on either path would put a file read on the hot path of an
+	in-process harness.
 	"""
-	if not _GUARD:
-		spec = importlib.util.spec_from_file_location(
-			"leos_dispatch_guard", PLUGIN_ROOT / "scripts" / "dispatch_guard.py"
-		)
+	if name not in _MODULES:
+		spec = importlib.util.spec_from_file_location(f"leos_{name}", PLUGIN_ROOT / "scripts" / f"{name}.py")
 		module = importlib.util.module_from_spec(spec)
 		spec.loader.exec_module(module)
-		_GUARD.append(module)
-	return _GUARD[0]
+		_MODULES[name] = module
+	return _MODULES[name]
+
+
+def _guard():
+	"""The shared dispatch guard, loaded by path. See _load() for why."""
+	return _load("dispatch_guard")
+
+
+def _payload_section():
+	"""The rendered policy payload, for register_system_prompt_section.
+
+	This is the cache-safe path: Hermes renders a system-prompt section once per
+	session and freezes it, unlike pre_llm_call, which re-renders on every turn
+	and would repeatedly invalidate the prompt prefix it sits in. Must fail open
+	-- an exception raised from here, rather than an empty string returned,
+	would take the section (and possibly the session) down with it.
+	"""
+	try:
+		payload = _load("payload")
+		routing = _load("routing")
+		return payload.payload_body(PLUGIN_ROOT, HARNESS, routing.load())
+	except Exception:
+		return ""
 
 
 def _on_pre_tool_call(tool_name="", args=None, **_):
@@ -70,13 +92,19 @@ def register(ctx):
 	ctx.register_skill(PLUGIN_ROOT / "skills" / "install")
 	ctx.register_hook("pre_tool_call", _on_pre_tool_call)
 
+	# Older Hermes builds have no such API; degrade silently rather than break
+	# register() over a section the running version cannot render.
+	register_section = getattr(ctx, "register_system_prompt_section", None)
+	if register_section is not None:
+		register_section("leos-agent", _payload_section, position="after_memory")
+
 	def leo_install(args=""):
-		"""Install or update Leo's preferences in ~/.hermes/SOUL.md."""
+		"""Run Leo's installer for Hermes (--dry-run, --uninstall)."""
 		flags = [flag for flag in args.split() if flag.startswith("--")]
 		return _run_install(*flags)
 
 	ctx.register_command(
 		"leo-install",
 		leo_install,
-		description="Install Leo's global agent preferences into ~/.hermes/SOUL.md (--dry-run, --uninstall).",
+		description="Run Leo's installer for Hermes (--dry-run, --uninstall).",
 	)

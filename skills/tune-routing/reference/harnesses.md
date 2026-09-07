@@ -35,18 +35,23 @@ cheaper than these; on every other harness the baseline is the current model.
 
 ## Last mile
 
-Where the write actually lands, and what it takes to pick it up. All of it
-happens when you run `leo-install.py <harness>` in step 6 — none of it is
-something to do by hand.
+Where the choice actually lands, and what it takes to pick it up.
+
+Most of this needs no installer run at all any more. The payload is read live
+from the plugin at session start, and it renders the routing stanza as it is
+read — so for three of the six harnesses, writing the config IS the last mile
+and a fresh session is the only step left. Codex, Cursor and OpenCode still
+need `leo-install.py <harness>`, because their per-machine half lands in a
+file rather than in the payload.
 
 | Harness | Where the choice goes | To pick it up |
 |---|---|---|
-| `claude` | A `model:` parameter rendered alongside `subagent_type:` in `~/.claude/CLAUDE.md`. The plugin's `agents/*.md` are **never** rewritten. | Start a new session — the global file is read at session start. |
-| `codex` | Substituted into `~/.codex/agents/leo-runner.toml` and `leo-executor.toml`. An unset effort keeps the profile's shipped one. | Start a new thread — Codex picks up agent changes on new threads only. |
-| `cursor` | `~/.cursor/rules/leos-agent-routing.mdc`, its own always-apply rule. Cursor reads the payload straight out of the plugin, so this file is the only per-machine half. | Reload the window. |
-| `hermes` | The rendered line in `~/.hermes/SOUL.md`, which the installer edits only if it already exists. | Start a new session. |
-| `pi` | The rendered line in `~/.pi/agent/AGENTS.md`. | Start a new session. |
-| `opencode` | The rendered line in `~/.config/opencode/AGENTS.md`. The same run refreshes the copied `~/.config/opencode/skills/`. | Start a new session. |
+| `claude` | Rendered into the payload the `SessionStart` hook emits. The plugin's `agents/*.md` are **never** rewritten. | Start a new session. |
+| `codex` | Substituted into `~/.codex/agents/leo-runner.toml` and `leo-executor.toml` — **run `leo-install.py codex`**. An unset effort keeps the profile's shipped one. | Start a new thread — Codex picks up agent changes on new threads only. |
+| `cursor` | `~/.cursor/rules/leos-agent-routing.mdc`, its own always-apply rule — **run `leo-install.py cursor`**. Cursor reads the payload straight out of the plugin, so this file is the only per-machine half. | Reload the window. |
+| `hermes` | Rendered into the system-prompt section `register(ctx)` installs. | Start a new session. |
+| `pi` | Rendered into the payload the extension appends to the system prompt. | Start a new session. |
+| `opencode` | `~/.config/opencode/leos-agent-routing.md`, its own file in `instructions` — **run `leo-install.py opencode`**. `instructions` reads `preferences.md` un-rendered, so the payload's own routing region never varies. | Start a new session. |
 
 ## Harnesses that cannot vary the model per spawn
 

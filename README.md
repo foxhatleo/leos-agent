@@ -1,6 +1,6 @@
 # leos-agent
 
-Leo's portable agent operating policy, version **10.7.2**, installable on Claude
+Leo's portable agent operating policy, version **11.202609070.0**, installable on Claude
 Code, Codex, Cursor, Hermes, Pi, and OpenCode through each harness's own plugin
 system.
 
@@ -82,20 +82,41 @@ accepts goes in verbatim. A misspelled *key*, though, is a hard error, because a
 typo that silently left a harness on the expensive model is the one failure this
 is here to prevent.
 
-**Nothing reads it at run time.** `leo-install.py` renders the result into the
-`<leos-agent>` block it already writes, so a session pays nothing to know its own
-routing — no config read, no extra turn. It costs *less* than before: each
-machine now carries only its own harness's dispatch line instead of all of them,
-which took the installed payload from 4497 bytes to 4315–4344 depending on the
-harness. `scripts/measure_context.py` prints the per-harness figure and fails if
-an unconfigured harness ever grows past the old one.
+**Read once per session now, not never.** Most harnesses render the routing
+stanza live: `emit_payload.py` calls `routing.load()` every time it runs — on
+a `SessionStart` hook (Claude Code, Codex), inside Hermes's frozen
+session-scoped prompt section, and on every *turn* for Pi, since
+`before_agent_start` has no cheaper hook to sit on (see `pi-extension.js`).
+Codex's and Cursor's per-machine halves are still baked at install time —
+into the profile TOMLs and the `.mdc` rule respectively — because neither is
+otherwise re-rendered. Either way this costs one read of a small local JSON
+file, never a network call or a re-render of the whole payload. The bytes it
+adds are unchanged from before this delivery mechanism moved: each machine
+still carries only its own harness's dispatch line rather than all of them,
+which is what keeps the rendered payload at 4222–4251 bytes depending on the
+harness (measured with no routing configured; a configured harness costs a
+little more, bounded by the model names chosen) against the pre-split figure
+of 4497. `scripts/measure_context.py --check` enforces the ceiling and prints
+the per-harness figure.
 
 Edit the file — by hand, or with `routing.py set --harness <h> --runner
-<model>`, which [`/tune-routing`](#what-it-ships) drives end to end — then
-re-run the installer to re-render; `leo-install.py <harness> --check` reports
-"out of date" until you do, and `/doctor` surfaces it. Installing is
+<model>`, which [`/tune-routing`](#what-it-ships) drives end to end — and it
+takes effect at the next session with nothing else to run on Claude Code,
+Hermes, and Pi, all of which read it live. Codex, Cursor and OpenCode still
+need the installer re-run afterwards, because their halves are baked into
+files at install time; `leo-install.py <harness> --check` reports "out of
+date" for those three until you do, and `/doctor` surfaces it. Installing is
 idempotent: same config, same version, same bytes, so a second run reports
 `unchanged`.
+
+OpenCode needs a second file for a reason worth knowing: its `instructions`
+list reads `rules/preferences.md` straight off disk, **un-rendered**, so the
+routing region in that file keeps its shipped default no matter what is
+configured. The per-machine half therefore ships as its own
+`~/.config/opencode/leos-agent-routing.md`, written only when routing is
+actually configured for OpenCode, and added to `instructions` alongside the
+payload — exactly the shape Cursor has had all along, and for exactly the same
+reason.
 
 **The config is yours, never the installer's.** `leo-install.py` only ever reads
 it, and never creates, migrates, rewrites, or removes it, including under
@@ -109,17 +130,22 @@ default and behaviour is exactly what it was before this existed.
 
 Delivery differs by harness only in the last mile: Claude Code gets a `model:`
 override alongside `subagent_type:` (the plugin-owned `agents/*.md` are never
-rewritten), Codex gets the models substituted into its installed profile TOMLs,
-Cursor gets its own `~/.cursor/rules/leos-agent-routing.mdc` because its rules
-come straight out of the plugin directory, and the rest get the rendered line in
-their global instruction file.
+rewritten), rendered live at session start. Codex gets the models substituted
+into its installed profile TOMLs by the installer, because Codex plugins
+cannot ship agent definitions and nothing re-renders them between installer
+runs. Cursor gets its own `~/.cursor/rules/leos-agent-routing.mdc`, also
+written by the installer, because its rules come straight out of the plugin
+directory and are not otherwise re-rendered per session. Hermes and Pi get
+the rendered dispatch line inside the payload itself, live, at whatever
+cadence that harness re-renders it (see the delivery table under
+[How it works](#how-it-works)). OpenCode gets nothing — see above.
 
 ## The dispatch guard
 
 The payload has always said that a subagent dispatch must name a model. Prose
 alone did not hold: a forgotten dispatch inherits the parent's expensive model
 and pays a cold cache write per child, which is the single most expensive shape
-this policy has. From 10.7.2 that half of the rule is enforced by a hook instead,
+this policy has. From 11.202609070.0 that half of the rule is enforced by a hook instead,
 and the prose it replaced came out of the always-loaded payload — enforcement in
 code costs **zero** context per turn, so the guard paid for itself in bytes
 before saving a cent.
@@ -189,44 +215,81 @@ python3 scripts/usage_scan.py --since 7d
 ## How it works
 
 The payload lives in exactly one file: [`rules/preferences.md`](rules/preferences.md).
+Every harness now reads it live, out of the plugin directory, at or near session
+start — upgrading the plugin *is* upgrading the policy, with no render-to-disk
+step in between.
 
-Cursor reads that file natively as an always-apply rule. Every other harness
-gets it through its global instruction file, written by
-[`scripts/leo-install.py`](scripts/leo-install.py) into a marker block:
+Cursor reads that file directly as an always-apply rule; it was the model for
+everything that follows. Every other harness runs
+[`scripts/emit_payload.py`](scripts/emit_payload.py), which strips the
+frontmatter, renders this machine's [routing](#per-machine-model-routing)
+stanza, and prints the result — the trigger and the plumbing differ by harness:
 
-```
-<leos-agent version="10.7.2">
-...the payload...
-</leos-agent>
-```
+| Harness | How the payload arrives | What the installer still does |
+|---|---|---|
+| Claude Code | a `SessionStart` hook (`hooks/hooks.json`, auto-discovered) runs `emit_payload.py`; its stdout becomes session context | nothing for the payload — `agents/` ships `leo-runner`/`leo-executor` directly; only cleans up a `<leos-agent>` block a pre-11.0 install left in `~/.claude/CLAUDE.md` |
+| Codex | the same `hooks/hooks.json` entry — Codex auto-discovers it too, aliasing `${CLAUDE_PLUGIN_ROOT}` to its own plugin root | writes `~/.codex/agents/leo-runner.toml` and `leo-executor.toml`, since Codex plugins cannot ship agent definitions; cleans up a legacy `~/.codex/AGENTS.md` block |
+| Cursor | native — `rules/preferences.md` read straight off the plugin directory as an always-apply rule | writes `~/.cursor/rules/leos-agent-routing.mdc`, only when routing is configured for Cursor |
+| Hermes | `register(ctx)` in `__init__.py` calls `ctx.register_system_prompt_section("leos-agent", ..., position="after_memory")` — rendered once per session and frozen, so it never invalidates the cache mid-session | cleans up a legacy `~/.hermes/SOUL.md` block; `SOUL.md` itself is never written any more |
+| Pi | `pi-extension.js` appends `emit_payload.py`'s output to the system prompt on `before_agent_start`, which fires every *turn*, not once per session — the one harness that pays a spawn per turn rather than per session — and contributes `skills/` via `resources_discover` | cleans up a legacy `~/.pi/agent/AGENTS.md` block |
+| OpenCode | a one-time `"instructions": ["<plugin-root>/rules/preferences.md"]` line in `~/.config/opencode/opencode.json`, read at startup | copies skills and commands into `~/.config/opencode/skills/` and `commands/` (OpenCode's JS-only plugin API cannot register those); prints the `instructions` line and reports it outstanding until it's present — the file is JSONC with your comments in it, so the installer never edits it itself; cleans up a legacy `~/.config/opencode/AGENTS.md` block |
 
-Updating replaces that block and nothing else, so anything you wrote in those
-files by hand survives an upgrade untouched. The script writes only when the
-bytes actually differ, so running it twice is a no-op, and it writes through a
-temporary file and an atomic rename, so an interrupted run cannot leave a
-half-written instruction file behind.
+**The `<leos-agent version="...">` marker block still exists**, but only for
+migration and uninstall now — nothing writes it on a fresh install. Malformed
+markers are still refused rather than guessed at: an opener with no closer, a
+stray closer, two blocks all stop the run and tell you what to fix, because
+guessing would mean deleting whatever sits between them. Where a pre-11.0
+install left a block behind, a normal run strips it and reports `migrated`,
+preserving whatever surrounding text you wrote by hand; `--uninstall` does the
+same cleanup, so either command clears the leftover.
 
-If it ever finds markers it cannot pair — an opener with no closer, a stray
-closer, two blocks — it refuses to touch that file and tells you what to fix.
-Guessing there would mean deleting whatever sits between the markers, which is
-exactly the content it exists to protect.
-
-| Harness | Global file the installer writes |
-|---|---|
-| Claude Code | `~/.claude/CLAUDE.md` (the `leo-runner` / `leo-executor` agents need no installer step — the plugin's `agents/` directory delivers them) |
-| Codex | `~/.codex/AGENTS.md` (plus `~/.codex/agents/leo-runner.toml` and `leo-executor.toml`) |
-| Cursor | none — the plugin's always-apply rule delivers it |
-| Hermes | `~/.hermes/SOUL.md` (edited only if it already exists) |
-| Pi | `~/.pi/agent/AGENTS.md` |
-| OpenCode | `~/.config/opencode/AGENTS.md` (plus copied skills and commands) |
-
-**The installer is per-harness and manual.** Running it inside Codex installs Codex and
-nothing else; it never writes to another harness's files behind your back, and
-it never runs on its own at session start. Install the plugin, then run the
-installer once in that harness.
+Determinism is part of the contract, not an implementation detail: two runs of
+`emit_payload.py` must produce byte-identical output, or the session's cached
+prompt prefix stops being cacheable and every session pays a full cold write —
+so nothing in the render path may read the clock, an absolute path, or git
+state. It also fails open, silently, on stdout: any error prints nothing, exits
+0, and leaves a breadcrumb in `$LEOS_AGENT_LOCAL_PATH/emit-payload.log` instead
+of injecting a traceback into the session as context.
 
 Requires Python 3.9+ and macOS, Linux, or WSL. No symlinks are used anywhere —
 installs are real clones and copies.
+
+## Multi-surface and cloud reach
+
+"One install per harness" undersells how many surfaces a single install
+reaches — and where it doesn't:
+
+- **Claude Code's CLI, VS Code extension, JetBrains plugin, and desktop local
+  sessions share `~/.claude`.** The VS Code docs describe plugin management as
+  using "the same CLI commands under the hood," and the JetBrains plugin runs
+  the `claude` CLI rather than bundling its own — one `claude plugin install`
+  reaches all four.
+- **Claude Code cloud/web sessions do not** — `~/.claude/CLAUDE.md` is
+  documented as not carried into them, so the old block-injection design never
+  reached the web at all. The plugin route does: declare `leos-agent` under
+  `enabledPlugins` in the repo's `.claude/settings.json` and it installs at
+  session start. That is a real gain of this design — the policy reaches cloud
+  for the first time.
+- **Desktop WSL sessions have no plugin support**; SSH sessions read the
+  *remote* host's `~/.claude`, so the plugin needs installing on each SSH
+  target separately — a local install does not follow you there.
+- **The desktop Cowork tab is a separate, account-synced config surface** and
+  will not see a CLI install.
+- **Codex's IDE extension does not support plugins at all**, though it does
+  read `~/.codex/AGENTS.md` and the installed agent TOMLs — so a migrated
+  instruction file and the agent profiles still reach it; the live hook
+  delivery does not.
+- **Cursor Cloud Agents do not see plugin-shipped rules.** User Rules are
+  account-synced and do reach them; a plugin's rules live on local disk and
+  stop there.
+- **Hermes profiles and OpenCode's `OPENCODE_CONFIG_DIR` each create a second,
+  invisible config scope** — a plugin installed under one is invisible under
+  the other.
+
+Upgrades need a new session almost everywhere: Claude Code's
+`/reload-plugins` or a VS Code restart banner, Codex "start a new session,"
+Cursor's Reload Window, Hermes a restart or `/restart`, OpenCode only rereads
+its config at startup.
 
 ---
 
@@ -242,10 +305,18 @@ claude plugin marketplace add foxhatleo/leos-agent
 claude plugin install leos-agent@leos-agent --scope user
 ```
 
-Then, in a Claude Code session, run `/install` (or ask it to use the `install`
-skill). That writes the block into `~/.claude/CLAUDE.md`.
+Nothing else to install. `hooks/hooks.json`'s `SessionStart` hook is
+auto-discovered, and the payload starts arriving at the next session — no
+`/install` run needed. If this checkout has a `<leos-agent>` block in
+`~/.claude/CLAUDE.md` left by a version before 11.0, see Upgrade below to clear
+it.
 
 **Upgrade**
+
+Claude Code auto-updates an installed plugin in the background roughly once
+per session, so most of the time this is zero commands — start a new session
+(`/reload-plugins`, or restart in VS Code) and the new payload is already
+live. To force it immediately:
 
 ```bash
 claude plugin marketplace update leos-agent
@@ -255,16 +326,24 @@ claude plugin marketplace update leos-agent
 claude plugin install leos-agent@leos-agent --scope user
 ```
 
-Re-run `/install` afterwards to refresh the block, then start a new session.
-Both commands are safe to repeat; installing an already-current version reports
-that it is already installed and changes nothing.
+Both commands are safe to repeat; installing an already-current version
+reports that it is already installed and changes nothing. If you're
+upgrading a checkout that still carries a `<leos-agent>` block from before
+this delivery mechanism, run the installer once to strip it — it reports
+`migrated` and leaves the rest of `~/.claude/CLAUDE.md` exactly as you wrote
+it:
+
+```bash
+python3 ~/.claude/plugins/cache/leos-agent/leos-agent/11.202609070.0/scripts/leo-install.py claude
+```
 
 **Uninstall**
 
-Run the installer's uninstall first, while the script is still on disk:
+Run the installer's uninstall first, while the script is still on disk — it
+only has a legacy block to clean up, but do it before the plugin cache is gone:
 
 ```bash
-python3 ~/.claude/plugins/cache/leos-agent/leos-agent/10.7.2/scripts/leo-install.py claude --uninstall
+python3 ~/.claude/plugins/cache/leos-agent/leos-agent/11.202609070.0/scripts/leo-install.py claude --uninstall
 ```
 
 ```bash
@@ -291,18 +370,22 @@ codex plugin marketplace add foxhatleo/leos-agent
 codex plugin add leos-agent@leos-agent
 ```
 
-Then run the `install` skill in a Codex session (`$leos-agent`, then `install`), or
-run the script directly:
+The payload arrives the same way it does on Claude Code: `hooks/hooks.json`'s
+`SessionStart` hook is auto-discovered, and Codex aliases
+`${CLAUDE_PLUGIN_ROOT}` to its own plugin root, so no Codex-specific hook file
+is needed. The installer is still required for what Codex plugins cannot ship
+on their own — the two economical agent profiles:
 
 ```bash
-python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.7.2/scripts/leo-install.py codex
+python3 ~/.codex/plugins/cache/leos-agent/leos-agent/11.202609070.0/scripts/leo-install.py codex
 ```
 
-This writes `~/.codex/AGENTS.md` and installs two economical agents:
-`leo-runner` (`gpt-5.6-luna`, low effort) for narrow repeatable work and
-`leo-executor` (`gpt-5.6-terra`, medium effort) for well-specified
-implementation. Codex plugins cannot ship agent definitions themselves, which
-is why the installer writes them.
+This writes `~/.codex/agents/leo-runner.toml` (`gpt-5.6-luna`, low effort) and
+`leo-executor.toml` (`gpt-5.6-terra`, medium effort), and cleans up a
+`<leos-agent>` block a pre-11.0 install left in `~/.codex/AGENTS.md`. Codex
+trusts a hook by the hash of its command, so the command string in
+`hooks/hooks.json` is deliberately constant — a payload edit alone never
+requires re-approving the hook through `/hooks`.
 
 **Upgrade**
 
@@ -314,13 +397,15 @@ codex plugin marketplace upgrade leos-agent
 codex plugin add leos-agent@leos-agent
 ```
 
-Re-run the installer, then start a new thread — Codex picks up plugin changes on new
-threads only. Re-adding an already-installed plugin is idempotent.
+Re-run the installer to refresh the agent TOMLs (a no-op unless your routing
+config changed), then start a new thread — Codex picks up plugin changes on
+new threads only. Re-adding an already-installed plugin is idempotent, and the
+hook needs no re-approval since its command string never changes.
 
 **Uninstall**
 
 ```bash
-python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.7.2/scripts/leo-install.py codex --uninstall
+python3 ~/.codex/plugins/cache/leos-agent/leos-agent/11.202609070.0/scripts/leo-install.py codex --uninstall
 ```
 
 ```bash
@@ -336,9 +421,12 @@ codex plugin marketplace remove leos-agent
 ## Cursor
 
 Cursor has no on-disk global rules file — its User Rules live in your synced
-Cursor account — so there is nothing for the installer to write. The plugin ships the
-payload as an always-apply rule instead, which takes effect as soon as the
-plugin is installed.
+Cursor account — so there was never anything for the installer to write here;
+this is the harness the rest of leos-agent's live delivery was modeled on. The
+plugin ships the payload as an always-apply rule instead, which takes effect
+as soon as the plugin is installed. The installer still has one job for
+Cursor: writing `~/.cursor/rules/leos-agent-routing.mdc`, and only when
+[routing](#per-machine-model-routing) is actually configured for it.
 
 **Install** — either through the UI, or as a local clone.
 
@@ -399,14 +487,17 @@ plugins:
     - leos-agent
 ```
 
-**Run Hermes once before installing.** The payload goes into `~/.hermes/SOUL.md`,
-the agent's identity prompt, and Hermes writes its own starter version of that
-file on first run. The installer deliberately never creates it — if `SOUL.md` is
-missing it reports `skipped` and leaves Hermes' bootstrap alone. Once it exists:
+Nothing else to install. `register(ctx)` in `__init__.py` calls
+`ctx.register_system_prompt_section("leos-agent", ..., position="after_memory")`
+— the cache-safe path: it renders once per session and freezes, rather than
+re-rendering on every turn. `~/.hermes/SOUL.md` is not written by this plugin
+at all, so there is no "run Hermes once first" step any more. On a Hermes build
+old enough to lack `register_system_prompt_section`, the plugin degrades
+silently and delivers nothing — upgrade Hermes.
 
-```bash
-/leo-install
-```
+`/leo-install` still exists, mainly for `--dry-run` and `--uninstall`; a plain
+run is a no-op unless a pre-11.0 install left a `<leos-agent>` block in
+`SOUL.md`, in which case it strips it and reports `migrated`.
 
 **Upgrade**
 
@@ -420,7 +511,9 @@ or, for a clone:
 git -C ~/.hermes/plugins/leos-agent pull
 ```
 
-Then re-run `/leo-install`.
+Restart Hermes (or `/restart`) for a fresh session to pick up the new payload.
+If this checkout still carries a legacy `<leos-agent>` block in `SOUL.md`, run
+`/leo-install` once to strip it.
 
 **Uninstall**
 
@@ -433,7 +526,8 @@ hermes plugins remove leos-agent
 ```
 
 Remove the `leos-agent` entry from `plugins.enabled`, and delete the clone if
-you made one. Your own `SOUL.md` content is left intact — only the block goes.
+you made one. Your own `SOUL.md` content is left intact — only a legacy block,
+if one is present, goes.
 
 **Note on model routing:** Hermes applies a single `delegation.model` to every
 child of a `delegate_task` call, so it cannot vary the model per spawn. A
@@ -450,14 +544,22 @@ say so where a per-spawn model is not available.
 pi install git:github.com/foxhatleo/leos-agent
 ```
 
-Then run the install skill in a pi session:
-
-```
-/skill:install
-```
+Nothing else to install. `pi-extension.js` registers `before_agent_start`,
+which runs `scripts/emit_payload.py` and appends its output to the system
+prompt, and `resources_discover`, which contributes `skills/` directly — no
+`/skill:install`, no `~/.pi/agent/AGENTS.md` write. Unlike Claude Code's and
+Codex's session-scoped hook, `before_agent_start` fires on every turn, not
+once per session, so Pi pays one `python3` spawn per turn rather than per
+session.
 
 Pi pins the git ref it installed and records the package in
-`~/.pi/agent/settings.json`; re-running install is idempotent.
+`~/.pi/agent/settings.json`; re-running install is idempotent. If a legacy
+`<leos-agent>` block exists in `~/.pi/agent/AGENTS.md` from a pre-11.0 install,
+strip it with the installer:
+
+```bash
+python3 ~/.pi/agent/git/github.com/foxhatleo/leos-agent/scripts/leo-install.py pi
+```
 
 **Upgrade**
 
@@ -469,10 +571,10 @@ Pinned refs are reconciled, never silently advanced — to move to a new tag,
 install it explicitly:
 
 ```bash
-pi install git:github.com/foxhatleo/leos-agent@v10.7.2
+pi install git:github.com/foxhatleo/leos-agent@v11.202609070.0
 ```
 
-Re-run `/skill:install` afterwards.
+Start a new session afterwards; there is nothing else to re-run.
 
 **Uninstall**
 
@@ -499,19 +601,32 @@ opencode plugin leos-agent -g
 
 That adds the package to the `plugin` array in `~/.config/opencode/opencode.json`
 (or `.jsonc`) and caches it. Bootstrap the installer once by running the script from
-the cache — OpenCode's plugin API cannot register skills or commands, so the
-first run has to come from the package itself:
+the cache — OpenCode's JS-only plugin API cannot register skills, commands, or a
+payload source, so the first run has to come from the package itself:
 
 ```bash
 python3 ~/.cache/opencode/packages/leos-agent@latest/node_modules/leos-agent/scripts/leo-install.py opencode
 ```
 
-That writes `~/.config/opencode/AGENTS.md` and copies the skills and commands into
-`~/.config/opencode/skills/` and `~/.config/opencode/commands/`. From then on
-`/leo-install` works inside OpenCode. The copies are installed with the plugin
-root already resolved to an absolute path — OpenCode sets no resolution env var,
-and the copies live apart from the scripts they invoke — so re-run the installer
-after clearing or moving the package cache to point them at the new location.
+That copies the skills and commands into `~/.config/opencode/skills/` and
+`~/.config/opencode/commands/`, cleans up a `<leos-agent>` block a pre-11.0
+install left in `~/.config/opencode/AGENTS.md`, and — since the payload itself
+now arrives through a one-time line in `opencode.json` rather than a written
+file — prints the exact line to add and reports it outstanding until it's
+there:
+
+```jsonc
+"instructions": ["<plugin-root>/rules/preferences.md"]
+```
+
+The installer never adds that line for you: `opencode.json` is JSONC, with
+your comments in it, and rewriting it would destroy them. Add it by hand,
+once — OpenCode reads it at startup from then on. From then on `/leo-install`
+works inside OpenCode for re-copying the skills and commands. Those copies are
+installed with the plugin root already resolved to an absolute path —
+OpenCode sets no resolution env var, and the copies live apart from the
+scripts they invoke — so re-run the installer after clearing or moving the
+package cache to point them at the new location.
 
 **Upgrade**
 
@@ -525,7 +640,10 @@ If the cache holds a stale copy, clear it and let OpenCode refetch:
 rm -rf ~/.cache/opencode/packages/leos-agent@*
 ```
 
-Re-run the bootstrap install command above to refresh the copied files.
+Re-run the bootstrap install command above to refresh the copied skills and
+commands — the `instructions` line does not need touching, since it just
+points at the plugin root and the payload behind it updates live. OpenCode
+only rereads its config at startup, so restart it to pick up either change.
 
 **Uninstall**
 
@@ -533,10 +651,11 @@ Re-run the bootstrap install command above to refresh the copied files.
 python3 ~/.cache/opencode/packages/leos-agent@latest/node_modules/leos-agent/scripts/leo-install.py opencode --uninstall
 ```
 
-OpenCode has no plugin-remove command, so delete the `"leos-agent"` entry from
-the `plugin` array in `~/.config/opencode/opencode.json` **by hand**. The installer
-never edits that file: it is JSONC, with your comments in it, and rewriting it
-would destroy them. Then clear the cache:
+OpenCode has no plugin-remove command, so **by hand**: delete the
+`"leos-agent"` entry from the `plugin` array, and remove the `"instructions"`
+line pointing at this plugin's `rules/preferences.md`, in
+`~/.config/opencode/opencode.json`. The installer edits neither — same JSONC
+reason as above. Then clear the cache:
 
 ```bash
 rm -rf ~/.cache/opencode/packages/leos-agent@*
@@ -643,6 +762,14 @@ JSON.
 
 ## Development
 
+**One-time setup:** `git config core.hooksPath .githooks` activates
+`.githooks/pre-commit`, which stamps today's version with `scripts/bump.py`
+and runs `scripts/check.py` on every commit — so a normal commit already
+carries a canonical version and a green structural check, and you should not
+need to run either by hand for a routine change. The scheme is
+`11.YYYYMMDDX.0`: major pinned at 11, minor the UTC calendar date with a
+same-day serial digit appended, patch always 0.
+
 Run the checks:
 
 ```bash
@@ -689,16 +816,25 @@ claude plugin uninstall leos-agent@leos-agent && claude plugin install leos-agen
 ```
 
 or replace the cachebuster suffix in the Codex manifest with one in the form
-`10.7.2+codex.local-YYYYMMDD-HHMMSS` and re-add. Either way, plugin changes only
+`11.202609070.0+codex.local-YYYYMMDD-HHMMSS` and re-add. Either way, plugin changes only
 reach a **new** session or thread.
 
 `--check` exits non-zero when a file is out of date, and `--force` replaces a
 copied file that something else has since overwritten.
 
-To release: bump the version in `package.json`, the three `plugin.json` files,
-`.claude-plugin/marketplace.json`, `plugin.yaml`, and every mention in this
-README (the uninstall commands embed it in cache paths — `check.py` fails on any
-stale one); run `scripts/check.py`; then push a `v`-prefixed tag.
+To release: the pre-commit hook has already stamped the version via
+`scripts/bump.py` on your latest commit if `core.hooksPath` is set up as
+above. Otherwise run it by hand:
+
+```bash
+python3 scripts/bump.py
+```
+
+That rewrites every `major.minor.patch` string it owns — `package.json`, the
+three `plugin.json` files, `.claude-plugin/marketplace.json`, `plugin.yaml`,
+and every mention in this README, including the uninstall commands' cache
+paths — in one pass; `scripts/check.py` still fails the build on any stale
+one it finds. Then push a `v`-prefixed tag matching that version.
 
 Pushing that tag is the whole release. `.github/workflows/release.yml` runs the
 tests and both checks, refuses a tag that disagrees with `package.json`,

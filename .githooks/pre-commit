@@ -1,0 +1,34 @@
+#!/bin/sh
+# leos-agent pre-commit: stamp today's version, then gate on check.py.
+#
+# Activate with:  git config core.hooksPath .githooks
+#
+# The version scheme is date-based (11.YYYYMMDDX.0), so every commit is a
+# release candidate and the version has to be current before check.py will
+# pass -- it fails on any stale version string in README.md. Stamping here
+# rather than asking a human to remember it is the whole point.
+set -e
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+python3 scripts/bump.py
+
+# Re-stage exactly what bump.py rewrites. Listed explicitly rather than
+# `git add -u`: a hook that silently stages unrelated edits is a hook that
+# commits work you meant to leave behind.
+git add \
+	package.json \
+	.claude-plugin/plugin.json \
+	.codex-plugin/plugin.json \
+	.cursor-plugin/plugin.json \
+	.claude-plugin/marketplace.json \
+	plugin.yaml \
+	README.md
+
+# The same three gates CI runs, in CI's order. check.py alone is not enough:
+# stamping the version can itself break a test that assumed the old one, and
+# that failure is invisible until CI unless the suite runs here too.
+python3 -m unittest discover -s tests
+python3 scripts/check.py
+python3 scripts/measure_context.py --check

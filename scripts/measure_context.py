@@ -20,11 +20,12 @@ ROOT = Path(__file__).resolve().parent.parent
 # the before/after output in the change that raises it.
 LIMITS = {
 	"global_policy_bytes": 4_500,
-	# What an unconfigured machine actually installs. Rendering the routing region
-	# per harness dropped this below the old whole-file figure of 4497, and it must
-	# stay there: the model config exists to save money, so it may not cost
-	# always-loaded bytes to have. A configured harness exceeds this only by the
-	# length of the model names chosen, which is bounded and deliberate.
+	# What a session actually loads at start, per harness -- nothing is installed
+	# any more, and this is measured live off the plugin directory. Rendering the
+	# routing region per harness dropped this below the old whole-file figure of
+	# 4497, and it must stay there: the model config exists to save money, so it
+	# may not cost always-loaded bytes to have. A configured harness exceeds this
+	# only by the length of the model names chosen, which is bounded and deliberate.
 	"rendered_policy_bytes": 4_497,
 	"codex_implicit_skill_metadata_bytes": 600,
 	"claude_implicit_skill_metadata_bytes": 800,
@@ -81,12 +82,13 @@ def agent_description(path):
 
 
 def rendered_policy():
-	"""The installed payload body per harness, with no routing config present.
+	"""The payload body a session-start hook would emit per harness, with no
+	routing config present.
 
 	This is what a session actually loads -- rules/preferences.md on disk keeps a
-	harness-neutral default in its routing region, and the installer narrows it to
-	one harness. Measured with the config forced empty so the number is a property
-	of the repository, not of whoever runs it.
+	harness-neutral default in its routing region, and emit_payload.py narrows it
+	to one harness live, at session start. Measured with the config forced empty
+	so the number is a property of the repository, not of whoever runs it.
 	"""
 	spec = importlib.util.spec_from_file_location("leo_install_measure", ROOT / "scripts" / "leo-install.py")
 	installer = importlib.util.module_from_spec(spec)
@@ -139,7 +141,7 @@ def main(argv=None):
 		print("Static prompt footprint (bytes; tokens are roughly bytes / 4 for this prose)")
 		for name, value in values.items():
 			print(f"  {name:38} {value:5}  limit {LIMITS[name]:5}")
-		print("  rendered_policy_bytes is the worst case across harnesses; each one installs:")
+		print("  rendered_policy_bytes is the worst case across harnesses; each one loads:")
 		for harness, value in sorted(rendered_policy().items()):
 			print(f"    {harness:38} {value:5}")
 		print("This excludes conversation history, tool output, cache effects, and subagent work.")

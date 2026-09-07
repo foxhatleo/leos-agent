@@ -1,7 +1,7 @@
 ---
 name: tune-routing
 disable-model-invocation: true
-description: Pick which models this machine's economical tier uses for leo-runner and leo-executor, write them to the routing config, re-render, and verify with one live dispatch. This harness only. Not a setup audit — that is doctor.
+description: Pick which models this machine's economical tier uses for leo-runner and leo-executor, write them to the routing config, and verify with one live dispatch. This harness only. Not a setup audit — that is doctor.
 argument-hint: "[a model, or what to optimise for]"
 ---
 
@@ -71,25 +71,33 @@ drives. Every command below is relative to it.
    and the output says `(was … effort=…)` when it does. A model beginning with
    `-` goes as `--runner=<model>`. Quote the lines it printed.
 
-6. **Re-render.** Nothing reads the config at run time — the installer renders
-   it into the `<leos-agent>` block, so a write alone changes nothing.
+6. **Pick it up.** The config is read live, so a write alone takes effect at
+   the **next session start** — no installer run needed, on most harnesses:
+
+   ```
+   python3 <plugin-root>/scripts/routing.py render --harness <harness>
+   ```
+
+   Confirm the stanza names what you chose. On **Codex** and **Cursor** only,
+   a session-start read is not enough — Codex's `leo-runner`/`leo-executor`
+   models live in the agent TOMLs, and Cursor's routing lives in its own
+   `.mdc` rule, and both are files the installer writes, not something read
+   live. On those two, also run:
 
    ```
    python3 <plugin-root>/scripts/leo-install.py <harness>
-   python3 <plugin-root>/scripts/leo-install.py <harness> --check
    ```
 
-   `--check` must exit 0 afterwards. Then confirm the stanza names what you
-   chose, with `routing.py render --harness <harness>`. The last mile differs by
-   harness — which file moves, and whether a new session or thread is needed to
-   pick it up — and is in `reference/harnesses.md`.
+   and quote what it printed. The last mile — which file moves, if any, and
+   whether a new session or thread is needed to pick it up — is in
+   `reference/harnesses.md`.
 
 7. **Probe it live.** Model strings are deliberately never checked against a
    known-model list, so a typo does not fail in step 5; it fails at dispatch, in
    a different session, days later. Spend one cheap dispatch now:
 
-   - Read the dispatch line out of the payload step 6 just rendered. Use that —
-     do not compose your own from the config.
+   - Start a fresh session (a fresh thread on Codex) so the new config is
+     actually loaded — the current one predates the write.
    - Spawn **one** `leo-runner` at the new runner model, clean context
      (`fork_turns="none"` on Codex; the fresh-child equivalent elsewhere).
    - Give it a job the runner tier can obviously do, so a refusal is a routing
@@ -108,8 +116,9 @@ drives. Every command below is relative to it.
 | What you see | What it means | What to do |
 |---|---|---|
 | `set` exits non-zero naming the config path | the file on disk is malformed; **nothing was written** | show the message and offer to fix it — never rewrite it blind |
-| `set` prints `unchanged` | that is already the config | re-render anyway if `--check` says out of date |
-| `leo-install.py` prints `error` or `conflict` | the block is malformed, or a file the installer did not write is in the way | quote it verbatim; `--force` only if Leo confirms |
+| `set` prints `unchanged` | that is already the config | nothing to do — confirm with `routing.py show` |
+| the emitter produces nothing | `emit_payload.py` failed open; check `$LEOS_AGENT_LOCAL_PATH/emit-payload.log` for the breadcrumb | quote the breadcrumb; do not guess at the cause |
+| the probe answers, but at the old model | the session predates the config write | start a genuinely new session (new thread on Codex) and retry once |
 | the probe errors on an unknown or invalid model | the string is wrong for this harness | `routing.py unset`, re-install, then back to step 3 — never leave a broken config installed |
 | the probe answers, but at the parent model | the harness ignored the override | report that routing could not be applied here, and leave the config |
 | the probe is refused or times out | **not** proof of a bad model | retry once, then report it unverified |

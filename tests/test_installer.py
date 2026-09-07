@@ -71,7 +71,10 @@ class TestCodexPayload(unittest.TestCase):
                 first = self.installer.run("codex", ROOT, args())
                 second = self.installer.run("codex", ROOT, args())
 
-                self.assertEqual([r.status for r in first], ["created", "created", "created"])
+                # First target is the ~/.codex/AGENTS.md migration: there is no
+                # legacy file in a fresh $HOME, so it has nothing to do on any
+                # of the three runs. Only the TOML copies actually install.
+                self.assertEqual([r.status for r in first], ["unchanged", "created", "created"])
                 self.assertEqual([r.status for r in second], ["unchanged", "unchanged", "unchanged"])
                 for name in self.installer.CODEX_AGENTS:
                     installed = home / ".codex" / "agents" / f"{name}.toml"
@@ -79,7 +82,7 @@ class TestCodexPayload(unittest.TestCase):
                     self.assertEqual(installed.read_bytes(), source.read_bytes())
 
                 removed = self.installer.run("codex", ROOT, args(uninstall=True))
-                self.assertEqual([r.status for r in removed], ["removed", "removed", "removed"])
+                self.assertEqual([r.status for r in removed], ["unchanged", "removed", "removed"])
                 self.assertFalse((home / ".codex" / "AGENTS.md").exists())
                 for name in self.installer.CODEX_AGENTS:
                     self.assertFalse((home / ".codex" / "agents" / f"{name}.toml").exists())
@@ -126,17 +129,62 @@ class TestOpenCodePayload(unittest.TestCase):
     def test_round_trip_covers_every_copied_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
+            # Three targets never copy anything on an unconfigured machine: the
+            # AGENTS.md migration (no legacy file in a fresh $HOME), the routing
+            # rule (written only when opencode routing is configured), and the
+            # opencode.json advisory (never writes at all). Every other target
+            # is a file copy.
+            advisory_labels = {
+                "~/.config/opencode/AGENTS.md",
+                "~/.config/opencode/leos-agent-routing.md",
+                "~/.config/opencode/opencode.json",
+            }
+
+            def copies(results):
+                return [r for r in results if r.target not in advisory_labels]
+
             first = self.run_opencode(home)
-            self.assertTrue(all(r.status == "created" for r in first), [(r.target, r.status) for r in first])
+            self.assertTrue(all(r.status == "created" for r in copies(first)), [(r.target, r.status) for r in first])
+            by_target = {r.target: r for r in first}
+            self.assertEqual(by_target["~/.config/opencode/AGENTS.md"].status, "unchanged")
+            self.assertEqual(by_target["~/.config/opencode/opencode.json"].status, "skipped")
+
             second = self.run_opencode(home)
-            self.assertTrue(all(r.status == "unchanged" for r in second), [(r.target, r.status) for r in second])
+            self.assertTrue(
+                all(r.status == "unchanged" for r in copies(second)), [(r.target, r.status) for r in second]
+            )
+
             removed = self.run_opencode(home, uninstall=True)
-            self.assertTrue(all(r.status == "removed" for r in removed), [(r.target, r.status) for r in removed])
+            self.assertTrue(
+                all(r.status == "removed" for r in copies(removed)), [(r.target, r.status) for r in removed]
+            )
             cfg = home / ".config" / "opencode"
             self.assertFalse((cfg / "skills" / "leo-install").exists())
             for name in self.installer.OPENCODE_SKILLS:
                 self.assertFalse((cfg / "skills" / name).exists(), name)
             self.assertEqual(list((cfg / "commands").glob("*.md")), [])
+
+    def test_opencode_json_advisory_names_the_real_path_and_never_writes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            cfg = home / ".config" / "opencode"
+            cfg.mkdir(parents=True)
+            config_path = cfg / "opencode.json"
+            config_path.write_text('{\n  // a comment the tool must not disturb\n  "theme": "dark"\n}\n', encoding="utf-8")
+
+            results = self.run_opencode(home)
+            by_target = {r.target: r for r in results}
+            result = by_target["~/.config/opencode/opencode.json"]
+            self.assertEqual(result.status, "skipped")
+            self.assertIn(str(ROOT / "rules" / "preferences.md"), result.detail)
+            self.assertFalse(result.failed)
+            self.assertIn("a comment the tool must not disturb", config_path.read_text(encoding="utf-8"))
+
+            config_path.write_text(
+                '{\n  "instructions": ["' + str(ROOT / "rules" / "preferences.md") + '"]\n}\n', encoding="utf-8"
+            )
+            [again] = [r for r in self.run_opencode(home) if r.target == "~/.config/opencode/opencode.json"]
+            self.assertEqual(again.status, "unchanged")
 
     def test_copies_carry_absolute_root_and_no_placeholders(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -223,14 +271,71 @@ class TestAllHarnessRoundTrip(unittest.TestCase):
                     if harness == "hermes":
                         self.assertEqual((home / ".hermes" / "SOUL.md").read_text(encoding="utf-8"), starter)
 
-    def test_hermes_without_soul_is_skipped(self):
+    def test_hermes_installs_with_no_soul_file(self):
+        # Hermes gets the payload from register_system_prompt_section now, so a
+        # machine that never had SOUL.md is already correct: nothing to write,
+        # and nothing to migrate away either.
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             home_patch, env_patch = isolated(self.installer, home)
             with home_patch, env_patch:
                 results = self.installer.run("hermes", ROOT, args())
-            self.assertEqual([r.status for r in results], ["skipped"])
+            self.assertEqual([r.status for r in results], ["unchanged"])
             self.assertFalse((home / ".hermes").exists())
+
+
+class TestOpenCodeRoutingRule(unittest.TestCase):
+    """`instructions` reads preferences.md UN-rendered, so without this file a
+    configured routing.json would never reach OpenCode at all."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.installer = load_installer()
+
+    # The normalised shape routing.load() produces; the bare-string shorthand is
+    # only expanded on the way through load(), which these tests stub out.
+    CONFIG = {"opencode": {"runner": {"model": "some-cheap-model", "effort": None}}}
+
+    def run_opencode(self, home, config):
+        home_patch, env_patch = isolated(self.installer, home)
+        with home_patch, env_patch, mock.patch.object(self.installer.routing, "load", lambda *a, **k: config):
+            return {r.target: r for r in self.installer.run("opencode", ROOT, args())}
+
+    def test_unconfigured_writes_no_rule(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            results = self.run_opencode(home, {})
+            self.assertEqual(results["~/.config/opencode/leos-agent-routing.md"].status, "skipped")
+            self.assertFalse((home / ".config" / "opencode" / "leos-agent-routing.md").exists())
+
+    def test_configured_writes_the_stanza_and_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            results = self.run_opencode(home, self.CONFIG)
+            self.assertEqual(results["~/.config/opencode/leos-agent-routing.md"].status, "created")
+            body = (home / ".config" / "opencode" / "leos-agent-routing.md").read_text(encoding="utf-8")
+            self.assertIn("some-cheap-model", body)
+            self.assertIn(self.installer.PROVENANCE, body)
+            again = self.run_opencode(home, self.CONFIG)
+            self.assertEqual(again["~/.config/opencode/leos-agent-routing.md"].status, "unchanged")
+
+    def test_the_advisory_names_the_routing_file_once_configured(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            plain = self.run_opencode(home, {})["~/.config/opencode/opencode.json"].detail
+            self.assertIn("rules/preferences.md", plain)
+            self.assertNotIn("leos-agent-routing.md", plain)
+            routed = self.run_opencode(home, self.CONFIG)["~/.config/opencode/opencode.json"].detail
+            self.assertIn("rules/preferences.md", routed)
+            self.assertIn("leos-agent-routing.md", routed)
+
+    def test_unconfiguring_takes_back_our_stale_rule(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            self.run_opencode(home, self.CONFIG)
+            results = self.run_opencode(home, {})
+            self.assertEqual(results["~/.config/opencode/leos-agent-routing.md"].status, "removed")
+            self.assertFalse((home / ".config" / "opencode" / "leos-agent-routing.md").exists())
 
 
 class TestCursorRoutingRule(unittest.TestCase):
@@ -292,27 +397,91 @@ class TestCursorRoutingRule(unittest.TestCase):
             self.assertEqual(rule.read_text(encoding="utf-8"), "# somebody else's rule\n")
 
 
-class TestInstructionFileWriting(unittest.TestCase):
+class TestLegacyBlockMigration(unittest.TestCase):
+    """The block is gone from every harness, so the only thing that still edits
+    a user's own instruction file is taking back what an older version wrote."""
+
     @classmethod
     def setUpClass(cls):
         cls.installer = load_installer()
 
-    def run_claude(self, home):
+    # Deliberately not the current version: migration keys on the markers, not
+    # on which release happened to write them.
+    LEGACY = '<leos-agent version="10.0.0">\nold policy text\n</leos-agent>\n'
+
+    def run_claude(self, home, **overrides):
         home_patch, env_patch = isolated(self.installer, home)
         with home_patch, env_patch:
-            return self.installer.run("claude", ROOT, args())
+            return self.installer.run("claude", ROOT, args(**overrides))
 
-    def test_crlf_file_keeps_crlf_and_stays_idempotent(self):
+    def seed(self, home, text):
+        target = home / ".claude" / "CLAUDE.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+        return target
+
+    def test_block_goes_and_surrounding_text_survives_byte_exact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            target = self.seed(home, "# Mine\n\n" + self.LEGACY + "\nAfter the block.\n")
+            [result] = self.run_claude(home)
+            self.assertEqual(result.status, "migrated")
+            after = target.read_text(encoding="utf-8")
+            self.assertNotIn("<leos-agent", after)
+            self.assertIn("# Mine", after)
+            self.assertIn("After the block.", after)
+            # Second run has nothing left to do.
+            [again] = self.run_claude(home)
+            self.assertEqual(again.status, "unchanged")
+
+    def test_file_holding_only_a_block_is_deleted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            target = self.seed(home, self.LEGACY)
+            [result] = self.run_claude(home)
+            self.assertEqual(result.status, "migrated")
+            self.assertFalse(target.exists())
+
+    def test_file_without_a_block_is_left_alone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            original = "# Just mine\n\nNothing of ours here.\n"
+            target = self.seed(home, original)
+            [result] = self.run_claude(home)
+            self.assertEqual(result.status, "unchanged")
+            self.assertEqual(target.read_text(encoding="utf-8"), original)
+
+    def test_malformed_markers_are_reported_and_nothing_is_written(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            # An opener with no closer: removing "the block" would mean guessing
+            # where the user's own text resumes.
+            original = '# Mine\n\n<leos-agent version="10.0.0">\nstranded\n'
+            target = self.seed(home, original)
+            [result] = self.run_claude(home)
+            self.assertEqual(result.status, "error")
+            self.assertEqual(target.read_text(encoding="utf-8"), original)
+
+    def test_dry_run_reports_without_writing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            original = "# Mine\n\n" + self.LEGACY
+            target = self.seed(home, original)
+            [result] = self.run_claude(home, dry_run=True, writes=False)
+            self.assertEqual(result.status, "migrated")
+            self.assertEqual(target.read_text(encoding="utf-8"), original)
+
+    def test_crlf_file_keeps_crlf_while_migrating(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             target = home / ".claude" / "CLAUDE.md"
             target.parent.mkdir(parents=True)
-            target.write_bytes(b"# Mine\r\n\r\nKeep this.\r\n")
+            target.write_bytes(b"# Mine\r\n\r\n" + self.LEGACY.replace("\n", "\r\n").encode() + b"Keep this.\r\n")
             [first] = self.run_claude(home)
-            self.assertEqual(first.status, "updated")
+            self.assertEqual(first.status, "migrated")
             raw = target.read_bytes()
             self.assertIn(b"\r\n", raw)
-            self.assertNotIn(b"\n\n\n", raw.replace(b"\r\n", b"\n"))
+            self.assertNotIn(b"<leos-agent", raw)
             self.assertIn("Keep this.", raw.decode("utf-8"))
             [second] = self.run_claude(home)
             self.assertEqual(second.status, "unchanged")
@@ -322,15 +491,16 @@ class TestInstructionFileWriting(unittest.TestCase):
             home = Path(tmp)
             real = home / "dotfiles" / "CLAUDE.md"
             real.parent.mkdir(parents=True)
-            real.write_text("# Mine\n", encoding="utf-8")
+            real.write_text("# Mine\n\n" + self.LEGACY, encoding="utf-8")
             link = home / ".claude" / "CLAUDE.md"
             link.parent.mkdir(parents=True)
             link.symlink_to(real)
             [result] = self.run_claude(home)
-            self.assertEqual(result.status, "updated")
+            self.assertEqual(result.status, "migrated")
             self.assertTrue(link.is_symlink())
-            self.assertIn('<leos-agent version="', real.read_text(encoding="utf-8"))
-            self.assertIn("# Mine", real.read_text(encoding="utf-8"))
+            body = real.read_text(encoding="utf-8")
+            self.assertNotIn("<leos-agent", body)
+            self.assertIn("# Mine", body)
 
 
 if __name__ == "__main__":

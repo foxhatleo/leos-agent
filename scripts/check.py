@@ -8,7 +8,9 @@ idempotently and refuses to touch files whose markers are malformed. Stdlib only
 
 import importlib.util
 import json
+import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -154,15 +156,44 @@ def main():
 	# checkout and silently does nothing for anyone who installed from npm --
 	# the failure that put this script in scripts/ rather than hooks/.
 	shipped = tuple(entry for entry in json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["files"] if not entry.startswith("!"))
-	pre = (json.loads(shared_hooks.read_text(encoding="utf-8")).get("hooks") or {}).get("PreToolUse") or []
+	shared_data = json.loads(shared_hooks.read_text(encoding="utf-8"))
+	cursor_data = json.loads(cursor_hooks.read_text(encoding="utf-8"))
+	pre = (shared_data.get("hooks") or {}).get("PreToolUse") or []
 	check(bool(pre), "hooks/hooks.json: no PreToolUse entry (the dispatch guard is not wired)")
-	cursor_pre = (json.loads(cursor_hooks.read_text(encoding="utf-8")).get("hooks") or {}).get("preToolUse") or []
+	cursor_pre = (cursor_data.get("hooks") or {}).get("preToolUse") or []
 	check(bool(cursor_pre), "hooks/hooks-cursor.json: no preToolUse entry (Cursor gets no guard)")
 	for entry in pre:
 		check(bool(entry.get("matcher")), "hooks/hooks.json: PreToolUse needs a matcher, or it spawns on every tool call")
+
+	# 6c. The payload emitter must be wired the same way, but only where it is
+	# wanted. Claude Code and Codex both load hooks/hooks.json's SessionStart, so
+	# a live payload only reaches them if this fires. Cursor reads
+	# rules/preferences.md directly through its always-apply rule and must NOT
+	# get a SessionStart hook here, or the payload would land twice.
+	session_start = (shared_data.get("hooks") or {}).get("SessionStart") or []
+	check(bool(session_start), "hooks/hooks.json: no SessionStart entry (the payload emitter is not wired)")
+	for entry in session_start:
+		check(bool(entry.get("matcher")), "hooks/hooks.json: SessionStart needs a matcher, or it fires on the wrong reason")
+	session_start_commands = [h.get("command", "") for entry in session_start for h in entry.get("hooks") or []]
+	check(
+		any("scripts/emit_payload.py" in c for c in session_start_commands),
+		"hooks/hooks.json: SessionStart does not resolve to scripts/emit_payload.py",
+	)
+	cursor_hook_keys = cursor_data.get("hooks") or {}
+	check(
+		"SessionStart" not in cursor_hook_keys and "sessionStart" not in cursor_hook_keys,
+		"hooks/hooks-cursor.json: must not declare a session-start hook -- Cursor already reads the payload "
+		"natively through its always-apply rule, and a hook here would double-inject it",
+	)
+
 	commands = [h.get("command", "") for entry in pre for h in entry.get("hooks") or []]
 	commands += [entry.get("command", "") for entry in cursor_pre]
-	for timeout in [h.get("timeout") for entry in pre for h in entry.get("hooks") or []] + [e.get("timeout") for e in cursor_pre]:
+	commands += session_start_commands
+	for timeout in (
+		[h.get("timeout") for entry in pre for h in entry.get("hooks") or []]
+		+ [e.get("timeout") for e in cursor_pre]
+		+ [h.get("timeout") for entry in session_start for h in entry.get("hooks") or []]
+	):
 		check(timeout is not None and timeout <= 10, f"hook timeout {timeout!r} exceeds the 10s a harness will wait")
 	for command in commands:
 		match = re.search(r"(?:\$\{[A-Z_]+\}|\./)?/?((?:scripts|hooks)/[\w./-]+\.py)", command)
@@ -175,7 +206,7 @@ def main():
 	# The guard's own modules must import cleanly: a hook that cannot even load
 	# fails open on every dispatch, silently, which is the one failure mode that
 	# looks exactly like everything working.
-	for name in ("dispatch_guard", "dispatch_log", "usage_scan"):
+	for name in ("dispatch_guard", "dispatch_log", "usage_scan", "payload", "emit_payload"):
 		path = ROOT / "scripts" / f"{name}.py"
 		check(path.is_file(), f"scripts/{name}.py is missing")
 		if path.is_file():
@@ -185,6 +216,45 @@ def main():
 				spec.loader.exec_module(module)
 			except Exception as exc:
 				check(False, f"scripts/{name}.py does not import: {type(exc).__name__}: {exc}")
+
+	# 6d. Determinism is the invariant the whole session-start design rests on.
+	# The emitter's stdout becomes part of a cached prompt prefix; a byte that
+	# varies between two runs -- a stray absolute path, a dict that iterates in a
+	# different order -- turns a cache hit into a full cache write on every
+	# single session, which is exactly the cost this design exists to avoid. Run
+	# it twice, from two different working directories, and require the bytes to
+	# match exactly.
+	emit_script = ROOT / "scripts" / "emit_payload.py"
+	cwds = (str(ROOT), str(ROOT.parent))
+	for harness in installer.HARNESSES:
+		env = dict(os.environ, LEOS_AGENT_HARNESS=harness, LEOS_AGENT_ROOT=str(ROOT))
+		outputs = []
+		for cwd in cwds:
+			result = subprocess.run(
+				[sys.executable, str(emit_script)],
+				stdin=subprocess.DEVNULL,
+				stdout=subprocess.PIPE,
+				stderr=subprocess.PIPE,
+				cwd=cwd,
+				env=env,
+			)
+			check(
+				result.returncode == 0,
+				f"scripts/emit_payload.py ({harness}, cwd={cwd}): exited {result.returncode}: {result.stderr.decode('utf-8', 'replace')}",
+			)
+			check(bool(result.stdout.strip()), f"scripts/emit_payload.py ({harness}, cwd={cwd}): produced no output")
+			outputs.append(result.stdout)
+		check(
+			outputs[0] == outputs[1],
+			f"scripts/emit_payload.py ({harness}): output differs between two runs from different working directories",
+		)
+		text = outputs[0].decode("utf-8", "replace")
+		for needle in ("/Users/", "/home/", str(ROOT)):
+			check(needle not in text, f"scripts/emit_payload.py ({harness}): output contains an absolute path ({needle!r})")
+		check(
+			installer.routing.stanza(harness, installer.routing.load()) in text,
+			f"scripts/emit_payload.py ({harness}): output is missing the routing stanza this machine's config renders",
+		)
 
 	# The one sentence the payload must keep: the guard refuses a dispatch that
 	# names no model, and a model that does not know that wastes a turn finding

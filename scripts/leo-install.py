@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-"""Install leos-agent preferences into one harness's global instruction file.
+"""Install what a harness's plugin system cannot deliver on its own.
 
-Injects the payload from rules/preferences.md into the calling harness's global
-instruction file, wrapped in a <leos-agent> block, and installs any files that
-harness needs but cannot receive through its plugin system.
+The payload itself lives in rules/preferences.md and is read live by each
+harness's plugin (a SessionStart hook, or Cursor's alwaysApply rule) at
+session start, so this tool no longer writes it into any global instruction
+file. What is left to install is per-harness and small: Codex's agent
+profiles (its plugins cannot ship custom agent definitions), Cursor's
+per-machine routing rule, and OpenCode's skill and command copies (its
+plugins cannot register those from JS either). It also cleans up the
+<leos-agent> block an earlier version of this tool left in a harness's
+former global file, now that nothing writes there.
 
 Acts on exactly ONE harness per run -- the one named on the command line. A
 session running in Codex installs Codex and nothing else.
@@ -28,16 +34,20 @@ import routing  # noqa: E402  owns the harness list and the machine-local model 
 
 HARNESSES = routing.HARNESSES
 
-# The routing region inside the payload, replaced per harness at install time.
-ROUTING_OPEN = "<!-- leos-agent:routing -->"
-ROUTING_CLOSE = "<!-- /leos-agent:routing -->"
-
-OPEN_RE = re.compile(r"^<leos-agent\b[^>]*>[ \t]*$", re.MULTILINE)
-CLOSE_RE = re.compile(r"^</leos-agent>[ \t]*$", re.MULTILINE)
-
-# Codex concatenates the whole AGENTS.md chain under a byte cap; warn before a
-# global file large enough to start crowding out repo-level instructions.
-CODEX_SOFT_CAP = 28 * 1024
+# Rendering lives in payload.py so that the installer and the session-start
+# emitter share one implementation. Re-exported here because check.py,
+# measure_context.py and the tests all reach for these through this module.
+from payload import (  # noqa: E402,F401
+	CLOSE_RE,
+	OPEN_RE,
+	ROUTING_CLOSE,
+	ROUTING_OPEN,
+	build_block,
+	payload_body,
+	plugin_root,
+	read_version,
+	render_routing,
+)
 
 # Copied payload files carry this string, which is how uninstall tells its own
 # copies apart from a file the user happens to have put at the same path.
@@ -78,7 +88,7 @@ class Result:
 
 	@property
 	def changed(self):
-		return self.status in ("created", "updated", "removed")
+		return self.status in ("created", "updated", "removed", "migrated")
 
 	@property
 	def failed(self):
@@ -87,69 +97,14 @@ class Result:
 	def line(self, pending):
 		status = self.status
 		if pending and self.changed:
-			status = {"created": "to create", "updated": "to update", "removed": "to remove"}[status]
+			status = {
+				"created": "to create",
+				"updated": "to update",
+				"removed": "to remove",
+				"migrated": "to migrate",
+			}[status]
 		suffix = f" ({self.detail})" if self.detail else ""
 		return f"  {status:9} {self.target}{suffix}"
-
-
-def plugin_root():
-	for name in ("LEOS_AGENT_ROOT", "CLAUDE_PLUGIN_ROOT", "PLUGIN_ROOT"):
-		value = os.environ.get(name)
-		if not value:
-			continue
-		root = Path(value).expanduser()
-		if (root / "rules" / "preferences.md").is_file():
-			return root.resolve()
-	return Path(__file__).resolve().parent.parent
-
-
-def read_version(root):
-	manifest = root / "package.json"
-	try:
-		return json.loads(manifest.read_text(encoding="utf-8"))["version"]
-	except FileNotFoundError:
-		sys.exit(f"leo-install: {manifest} is missing; the plugin install looks incomplete")
-	except json.JSONDecodeError as exc:
-		sys.exit(f"leo-install: {manifest} is not valid JSON ({exc})")
-	except KeyError:
-		sys.exit(f"leo-install: {manifest} has no version field")
-
-
-def render_routing(body, harness, config):
-	"""Replace the routing region with the stanza for this machine's config.
-
-	The payload ships with a default inside the region, so an un-rendered read of
-	rules/preferences.md -- Cursor's plugin-delivered rule, a human opening the
-	file -- still says something true. Rendering only ever narrows it to the one
-	harness being installed, which is why the installed payload is smaller than
-	the file on disk rather than larger.
-	"""
-	start = body.find(ROUTING_OPEN)
-	end = body.find(ROUTING_CLOSE)
-	if start < 0 or end < start:
-		sys.exit(f"leo-install: rules/preferences.md is missing its {ROUTING_OPEN} region")
-	return body[:start] + routing.stanza(harness, config) + body[end + len(ROUTING_CLOSE):]
-
-
-def payload_body(root, harness=None, config=None):
-	"""The canonical payload: rules/preferences.md with its frontmatter stripped.
-
-	With a harness, the routing region is rendered for it; without one the region
-	keeps its shipped default, markers and all.
-	"""
-	text = (root / "rules" / "preferences.md").read_text(encoding="utf-8")
-	body = re.sub(r"(?s)\A---\n.*?\n---\n", "", text, count=1).strip()
-	if not body:
-		sys.exit("leo-install: rules/preferences.md has no body below its frontmatter")
-	if OPEN_RE.search(body) or CLOSE_RE.search(body):
-		sys.exit("leo-install: rules/preferences.md contains a <leos-agent> marker; it must not")
-	if harness:
-		body = render_routing(body, harness, config if config is not None else routing.load())
-	return body
-
-
-def build_block(root, harness=None, config=None):
-	return f'<leos-agent version="{read_version(root)}">\n{payload_body(root, harness, config)}\n</leos-agent>\n'
 
 
 def render_codex_agent(text, agent_name, config):
@@ -176,6 +131,20 @@ def cursor_routing_rule(harness, config):
 		"description: leos-agent model routing for this machine.\n"
 		"alwaysApply: true\n"
 		"---\n"
+		"This supersedes the model-routing dispatch line in Leo's agent operating\n"
+		"preferences:\n\n"
+		f"{routing.stanza(harness, config)}\n"
+	)
+
+
+def opencode_routing_rule(harness, config):
+	"""OpenCode reads rules/preferences.md straight off disk through `instructions`,
+	which means it reads it UN-rendered -- the routing region keeps its shipped
+	default and this machine's config never reaches the model. Cursor has the
+	same shape and the same answer: ship the per-machine half as its own file.
+	"""
+	return (
+		"<!-- leos-agent -->\n"
 		"This supersedes the model-routing dispatch line in Leo's agent operating\n"
 		"preferences:\n\n"
 		f"{routing.stanza(harness, config)}\n"
@@ -353,6 +322,56 @@ def install_markdown(path, block, args, label, create=True):
 	return write_if_changed(path, inject(current, block), current, existed, crlf, args, label)
 
 
+def migrate_legacy_block(path, args, label):
+	"""Strip a <leos-agent> block a pre-payload-split version wrote into this
+	harness's former global instruction file.
+
+	The payload now arrives live from the plugin at session start, so nothing
+	writes a block here any more -- but an install that ran before that
+	change left one behind, and it will not clean itself up. Runs the same
+	whether this is a normal install or an --uninstall: either way, a stale
+	block should go, so there is only one code path instead of two.
+	"""
+	path = path.expanduser()
+	if not path.is_file():
+		return Result(label, "unchanged")
+	current, crlf = read_text(path)
+	if not find_block(current):
+		return Result(label, "unchanged")
+	remainder = strip_block(current)
+	if not remainder.strip():
+		if args.writes:
+			path.unlink()
+		return Result(label, "migrated", "file held nothing else, deleted")
+	remainder = remainder.rstrip("\n") + "\n"
+	diff = unified(path, current, remainder) if args.dry_run else ""
+	if args.writes:
+		atomic_write(path, remainder, crlf)
+	return Result(label, "migrated", diff=diff)
+
+
+def opencode_config_advisory(root, home, label, configured=False):
+	"""OpenCode reads its config as JSONC, comments and all -- rewriting it here
+	would blow those away, so the most this tool can do is check whether the
+	files are already wired into `instructions` and, when they are not, tell the
+	user the line to add rather than adding it for them.
+
+	Two paths, not one, once routing is configured: `instructions` reads
+	preferences.md un-rendered, so the routing file beside it is the only way
+	this machine's model choice reaches OpenCode at all.
+	"""
+	path = home / ".config" / "opencode" / "opencode.json"
+	wanted = [str(root / "rules" / "preferences.md")]
+	if configured:
+		wanted.append(str(home / ".config" / "opencode" / "leos-agent-routing.md"))
+	text = path.read_text(encoding="utf-8") if path.is_file() else ""
+	missing = [p for p in wanted if p not in text]
+	if not missing:
+		return Result(label, "unchanged")
+	listed = ", ".join(f'"{p}"' for p in wanted)
+	return Result(label, "skipped", f'add "instructions": [{listed}] to ~/.config/opencode/opencode.json')
+
+
 def install_file_copy(src, dest, args, label, owned_parent=False, payload=None):
 	"""Install a payload file the harness's plugin system cannot deliver itself.
 
@@ -399,19 +418,19 @@ def opencode_payload(src, root, rename_install=False):
 
 
 def run(harness, root, args):
-	# Read once per run: rendering has to be a pure function of (version, config)
-	# or a second install would not come back "unchanged".
+	# Read once per run: routing.load() is used by Codex's TOML rendering and
+	# Cursor's rule, both still per-machine even though the payload is not.
 	config = routing.load()
-	block = build_block(root, harness, config)
 	home = Path.home()
 	targets = []
 
 	if harness == "claude":
 		label = "~/.claude/CLAUDE.md"
-		targets.append((label, lambda: install_markdown(home / ".claude" / "CLAUDE.md", block, args, label)))
+		targets.append((label, lambda: migrate_legacy_block(home / ".claude" / "CLAUDE.md", args, label)))
 
 	elif harness == "codex":
-		targets.append(("~/.codex/AGENTS.md", lambda: install_codex_agents_md(home, block, args)))
+		label = "~/.codex/AGENTS.md"
+		targets.append((label, lambda: migrate_legacy_block(home / ".codex" / "AGENTS.md", args, label)))
 		for agent_name in CODEX_AGENTS:
 			label = f"~/.codex/agents/{agent_name}.toml"
 			targets.append(
@@ -460,23 +479,48 @@ def run(harness, root, args):
 		targets.append((label, cursor_rule_target))
 
 	elif harness == "hermes":
-		# Never create SOUL.md: Hermes writes its own starter identity file on
-		# first run, and pre-empting that would fight the bootstrap.
+		# Hermes writes its own starter identity file on first run and needs
+		# nothing installed into it; the only leftover job is taking back a
+		# block an earlier version wrote before it existed.
 		label = "~/.hermes/SOUL.md"
-		targets.append(
-			(label, lambda: install_markdown(home / ".hermes" / "SOUL.md", block, args, label, create=False))
-		)
+		targets.append((label, lambda: migrate_legacy_block(home / ".hermes" / "SOUL.md", args, label)))
 
 	elif harness == "pi":
 		label = "~/.pi/agent/AGENTS.md"
-		targets.append(
-			(label, lambda: install_markdown(home / ".pi" / "agent" / "AGENTS.md", block, args, label))
-		)
+		targets.append((label, lambda: migrate_legacy_block(home / ".pi" / "agent" / "AGENTS.md", args, label)))
 
 	elif harness == "opencode":
 		cfg = home / ".config" / "opencode"
 		label = "~/.config/opencode/AGENTS.md"
-		targets.append((label, lambda: install_markdown(cfg / "AGENTS.md", block, args, label)))
+		targets.append((label, lambda: migrate_legacy_block(cfg / "AGENTS.md", args, label)))
+		# The payload arrives live via `instructions` in opencode.json, which
+		# this tool cannot write itself -- opencode.json is JSONC and rewriting
+		# it would destroy the user's comments -- so the best it can do is
+		# check the wiring is there and say what to add when it is not.
+		routing_label = "~/.config/opencode/leos-agent-routing.md"
+		routing_dest = cfg / "leos-agent-routing.md"
+		opencode_configured = bool(
+			routing.profile(config, "opencode", "runner") or routing.profile(config, "opencode", "executor")
+		)
+
+		def opencode_routing_target(l=routing_label):
+			if args.uninstall or opencode_configured:
+				return install_file_copy(None, routing_dest, args, l, payload=opencode_routing_rule(harness, config))
+			# Unconfigured: an extra file would only restate the payload's own
+			# default, and `instructions` loads it on every turn.
+			if not routing_dest.is_file():
+				return Result(l, "skipped", "no routing configured for opencode")
+			if PROVENANCE not in routing_dest.read_text(encoding="utf-8"):
+				return Result(l, "skipped", "no routing configured; leaving the unrelated file at this path")
+			if args.writes:
+				routing_dest.unlink()
+			return Result(l, "removed", "no routing configured; stale rule removed")
+
+		targets.append((routing_label, opencode_routing_target))
+		json_label = "~/.config/opencode/opencode.json"
+		targets.append(
+			(json_label, lambda: opencode_config_advisory(root, home, json_label, opencode_configured))
+		)
 		# OpenCode plugins cannot register skills or commands from JS, so the
 		# payload files are copied into the config dir where it reads them.
 		skill_label = "~/.config/opencode/skills/leo-install/SKILL.md"
@@ -560,29 +604,20 @@ def run(harness, root, args):
 	return results
 
 
-def install_codex_agents_md(home, block, args):
-	"""Codex's AGENTS.md, with a warning when the result nears the chain cap."""
-	path = home / ".codex" / "AGENTS.md"
-	result = install_markdown(path, block, args, "~/.codex/AGENTS.md")
-	if args.uninstall or result.status in ("skipped", "error"):
-		return result
-	current = read_text(path)[0] if path.is_file() else ""
-	prospective = current if result.status == "unchanged" else inject(current, block)
-	size = len(prospective.encode("utf-8"))
-	if size > CODEX_SOFT_CAP:
-		result.detail = f"WARNING: {size} bytes, near Codex's 32KiB chain cap"
-	return result
-
-
 def main(argv=None):
 	parser = argparse.ArgumentParser(
 		prog="leo-install.py",
-		description="Install leos-agent preferences into ONE harness's global instruction file.",
+		description=(
+			"Install what ONE harness's plugin system cannot deliver on its own, "
+			"and clean up any block an earlier version left in its global instruction file."
+		),
 	)
 	parser.add_argument("harness", choices=HARNESSES, help="the harness this session is running in")
 	mode = parser.add_mutually_exclusive_group()
 	mode.add_argument("--dry-run", action="store_true", help="show diffs, write nothing")
-	mode.add_argument("--uninstall", action="store_true", help="remove the block and any installed payload files")
+	mode.add_argument(
+		"--uninstall", action="store_true", help="remove any installed payload files and legacy blocks"
+	)
 	mode.add_argument("--check", action="store_true", help="exit 1 if anything would change")
 	parser.add_argument("--force", action="store_true", help="replace a conflicting file this tool did not write")
 	args = parser.parse_args(argv)
