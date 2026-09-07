@@ -49,7 +49,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 Dispatch = collections.namedtuple(
     "Dispatch",
-    "tool agent model prompt_bytes prompt_lines path_count prompt_hash prompt_head",
+    "tool agent model prompt_bytes prompt_lines path_count prompt_hash prompt_head opaque",
 )
 
 # The agent-selection field is mandatory, and that is the whole trick. A rule
@@ -70,6 +70,19 @@ SKIP_PREFIXES = ("mcp__",)
 
 # Seeded empty on purpose: populate from field reports, not from guesses.
 SKIP_TOOLS = frozenset()
+
+# Dispatch tools that select behaviour by model rather than by naming an agent,
+# so the agent-key rule alone would never see them. Exact names only, and only
+# ones observed in a real rollout: Codex's spawn_agent takes
+# {task_name, message, fork_turns, model, reasoning_effort} -- task_name is a
+# free-text label, so `model` is the entire routing decision there.
+DISPATCH_TOOLS = ("spawn_agent",)
+
+# Tools whose brief does not arrive as readable text. Codex encrypts `message`,
+# so its length is a proxy at best and its hash changes on every re-send. Both
+# the size heuristic and the conversion hash are suppressed rather than reported
+# as if they meant something.
+OPAQUE_BRIEF_TOOLS = ("spawn_agent",)
 
 ALLOW, BLOCK = "allow", "block"
 
@@ -131,21 +144,26 @@ def normalize(event, _harness=None):
 
     agent = _first_str(args, AGENT_KEYS)
     prompt = _first_str(args, PROMPT_KEYS)
-    if not agent or not prompt:
+    known = tool in DISPATCH_TOOLS
+    if not prompt or not (agent or known):
         return None
 
     from dispatch_log import digest  # local: a no-op call must not pay for this
 
+    opaque = tool in OPAQUE_BRIEF_TOOLS
     head = prompt[:PATH_SCAN_BYTES]
     return Dispatch(
         tool=tool or "-",
-        agent=agent,
+        # A model-routed dispatch names no agent; label it by its tool so the log
+        # reads sensibly without inventing a tier that was never selected.
+        agent=agent or tool,
         model=_first_str(args, MODEL_KEYS) or None,
-        prompt_bytes=len(prompt.encode("utf-8", "replace")),
-        prompt_lines=prompt.count("\n") + 1,
-        path_count=len(set(PATH_RE.findall(head))),
-        prompt_hash=digest(prompt),
-        prompt_head=prompt[:200],
+        prompt_bytes=0 if opaque else len(prompt.encode("utf-8", "replace")),
+        prompt_lines=0 if opaque else prompt.count("\n") + 1,
+        path_count=0 if opaque else len(set(PATH_RE.findall(head))),
+        prompt_hash=None if opaque else digest(prompt),
+        prompt_head="" if opaque else prompt[:200],
+        opaque=opaque,
     )
 
 
@@ -160,7 +178,7 @@ def triviality(dispatch):
     for a log line and disqualifying for a block, which is why this is only ever
     a log line.
     """
-    if dispatch is None:
+    if dispatch is None or dispatch.opaque:
         return 0
     score = 0
     if dispatch.prompt_bytes < 220:
@@ -182,7 +200,9 @@ def routable(name):
     inherit and say so -- blocking there would demand something the harness
     cannot do, a false positive by construction.
     """
-    if name == "claude":
+    # Both take a model per spawn: Claude Code on its dispatch tool, Codex as
+    # spawn_agent's `model` argument.
+    if name in ("claude", "codex"):
         return True
     try:
         import routing
@@ -215,8 +235,20 @@ def decide(dispatch, name, is_routable):
     return BLOCK, "no-model"
 
 
-def render_block(dispatch):
-    """The refusal. It must name the remedies, or it costs a turn to discover them."""
+def render_block(dispatch, name=None):
+    """The refusal. It must name the remedies, or it costs a turn to discover them.
+
+    The remedies differ by harness: Codex routes by `model` on spawn_agent and
+    has no agent to name, so offering it a subagent_type would be advice it
+    cannot take.
+    """
+    if dispatch.tool in DISPATCH_TOOLS or name == "codex":
+        return (
+            "[leo routing] BLOCKED - %s names no model, so it would silently inherit\n"
+            "the parent's. Re-dispatch with `model` set (and `reasoning_effort` with it),\n"
+            "naming the economical tier's model for narrow work.\n"
+            "Set LEOS_AGENT_DISPATCH_GUARD=off to disable, =warn to log only."
+        ) % dispatch.tool
     return (
         '[leo routing] BLOCKED - dispatch to agent "%s" names no model, so it would\n'
         "silently inherit the parent's. Re-dispatch with one of:\n"
@@ -291,7 +323,7 @@ def main(argv=None):
         pass
 
     if action == BLOCK and mode != "warn":
-        sys.stderr.write(render_block(dispatch) + "\n")
+        sys.stderr.write(render_block(dispatch, name) + "\n")
         return 2
 
     # A notice is user-facing only. systemMessage reaches Leo's transcript and

@@ -1,6 +1,6 @@
 # leos-agent
 
-Leo's portable agent operating policy, version **10.7.1**, installable on Claude
+Leo's portable agent operating policy, version **10.7.2**, installable on Claude
 Code, Codex, Cursor, Hermes, Pi, and OpenCode through each harness's own plugin
 system.
 
@@ -119,7 +119,7 @@ their global instruction file.
 The payload has always said that a subagent dispatch must name a model. Prose
 alone did not hold: a forgotten dispatch inherits the parent's expensive model
 and pays a cold cache write per child, which is the single most expensive shape
-this policy has. From 10.7.1 that half of the rule is enforced by a hook instead,
+this policy has. From 10.7.2 that half of the rule is enforced by a hook instead,
 and the prose it replaced came out of the always-loaded payload — enforcement in
 code costs **zero** context per turn, so the guard paid for itself in bytes
 before saving a cent.
@@ -143,11 +143,12 @@ is also deliberately narrow: a false block costs one re-dispatch, while a caught
 inherited fan-out saves the cold prefix of every child, so the margin only holds
 while the rule refuses to make judgment calls.
 
-Detection is by **argument shape**, not tool name — only Claude Code's dispatch
-tool is verified, so an unanticipated one degrades to a no-op rather than a
-broken harness. MCP tools are never guarded. Anything that goes wrong inside the
-guard allows the call and records `decision: "error"`, kept distinct from a
-decision to allow, because a guard that dies quietly is worse than no guard.
+Detection is by **argument shape**, not tool name: a dispatch is a call that
+selects an agent and carries a brief. A shape the guard does not recognise is
+left alone, so a harness it has never met keeps working. MCP tools are never
+guarded. Anything that goes wrong inside the guard allows the call and records
+`decision: "error"`, kept distinct from a decision to allow, because a guard
+that dies quietly is worse than no guard.
 
 ```
 LEOS_AGENT_DISPATCH_GUARD=on       block (default)
@@ -157,13 +158,17 @@ LEOS_AGENT_DISPATCH_GUARD=on       block (default)
 LEOS_AGENT_DISPATCH_LOG_PROMPTS=1  debug only: keep 200 chars of brief text in the log
 ```
 
-**Coverage is honest, not uniform.** Claude Code is verified. Codex, Cursor,
-Hermes and OpenCode are wired with the same policy but their dispatch argument
-shapes are unconfirmed; there the guard is best-effort and no-ops rather than
-misfires. Pi has no hook surface and gets nothing. **Codex hash-pins hooks**, so
-upgrading to 10.7.1 — and every later edit to the guard — needs re-approval
-through `/hooks` there. Until you do, Codex silently enforces nothing; zero Codex
-rows in the report is the symptom.
+**Per harness.** Claude Code dispatches `Agent` with `subagent_type`, and a
+plugin install namespaces it — both forms are tiers. Codex dispatches
+`spawn_agent`, which selects behaviour by `model` and `reasoning_effort` rather
+than by naming an agent, so there the guard requires `model`; its `message` is
+encrypted, so the over-delegation heuristic and block-conversion tracking do not
+apply on Codex. Hermes and OpenCode run the same policy in-process, blocking by
+directive and by throw respectively. Pi has no hook surface.
+
+**Codex hash-pins hooks.** A new version of the guard enforces nothing there
+until it is re-approved through `/hooks`, and the symptom is silence — zero
+Codex rows in `dispatch_log.py report`.
 
 ### What it records
 
@@ -190,7 +195,7 @@ gets it through its global instruction file, written by
 [`scripts/leo-install.py`](scripts/leo-install.py) into a marker block:
 
 ```
-<leos-agent version="10.7.1">
+<leos-agent version="10.7.2">
 ...the payload...
 </leos-agent>
 ```
@@ -259,7 +264,7 @@ that it is already installed and changes nothing.
 Run the installer's uninstall first, while the script is still on disk:
 
 ```bash
-python3 ~/.claude/plugins/cache/leos-agent/leos-agent/10.7.1/scripts/leo-install.py claude --uninstall
+python3 ~/.claude/plugins/cache/leos-agent/leos-agent/10.7.2/scripts/leo-install.py claude --uninstall
 ```
 
 ```bash
@@ -290,7 +295,7 @@ Then run the `install` skill in a Codex session (`$leos-agent`, then `install`),
 run the script directly:
 
 ```bash
-python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.7.1/scripts/leo-install.py codex
+python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.7.2/scripts/leo-install.py codex
 ```
 
 This writes `~/.codex/AGENTS.md` and installs two economical agents:
@@ -315,7 +320,7 @@ threads only. Re-adding an already-installed plugin is idempotent.
 **Uninstall**
 
 ```bash
-python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.7.1/scripts/leo-install.py codex --uninstall
+python3 ~/.codex/plugins/cache/leos-agent/leos-agent/10.7.2/scripts/leo-install.py codex --uninstall
 ```
 
 ```bash
@@ -464,7 +469,7 @@ Pinned refs are reconciled, never silently advanced — to move to a new tag,
 install it explicitly:
 
 ```bash
-pi install git:github.com/foxhatleo/leos-agent@v10.7.1
+pi install git:github.com/foxhatleo/leos-agent@v10.7.2
 ```
 
 Re-run `/skill:install` afterwards.
@@ -684,7 +689,7 @@ claude plugin uninstall leos-agent@leos-agent && claude plugin install leos-agen
 ```
 
 or replace the cachebuster suffix in the Codex manifest with one in the form
-`10.7.1+codex.local-YYYYMMDD-HHMMSS` and re-add. Either way, plugin changes only
+`10.7.2+codex.local-YYYYMMDD-HHMMSS` and re-add. Either way, plugin changes only
 reach a **new** session or thread.
 
 `--check` exits non-zero when a file is out of date, and `--force` replaces a

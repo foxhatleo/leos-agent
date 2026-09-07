@@ -179,11 +179,45 @@ class TestDecision(GuardCase):
             with self.subTest(agent=agent):
                 self.assertEqual(self.decide(dispatch_event(agent=agent)), self.guard.BLOCK)
 
+    def test_a_model_routed_dispatch_is_seen_without_an_agent_key(self):
+        """Codex's spawn_agent takes {task_name, message, fork_turns, model,
+        reasoning_effort}. task_name is a free-text label, so `model` is the
+        whole routing decision and the agent-key rule alone would never see it."""
+        base = {"task_name": "rose_shared", "message": "gAAAAABopaque", "fork_turns": "none"}
+        event = {"tool_name": "spawn_agent", "tool_input": base}
+        self.assertEqual(self.decide(event, "codex"), self.guard.BLOCK)
+        with_model = {"tool_name": "spawn_agent", "tool_input": dict(base, model="gpt-5.6-luna")}
+        self.assertEqual(self.decide(with_model, "codex"), self.guard.ALLOW)
+
+    def test_an_opaque_brief_is_not_measured(self):
+        """Codex encrypts `message`. Its length is a proxy at best and its hash
+        changes on every re-send, so neither the size heuristic nor the
+        conversion hash may pretend to mean something there."""
+        d = self.guard.normalize({"tool_name": "spawn_agent", "tool_input": {
+            "task_name": "x", "message": "gAAAAAB" + "z" * 400}})
+        self.assertTrue(d.opaque)
+        self.assertEqual(self.guard.triviality(d), 0)
+        self.assertIsNone(d.prompt_hash)
+
+    def test_an_unknown_tool_still_needs_an_agent_key(self):
+        """Naming spawn_agent must not loosen the rule for everything else --
+        spawn_task carries a prompt and no agent and stays invisible."""
+        self.assertIsNone(self.guard.normalize({"tool_name": "spawn_task", "tool_input": {
+            "prompt": "Fix the badge", "title": "t", "tldr": "x"}}))
+
+    def test_the_codex_refusal_does_not_recommend_an_agent_it_cannot_name(self):
+        d = self.guard.normalize({"tool_name": "spawn_agent", "tool_input": {
+            "task_name": "x", "message": "gAAAA"}})
+        message = self.guard.render_block(d, "codex")
+        self.assertIn("model", message)
+        self.assertNotIn("subagent_type", message)
+
     def test_a_harness_that_cannot_route_is_never_blocked(self):
         """The payload itself tells such a harness to inherit and say so, so a
         block there would demand something impossible."""
         with self.env():
             self.assertFalse(self.guard.routable("opencode"))
+            self.assertTrue(self.guard.routable("codex"))
         self.assertEqual(self.decide(dispatch_event(), "opencode"), self.guard.ALLOW)
 
     def test_a_configured_harness_becomes_routable(self):
@@ -195,10 +229,12 @@ class TestDecision(GuardCase):
     def test_a_corrupt_routing_config_allows_rather_than_exits(self):
         """routing.py exits the process on a malformed config. A hook that
         inherited that would take the session with it."""
+        # opencode, not codex: codex is routable without consulting the config,
+        # so it would never exercise the parse at all.
         (self.data / "routing.json").write_text("{not json", encoding="utf-8")
         with self.env():
-            self.assertFalse(self.guard.routable("codex"))
-        self.assertEqual(self.decide(dispatch_event(), "codex"), self.guard.ALLOW)
+            self.assertFalse(self.guard.routable("opencode"))
+        self.assertEqual(self.decide(dispatch_event(), "opencode"), self.guard.ALLOW)
 
 
 class TestProtocol(GuardCase):

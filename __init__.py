@@ -63,7 +63,7 @@ def _on_pre_tool_call(tool_name="", args=None, **_):
 		return None
 	if action != guard.BLOCK or dispatch is None:
 		return None
-	return {"action": "block", "message": guard.render_block(dispatch)}
+	return {"action": "block", "message": guard.render_block(dispatch, HARNESS)}
 
 
 def register(ctx):
