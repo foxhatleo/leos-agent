@@ -15,10 +15,11 @@ class TestRouting(unittest.TestCase):
     def test_codex_profiles_match_their_work(self):
         runner = (ROOT / "payload" / "codex-agents" / "leo-runner.toml").read_text(encoding="utf-8")
         executor = (ROOT / "payload" / "codex-agents" / "leo-executor.toml").read_text(encoding="utf-8")
-        self.assertIn('model = "gpt-5.6-luna"', runner)
-        self.assertIn('model_reasoning_effort = "low"', runner)
-        self.assertIn('model = "gpt-5.6-terra"', executor)
-        self.assertIn('model_reasoning_effort = "medium"', executor)
+        for text in (runner, executor):
+            self.assertNotIn('model =', text)
+            self.assertNotIn('model_reasoning_effort =', text)
+        self.assertIn('cheap worker', runner)
+        self.assertIn('standard worker', executor)
 
     def test_claude_agents_match_their_work(self):
         # The Claude twins bake the tier's model into the agent type, so a brief

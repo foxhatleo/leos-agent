@@ -1,7 +1,7 @@
 # leos-agent
 
 Cost-aware delegation and portable workflows for Claude Code, Codex, Cursor,
-OpenCode, Hermes, and Pi. Version **11.202609070.0**.
+OpenCode, Hermes, and Pi. Version **12.2026090800.0**.
 
 The main agent handles small work directly and delegates substantial, bounded
 work to the cheapest competent tier. The policy separates **whether to delegate**
@@ -55,7 +55,7 @@ operation.
 | Harness | Policy delivery | Model control | Important limit |
 |---|---|---|---|
 | Claude Code | SessionStart, including forks | Agent/Task argument correction; native profiles | Forced settings and provider/org substitutions can affect execution; observe child transcripts. |
-| Codex | Separate native SessionStart hook | Explicit model retry; installed native TOML profiles | Profile model precedence can override spawn arguments. Hooks need native trust. |
+| Codex | Separate native SessionStart hook | Tier-enforcing explicit spawn selection; model-free native profiles | Hooks need native trust. Other/customized profiles can still override spawn settings. |
 | Cursor | Native always-apply rule | Installed user agents; resolved subagentStart model ceiling | No invented Task model argument; hook diagnostics distinguish planned models from completion. |
 | OpenCode | One registered rendered instruction | Native agent selection, confirmed through the SDK | Task has no model field; source/config paths must remain valid. |
 | Hermes | Frozen system-prompt section | Global native delegation-model ceiling when parent/model are observable | Native delegation has one global model, not separate per-task tiers. |

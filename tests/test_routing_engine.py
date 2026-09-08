@@ -47,6 +47,24 @@ class RoutingEngine(unittest.TestCase):
         result = self.route("codex", {"model": "gpt-5.6-luna"}, "gpt-5.6-sol", effective_model="gpt-5.6-terra")
         self.assertEqual(result["reason"], "profile-over-ceiling")
 
+    def test_codex_cheap_profile_cannot_silently_use_expensive_parent(self):
+        result = self.route("codex", {"agent_type": "leo-cheap", "model": "gpt-6-astra"}, "gpt-6-astra")
+        self.assertEqual(result["action"], "block")
+        self.assertIn("gpt-5.6-luna", result["retry"])
+
+    def test_codex_standard_profile_is_capped_to_cheap_parent(self):
+        result = self.route("codex", {"agent_type": "leo-standard", "model": "gpt-5.6-terra"}, "gpt-5.6-luna")
+        self.assertEqual(result["action"], "block")
+        self.assertIn("gpt-5.6-luna", result["retry"])
+        retry = self.route("codex", {"agent_type": "leo-standard", "model": "gpt-5.6-luna"}, "gpt-5.6-luna")
+        self.assertEqual(retry["action"], "allow")
+
+    def test_codex_configured_effort_is_required_at_spawn(self):
+        result = engine.route("codex", "spawn_agent", {"agent_type": "leo-cheap", "model": "gpt-5.6-luna"},
+                              "gpt-6-astra", config={"codex": {"cheap": {"model": "gpt-5.6-luna", "effort": "low"}}}, catalog=self.catalog)
+        self.assertEqual(result["action"], "block")
+        self.assertIn("reasoning_effort='low'", result["retry"])
+
     def test_opencode_never_requests_a_nonexistent_model_field(self):
         result = self.route("opencode", {"subagent_type": "general", "prompt": "Investigate"}, "gpt-5.6-sol")
         self.assertEqual(result["action"], "allow")

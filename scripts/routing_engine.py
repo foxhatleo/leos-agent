@@ -64,6 +64,21 @@ or global settings determine the actual requested child model.
     requested = args.get(field) if field else None
     requested = requested if isinstance(requested, str) and requested.strip() else None
     result["requested_model"] = requested
+    if harness == "codex" and tier and not effective_model:
+        expected = routing.tier_model(harness, tier, config, parent)
+        comparison = pricing.compare(expected, parent, catalog) if expected and parent else None
+        if comparison and comparison["status"] == "over-ceiling":
+            expected = parent
+        entry = routing.profile(config, harness, tier) or {}
+        effort = entry.get("effort") if expected != parent else None
+        result.update(effective_model=expected, price=comparison)
+        if expected and (requested != expected or (effort and args.get("reasoning_effort") != effort)):
+            retry = f"Retry this profile with model={expected!r}"
+            if effort:
+                retry += f" and reasoning_effort={effort!r}"
+            result.update(action="block", reason="tier-selection-required",
+                          retry=retry + ". Select a different tier explicitly if the work requires it.")
+            return result
     selected = effective_model or requested
     if tier and not selected and harness not in ("cursor", "opencode", "hermes", "pi"):
         selected = routing.tier_model(harness, tier, config, parent)

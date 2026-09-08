@@ -108,20 +108,8 @@ class Result:
 
 
 def render_codex_agent(text, agent_name, config):
-	"""Substitute a Codex profile's model, leaving the shipped default when unset."""
-	role = agent_name.split("-", 1)[1]
-	entry = routing.profile(config, "codex", "standard" if role == "reviewer" else role)
-	if not entry:
-		return text
-	text = re.sub(r'(?m)^model = ".*"$', lambda _: "model = " + json.dumps(entry["model"]), text, count=1)
-	if entry.get("effort"):
-		text = re.sub(
-			r'(?m)^model_reasoning_effort = ".*"$',
-			lambda _: "model_reasoning_effort = " + json.dumps(entry["effort"]),
-			text,
-			count=1,
-		)
-	return text
+	"""Profiles carry instructions; the dispatch guard enforces model selection."""
+	return re.sub(r'(?m)^model(?:_reasoning_effort)? = .*\n', "", text)
 
 
 def cursor_routing_rule(harness, config):

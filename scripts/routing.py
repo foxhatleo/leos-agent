@@ -147,7 +147,7 @@ def stanza(harness, config):
     if harness == "claude":
         return line + " Use `leo-cheap` or `leo-standard`; the guard applies configured models and the price ceiling."
     if harness == "codex":
-        return line + " Use the supported spawn model field; profile model settings take precedence when selecting a native profile."
+        return line + " Choose a native tier profile and explicitly set its model at spawn. The guard requires the tier model capped to the parent; our profiles do not pin models."
     if harness == "opencode":
         return line + " Use installed native tier agents; task calls have no model field."
     return line + " Use only model/profile selection supported by this harness; report unavailable routing."

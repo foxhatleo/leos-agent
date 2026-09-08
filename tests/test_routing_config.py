@@ -150,14 +150,14 @@ class TestRendering(RoutingCase):
         self.assertIn('`leo-cheap`', stanza)
         self.assertIn('cheap: `haiku-x`', stanza)
 
-    def test_codex_toml_takes_the_configured_model_and_keeps_shipped_defaults(self):
+    def test_codex_profiles_leave_model_selection_to_the_guard(self):
         shipped = (ROOT / "payload" / "codex-agents" / "leo-runner.toml").read_text(encoding="utf-8")
         rendered = self.installer.render_codex_agent(
             shipped, "leo-runner", {"codex": {"cheap": {"model": "gpt-x", "effort": None}}}
         )
-        self.assertIn('model = "gpt-x"', rendered)
-        # effort was not configured, so the profile keeps the one it ships with
-        self.assertIn('model_reasoning_effort = "low"', rendered)
+        self.assertNotIn('model =', rendered)
+        # Neither setting may override the guarded spawn selection.
+        self.assertNotIn('model_reasoning_effort =', rendered)
         self.assertEqual(self.installer.render_codex_agent(shipped, "leo-runner", {}), shipped)
 
     def test_rendering_is_deterministic(self):
@@ -182,8 +182,8 @@ class TestInstallIdempotency(RoutingCase):
         second = self.install("codex", home)
         self.assertFalse([r.target for r in second if r.changed], "a second install rewrote a target")
 
-        self.assertIn('model = "gpt-x"', (home / ".codex" / "agents" / "leo-runner.toml").read_text())
-        self.assertIn('model_reasoning_effort = "minimal"', (home / ".codex" / "agents" / "leo-runner.toml").read_text())
+        self.assertNotIn('model =', (home / ".codex" / "agents" / "leo-runner.toml").read_text())
+        self.assertNotIn('model_reasoning_effort =', (home / ".codex" / "agents" / "leo-runner.toml").read_text())
         self.assertEqual((self.data / "routing.json").read_bytes(), before, "the installer wrote to the config")
 
     def test_uninstall_leaves_the_config_alone(self):
@@ -201,7 +201,7 @@ class TestInstallIdempotency(RoutingCase):
         self.assertFalse(rule.exists())
         self.assertEqual((self.data / "routing.json").read_bytes(), before)
 
-    def test_editing_the_config_makes_check_report_out_of_date(self):
+    def test_codex_mapping_changes_do_not_rewrite_model_free_profiles(self):
         home = Path(self.tmp.name) / "home3"
         home.mkdir()
         self.install("codex", home)
@@ -209,7 +209,7 @@ class TestInstallIdempotency(RoutingCase):
         with mock.patch.dict(os.environ, {"LEOS_AGENT_LOCAL_PATH": str(self.data)}), \
              mock.patch.object(Path, "home", staticmethod(lambda: home)):
             results = self.installer.run("codex", ROOT, args(check=True, writes=False))
-        self.assertTrue([r.target for r in results if r.changed])
+        self.assertFalse([r.target for r in results if r.changed])
 
 
 class WriteCase(RoutingCase):
