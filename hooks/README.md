@@ -21,6 +21,15 @@ deny only when needed. Missing prices are allowed with a log diagnostic. It
 never invents a model argument for Task. SubagentStop records lifecycle
 completion separately from actual model observation.
 
+The installed Cursor agents carry the no-delegation rule as worker instructions
+only. Cursor publishes no per-agent tool restriction, and subagentStart reports
+the child's subagent_type and a parent conversation id but not the parent's
+agent type, so a hook cannot establish that a dispatch came from a worker rather
+than the top-level session. This is weaker than Claude's disallowedTools or
+OpenCode's per-agent task: false, and is reported rather than presented as
+parity. Any future enforcement must preserve leo-reviewer's delegation to
+bounded lenses, which review-pr depends on.
+
 Claude/Codex SubagentStop reads only a bounded tail of the child's transcript
 to observe its latest response model. Transcript formats can change; missing
 observations remain unknown. The observer emits empty JSON and never asks a

@@ -666,12 +666,16 @@ def native_agent(root, name, harness, config):
 	fields = "---\n# Managed by leos-agent.\nname: " + name + "\ndescription: " + json.dumps(description) + "\n"
 	if harness == "opencode":
 		fields += "mode: subagent\n"
-		if model:
-			fields += "model: " + json.dumps(model) + "\n"
+		# The reviewer delegates bounded lenses under review-pr; ordinary workers
+		# never delegate, and OpenCode can enforce that per agent.
 		if name != "leo-reviewer":
 			fields += "tools:\n  task: false\n"
-	else:
-		fields += "model: " + json.dumps(model or "inherit") + "\n"
+	# Omit the key rather than inventing a value. "inherit" is Claude Code's
+	# frontmatter, not a model identifier Cursor would resolve, and writing it
+	# claimed a routing decision no harness was making. Unconfigured now means the
+	# harness's own default on Cursor and OpenCode alike.
+	if model:
+		fields += "model: " + json.dumps(model) + "\n"
 	return fields + "---\n" + body
 
 

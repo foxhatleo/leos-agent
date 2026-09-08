@@ -324,6 +324,25 @@ def main():
 		check(re.search(r"^description:", fm, re.MULTILINE) is not None, f"{rel}: needs description")
 		check(re.search(r"^model:\s*\S", fm, re.MULTILINE) is not None, f"{rel}: needs an explicit model")
 		check(re.search(r"^tools:\s*\S", fm, re.MULTILINE) is not None, f"{rel}: needs an explicit tools allowlist")
+		# On Cursor this sentence is the only form the no-delegation rule takes:
+		# native_agent copies the body verbatim and Cursor publishes no per-agent
+		# tool restriction. Editing it away during prose tidying would silently
+		# remove the rule on that harness, so it is load-bearing, not decorative.
+		if agent.stem != "leo-reviewer":
+			check("do not spawn further agents" in text.lower(),
+				f"{rel}: the worker body must keep its no-delegation sentence; on Cursor it is the only carrier")
+
+	# Unconfigured routing must omit the model key. Writing Claude Code's
+	# "inherit" into a Cursor or OpenCode agent states a model identifier the
+	# harness cannot resolve, and claims a routing decision nobody made.
+	for harness in ("cursor", "opencode"):
+		for name in installer.CODEX_AGENTS:
+			fm = installer.native_agent(ROOT, name, harness, {}).split("---", 2)[1]
+			check("model:" not in fm, f"{harness}/{name}: unconfigured routing must omit model:, not invent one")
+			configured = {harness: {"cheap": {"model": "example-model", "effort": None},
+				"standard": {"model": "example-model", "effort": None}}}
+			rendered = installer.native_agent(ROOT, name, harness, configured)
+			check(installer.owned_copy(rendered), f"{harness}/{name}: the installer must recognise its own copy")
 
 	# 5a-routing. The routing region is what makes the economical tier
 	# configurable per machine. Rendering must be total (every harness gets a

@@ -337,6 +337,18 @@ class TestOpenCodeRoutingRule(unittest.TestCase):
             again = self.run_opencode(home, self.CONFIG)
             self.assertEqual(again["~/.config/opencode/leos-agent-routing.md"].status, "unchanged")
 
+    def test_native_agents_restrict_delegation_except_the_reviewer(self):
+        """OpenCode can enforce this per agent; the reviewer must keep its
+        lens delegation, which review-pr depends on."""
+        installer = load_installer()
+        for name in installer.CODEX_AGENTS:
+            frontmatter = installer.native_agent(ROOT, name, "opencode", {}).split("---", 2)[1]
+            with self.subTest(agent=name):
+                if name == "leo-reviewer":
+                    self.assertNotIn("task: false", frontmatter)
+                else:
+                    self.assertIn("task: false", frontmatter)
+
     def test_config_points_to_exactly_one_rendered_policy(self):
         import json
         with tempfile.TemporaryDirectory() as tmp:
@@ -372,13 +384,28 @@ class TestCursorRoutingRule(unittest.TestCase):
         local.mkdir(parents=True, exist_ok=True)
         (local / "routing.json").write_text(body, encoding="utf-8")
 
-    def test_unconfigured_profiles_inherit_without_global_rules(self):
+    def test_unconfigured_profiles_omit_the_model_key(self):
+        """"inherit" is Claude Code frontmatter, not a model Cursor resolves.
+        Writing it claimed a routing decision no harness was making."""
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             results = self.run_cursor(home)
             self.assertFalse(any(r.failed for r in results))
             self.assertFalse(self.rule_path(home).exists())
-            self.assertIn('model: "inherit"', (home / ".cursor/agents/leo-cheap.md").read_text())
+            frontmatter = (home / ".cursor/agents/leo-cheap.md").read_text().split("---", 2)[1]
+            self.assertNotIn("model:", frontmatter)
+            self.assertNotIn("inherit", frontmatter)
+
+    def test_cursor_copies_carry_the_no_delegation_instruction(self):
+        """Cursor has no per-agent tool restriction and subagentStart does not
+        report the parent's agent type, so the worker body is the only carrier."""
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            self.run_cursor(home)
+            worker = (home / ".cursor/agents/leo-cheap.md").read_text()
+            self.assertIn("do not spawn further agents", worker.lower())
+            reviewer = (home / ".cursor/agents/leo-reviewer.md").read_text()
+            self.assertIn("delegate bounded specialist lenses", reviewer)
 
     def test_configured_profiles_round_trip_and_keep_provider_identifiers(self):
         with tempfile.TemporaryDirectory() as tmp:

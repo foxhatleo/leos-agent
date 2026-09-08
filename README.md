@@ -56,7 +56,7 @@ operation.
 |---|---|---|---|
 | Claude Code | SessionStart, including forks | Agent/Task argument correction; native profiles | The first dispatch may precede parent transcript persistence; missing parent data permits dispatch with a diagnostic. Forced settings/provider substitutions also limit enforcement. |
 | Codex | Separate native SessionStart hook | Tier-enforcing explicit spawn selection; model-free native profiles | Hooks need native trust. Other/customized profiles can still override spawn settings. |
-| Cursor | Native always-apply rule | Installed user agents; resolved subagentStart model ceiling | No invented Task model argument; hook diagnostics distinguish planned models from completion. |
+| Cursor | Native always-apply rule | Installed user agents; resolved subagentStart model ceiling | No invented Task model argument; hook diagnostics distinguish planned models from completion. Worker no-delegation is instruction-only: no per-agent tool restriction, and no parent-agent identity at subagentStart. |
 | OpenCode | One registered rendered instruction | Native agent selection, confirmed through the SDK | Task has no model field; source/config paths must remain valid. |
 | Hermes | Frozen system-prompt section | Global native delegation-model ceiling when parent/model are observable | Native delegation has one global model, not separate per-task tiers. |
 | Pi | Extension caches rendered body per session | Advisory policy and extension-dependent dispatch checks | No native per-spawn model guarantee for third-party subagent tools. |
