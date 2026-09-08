@@ -160,8 +160,8 @@ def main():
 	cursor_data = json.loads(cursor_hooks.read_text(encoding="utf-8"))
 	pre = (shared_data.get("hooks") or {}).get("PreToolUse") or []
 	check(bool(pre), "hooks/hooks.json: no PreToolUse entry (the dispatch guard is not wired)")
-	cursor_pre = (cursor_data.get("hooks") or {}).get("preToolUse") or []
-	check(bool(cursor_pre), "hooks/hooks-cursor.json: no preToolUse entry (Cursor gets no guard)")
+	cursor_pre = (cursor_data.get("hooks") or {}).get("subagentStart") or []
+	check(bool(cursor_pre), "hooks/hooks-cursor.json: no subagentStart entry (Cursor gets no model ceiling)")
 	for entry in pre:
 		check(bool(entry.get("matcher")), "hooks/hooks.json: PreToolUse needs a matcher, or it spawns on every tool call")
 
@@ -181,9 +181,8 @@ def main():
 	)
 	cursor_hook_keys = cursor_data.get("hooks") or {}
 	check(
-		"SessionStart" not in cursor_hook_keys and "sessionStart" not in cursor_hook_keys,
-		"hooks/hooks-cursor.json: must not declare a session-start hook -- Cursor already reads the payload "
-		"natively through its always-apply rule, and a hook here would double-inject it",
+		all("emit_payload.py" not in entry.get("command", "") for entries in cursor_hook_keys.values() for entry in entries),
+		"Cursor must observe lifecycle without injecting a duplicate policy",
 	)
 
 	commands = [h.get("command", "") for entry in pre for h in entry.get("hooks") or []]

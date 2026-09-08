@@ -65,7 +65,7 @@ or global settings determine the actual requested child model.
     requested = requested if isinstance(requested, str) and requested.strip() else None
     result["requested_model"] = requested
     selected = effective_model or requested
-    if tier and not selected:
+    if tier and not selected and harness not in ("cursor", "opencode", "hermes", "pi"):
         selected = routing.tier_model(harness, tier, config, parent)
     if not selected:
         if field:

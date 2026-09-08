@@ -192,10 +192,10 @@ class TestReport(ScanCase):
             {"agent": "Explore", "model": "claude-opus-5", "prompt_bytes": 10},
             {"agent": "general-purpose", "model": None, "prompt_bytes": 60},
         ])
-        self.assertEqual(stats["tiers"]["inherited"], 2)
+        self.assertEqual(stats["tiers"]["model unspecified"], 2)
         self.assertEqual(stats["tiers"]["leo-runner"], 1)
         self.assertEqual(stats["tiers"]["explicit model"], 1)
-        self.assertEqual(stats["inherited_share"], 0.5)
+        self.assertEqual(stats["unspecified_share"], 0.5)
 
     def test_namespaced_tiers_are_not_counted_as_inherited(self):
         """The report must agree with the guard about what a tier is, or a
@@ -205,8 +205,8 @@ class TestReport(ScanCase):
             {"agent": "leo-executor", "model": None, "prompt_bytes": 10},
             {"agent": "Explore", "model": None, "prompt_bytes": 10},
         ])
-        self.assertEqual(stats["tiers"]["inherited"], 1)
-        self.assertEqual(stats["inherited_share"], round(1 / 3, 3))
+        self.assertEqual(stats["tiers"]["model unspecified"], 1)
+        self.assertEqual(stats["unspecified_share"], round(1 / 3, 3))
 
     def test_an_empty_window_renders_without_dividing_by_zero(self):
         with mock.patch.dict(os.environ, {"LEOS_AGENT_LOCAL_PATH": str(self.root)}), \
@@ -233,6 +233,77 @@ class TestReport(ScanCase):
         self.assertLess(self.scan.parse_since("7d"), time.time() - 600000)
         with self.assertRaises(SystemExit):
             self.scan.parse_since("last tuesday")
+
+
+class TestAccountingRegressions(ScanCase):
+    def test_claude_streaming_usage_and_tool_blocks_are_deduplicated(self):
+        base = self.root / "projects" / "p"
+        block = {"id": "tool1", "type": "tool_use", "name": "Agent", "input": {"prompt": "x"}}
+        self.write_jsonl(base / "s.jsonl", [assistant("r", [block], usage=usage(10, 20, 30, 1)),
+                                            assistant("r", [block], usage=usage(10, 20, 30, 99))])
+        data = self.scan.scan_claude(self.since, str(self.root / "projects"))
+        self.assertEqual(data["buckets"]["main"].output, 99)
+        self.assertEqual(len(data["dispatches"]), 1)
+        self.assertEqual(data["model_usage"]["claude-opus-5"]["main"]["requests"], 1)
+
+    def test_unknown_timestamps_are_explicit_gaps(self):
+        self.write_jsonl(self.root / "projects" / "p" / "s.jsonl", [assistant("r", timestamp="unknown")])
+        data = self.scan.scan_claude(self.since, str(self.root / "projects"))
+        self.assertEqual(data["buckets"]["main"].requests, 0)
+        self.assertEqual(data["diagnostics"]["unknown_timestamp_records"], 1)
+        self.assertEqual(self.scan._iso_epoch("2026-01-01T01:00:00+01:00"), self.scan._iso_epoch("2026-01-01T00:00:00Z"))
+
+    def test_codex_deduplicates_cumulative_events_and_separates_cache(self):
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        def event(total, cached, output):
+            values = {"input_tokens": total, "cached_input_tokens": cached, "output_tokens": output}
+            return {"timestamp": stamp, "payload": {"type": "token_count", "info": {
+                "total_token_usage": values, "last_token_usage": values}}}
+        self.write_jsonl(self.root / "sessions" / "rollout-child.jsonl", [
+            {"type": "session_meta", "payload": {"source": {"subagent": {"thread_spawn": {}}}}},
+            {"type": "turn_context", "payload": {"model": "gpt-5.6-luna"}},
+            event(100, 80, 20), event(100, 80, 20), event(200, 150, 40)])
+        data = self.scan.scan_codex(self.since, str(self.root / "sessions"))
+        sub = data["buckets"]["subagent"]
+        self.assertEqual((sub.input, sub.cache_read, sub.output, sub.requests), (50, 150, 40, 2))
+        self.assertEqual(data["buckets"]["main"].requests, 0)
+        self.assertEqual(data["models"], {"gpt-5.6-luna": 2})
+
+    def test_opencode_message_window_and_reasoning(self):
+        import sqlite3
+        db = self.root / "opencode.db"
+        conn = sqlite3.connect(str(db))
+        conn.execute("CREATE TABLE session (id TEXT, parent_id TEXT)")
+        conn.execute("CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, data TEXT)")
+        conn.execute("CREATE TABLE session_message (id TEXT, session_id TEXT, time_created INTEGER, type TEXT, data TEXT)")
+        conn.execute("INSERT INTO session VALUES ('s', 'parent')")
+        data = {"role": "assistant", "modelID": "claude-sonnet-5", "providerID": "anthropic",
+                "tokens": {"input": 10, "output": 5, "reasoning": 15, "cache": {"read": 20, "write": 30}}, "cost": 0}
+        conn.execute("INSERT INTO message VALUES (?,?,?,?)", ("old", "s", 0, json.dumps(data)))
+        conn.execute("INSERT INTO message VALUES (?,?,?,?)", ("new", "s", int(time.time()*1000), json.dumps(data)))
+        conn.execute("INSERT INTO session_message VALUES (?,?,?,?,?)", ("new", "s", int(time.time()*1000), "assistant", json.dumps(data)))
+        conn.commit(); conn.close()
+        result = self.scan.scan_opencode(self.since, str(db))
+        self.assertEqual(result["buckets"]["subagent"].output, 20)
+        self.assertEqual(result["buckets"]["subagent"].requests, 1)
+        self.assertEqual(result["reported_cost_records"], 1)
+        self.assertEqual(result["reported_cost_usd"], 0)
+
+    def test_reference_cost_keeps_unknown_cache_explicit(self):
+        catalog = {"models": [{"id": "anthropic/claude-sonnet-5", "pricing": {"prompt": "0.000003", "completion": "0.000015"}}]}
+        buckets = {"main": {"input": 1000, "cache_read": 2000, "cache_write": 0, "output": 100}}
+        result = self.scan.reference_cost("claude-sonnet-5", buckets, catalog)
+        self.assertAlmostEqual(result["minimum_usd"], 0.0045)
+        self.assertEqual(result["unpriced_tokens"], 2000)
+
+    def test_guard_window_and_harness_filter(self):
+        import dispatch_log
+        rows = [{"ts": "2026-01-01T00:00:00Z", "harness": "claude"},
+                {"ts": "2026-09-01T00:00:00Z", "harness": "codex"},
+                {"ts": "2026-09-01T00:00:00Z", "harness": "claude"}]
+        with mock.patch.object(dispatch_log, "read", return_value=rows), mock.patch.object(dispatch_log, "summarise", side_effect=lambda x: x):
+            result = self.scan.scan_guard(self.scan._iso_epoch("2026-08-01T00:00:00Z"), "claude")
+        self.assertEqual(result, [rows[-1]])
 
 
 class TestSkillCost(unittest.TestCase):

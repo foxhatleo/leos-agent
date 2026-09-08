@@ -1,9 +1,21 @@
 {
   "version": 1,
   "hooks": {
-    "preToolUse": [
+    "sessionStart": [
       {
-        "command": "python3 ./scripts/dispatch_guard.py",
+        "command": "python3 ./scripts/cursor_hook.py",
+        "timeout": 10
+      }
+    ],
+    "subagentStart": [
+      {
+        "command": "python3 ./scripts/cursor_hook.py",
+        "timeout": 10
+      }
+    ],
+    "subagentStop": [
+      {
+        "command": "python3 ./scripts/cursor_hook.py",
         "timeout": 10
       }
     ]

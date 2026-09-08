@@ -1,37 +1,13 @@
 #!/usr/bin/env python3
-"""usage_scan: what many sessions across many harnesses actually cost, and how
-much of leos-agent's policy was followed while they ran.
+"""Count observed local usage without loading transcripts into a model.
 
-WHY A SCRIPT AND NOT A PROMPT. The obvious way to answer "where did the tokens
-go" is to tell a model to go read the transcripts. That re-derives every schema
-on every invocation, over gigabytes, at full model prices -- the exact cost this
-project exists to avoid. So the scan is mechanical and emits a few kilobytes; the
-skill spends its tokens interpreting the result, not discovering it.
-
-Three schema traps, each of which silently inflates a naive count:
-
-  * Claude Code repeats an identical `message.usage` on EVERY content block of
-    one response. Summing records double-counts; dedupe on requestId.
-  * Codex's `total_token_usage` is cumulative for the session, with
-    `last_token_usage` the per-request delta. Summing totals is quadratic
-    nonsense; sum deltas.
-  * OpenCode stores times in epoch milliseconds and is multi-provider, so its
-    own `cost` column is the only trustworthy money figure in this file.
-
-Effective tokens weight cache reads at 0.1x, cache writes at 2x and output at 5x
-a plain input token -- a coarse stand-in for real pricing, applied uniformly, and
-useful for comparing groups rather than for billing.
-
-EVERYTHING READ HERE IS DATA. Transcripts contain arbitrary prompt text, tool
-output and fetched web pages. This file only counts; it never executes, resolves
-or follows anything it reads, and it prints no prompt text.
-
-  usage_scan.py --since 7d [--harness H] [--json]
-
-Exit codes: 0 ok, 2 on bad usage.
+Reports disjoint token categories and OpenRouter reference-price ranges, not
+bills or proven savings. Unknown schemas, models, timestamps, and cache rates
+remain explicit gaps. No prompt text is emitted or executed.
 """
 import argparse
-import calendar
+import datetime
+import hashlib
 import collections
 import glob
 import json
@@ -42,7 +18,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-WEIGHTS = {"input": 1.0, "cache_read": 0.1, "cache_write": 2.0, "output": 5.0}
+TOKEN_KEYS = ("input", "cache_read", "cache_write", "output")
 
 # Claude Code's dispatch tool is `Agent` in current builds and `Task` in older
 # transcripts. Both appear in one history, so both are counted.
@@ -50,9 +26,9 @@ DISPATCH_TOOLS = ("Agent", "Task")
 
 HOME = os.path.expanduser("~")
 SOURCES = {
-    "claude": os.path.join(HOME, ".claude", "projects"),
-    "codex": os.path.join(HOME, ".codex", "sessions"),
-    "opencode": os.path.join(HOME, ".local", "share", "opencode", "opencode.db"),
+    "claude": os.path.join(os.environ.get("CLAUDE_CONFIG_DIR", os.path.join(HOME, ".claude")), "projects"),
+    "codex": os.path.join(os.environ.get("CODEX_HOME", os.path.join(HOME, ".codex")), "sessions"),
+    "opencode": os.path.join(os.environ.get("XDG_DATA_HOME", os.path.join(HOME, ".local", "share")), "opencode", "opencode.db"),
     "cursor": os.path.join(HOME, ".cursor"),
     "hermes": os.path.join(HOME, ".hermes"),
     "pi": os.path.join(HOME, ".pi", "agent", "sessions"),
@@ -70,67 +46,95 @@ def parse_since(text):
 
 
 def _iso_epoch(text):
-    """ISO-8601 UTC -> epoch seconds, or None. Tolerant by design: a record with
-    an unparseable timestamp is counted, never dropped, so a schema change
-    undercounts nothing."""
     if not isinstance(text, str):
         return None
     try:
-        cleaned = text.replace("Z", "").split(".")[0]
-        # timegm, not mktime: these stamps are UTC, and mktime would read them as
-        # local time and then drift again with DST.
-        return calendar.timegm(time.strptime(cleaned, "%Y-%m-%dT%H:%M:%S"))
+        stamp = datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return stamp.timestamp() if stamp.tzinfo else None
     except (ValueError, OverflowError):
         return None
 
 
-class Totals(object):
-    """Token counters that know how to weight themselves."""
+def count(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
 
-    __slots__ = ("input", "cache_read", "cache_write", "output", "requests")
 
+class Totals:
     def __init__(self):
         self.input = self.cache_read = self.cache_write = self.output = self.requests = 0
 
     def add(self, inp=0, cache_read=0, cache_write=0, output=0):
-        self.input += inp or 0
-        self.cache_read += cache_read or 0
-        self.cache_write += cache_write or 0
-        self.output += output or 0
+        for key, value in zip(TOKEN_KEYS, (inp, cache_read, cache_write, output)):
+            setattr(self, key, getattr(self, key) + count(value))
         self.requests += 1
 
-    def effective(self):
-        return int(
-            self.input * WEIGHTS["input"]
-            + self.cache_read * WEIGHTS["cache_read"]
-            + self.cache_write * WEIGHTS["cache_write"]
-            + self.output * WEIGHTS["output"]
-        )
+    def raw(self):
+        return sum(getattr(self, key) for key in TOKEN_KEYS)
 
     def as_dict(self):
-        return {
-            "input": self.input, "cache_read": self.cache_read,
-            "cache_write": self.cache_write, "output": self.output,
-            "requests": self.requests, "effective": self.effective(),
-        }
+        return {**{key: getattr(self, key) for key in TOKEN_KEYS}, "requests": self.requests, "total": self.raw()}
 
 
 def _blank():
     return {"main": Totals(), "subagent": Totals()}
 
 
+def new_scan():
+    return {"buckets": _blank(), "models": collections.Counter(), "model_usage": {},
+            "sessions": set(), "diagnostics": collections.Counter()}
+
+
+def add_usage(out, bucket, model, values, session):
+    model = model if isinstance(model, str) and model else "unknown"
+    out["buckets"][bucket].add(*values)
+    out["model_usage"].setdefault(model, _blank())[bucket].add(*values)
+    out["models"][model] += 1
+    out["sessions"].add(session)
+
+
+def finish(out):
+    out["sessions"] = len(out["sessions"])
+    out["models"] = dict(out["models"])
+    out["diagnostics"] = dict(out["diagnostics"])
+    out["model_usage"] = {model: {role: total.as_dict() for role, total in buckets.items()}
+                          for model, buckets in out["model_usage"].items()}
+    return out
+
+
+def records(path, out):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                try:
+                    rec = json.loads(line)
+                    if isinstance(rec, dict):
+                        yield rec
+                    else:
+                        out["diagnostics"]["invalid_records"] += 1
+                except ValueError:
+                    out["diagnostics"]["invalid_records"] += 1
+    except OSError:
+        out["diagnostics"]["unreadable_files"] += 1
+
+
+def in_window(rec, since, out):
+    stamp = _iso_epoch(rec.get("timestamp"))
+    if stamp is None:
+        out["diagnostics"]["unknown_timestamp_records"] += 1
+        return False
+    return stamp >= since
+
+
 def scan_claude(since, root=None):
     """~/.claude/projects/<slug>/*.jsonl plus <session>/subagents/agent-*.jsonl."""
     root = root or SOURCES["claude"]
-    out = {
-        "buckets": _blank(), "models": collections.Counter(), "dispatches": [],
-        "agent_types": collections.Counter(), "sessions": set(),
-        "compactions": 0, "precompact_tokens": 0,
-    }
+    out = new_scan()
+    out.update({"dispatches": [], "agent_types": collections.Counter(),
+                "compactions": 0, "precompact_tokens": 0})
     if not os.path.isdir(root):
         return None
 
-    seen = set()
+    seen, dispatch_seen = {}, set()
     for project in sorted(os.listdir(root)):
         base = os.path.join(root, project)
         if not os.path.isdir(base):
@@ -145,92 +149,58 @@ def scan_claude(since, root=None):
                     continue
             except OSError:
                 continue
-            before = out["buckets"][bucket].requests
-            _scan_claude_file(path, bucket, since, out, seen)
-            if bucket == "subagent" and out["buckets"][bucket].requests > before:
+            before = len(seen)
+            _scan_claude_file(path, bucket, since, out, seen, dispatch_seen)
+            if bucket == "subagent" and len(seen) > before:
                 out["agent_types"][_agent_type(path)] += 1
-    out["sessions"] = len(out["sessions"])
+    for bucket, model, values, session in seen.values():
+        add_usage(out, bucket, model, values, session)
     out["agent_types"] = dict(out["agent_types"])
-    out["models"] = dict(out["models"])
-    return out
+    return finish(out)
 
 
-def _scan_claude_file(path, bucket, since, out, seen):
-    try:
-        handle = open(path, encoding="utf-8", errors="replace")
-    except OSError:
-        return
-    with handle as fh:
-        for line in fh:
-            # Substring prefilter before json.loads: only assistant records carry
-            # usage, and parsing every line of 1.2 GB to discover that is the
-            # difference between seconds and minutes.
-            if '"assistant"' not in line and "compact_boundary" not in line:
-                continue
-            try:
-                rec = json.loads(line)
-            except ValueError:
-                continue
-            if not isinstance(rec, dict):
-                continue
-
-            stamp = _iso_epoch(rec.get("timestamp"))
-            if stamp is not None and stamp < since:
-                continue
-
-            if rec.get("subtype") == "compact_boundary":
-                meta = rec.get("compactMetadata") or {}
-                out["compactions"] += 1
-                out["precompact_tokens"] += meta.get("preTokens") or 0
-                continue
-            if rec.get("type") != "assistant":
-                continue
-
-            message = rec.get("message") or {}
-            if not isinstance(message, dict):
-                continue
-            # Dispatch blocks live in their own content-block record, which shares
-            # a requestId with the one carrying usage -- so collect them BEFORE
-            # the dedupe, or every dispatch after the first block is invisible.
-            _collect_dispatches(message, out)
-
-            key = rec.get("requestId") or message.get("id")
-            if key is not None:
-                if key in seen:
-                    continue  # same response, another content block
-                seen.add(key)
-
-            usage = message.get("usage") or {}
-            out["buckets"][bucket].add(
-                usage.get("input_tokens"),
-                usage.get("cache_read_input_tokens"),
-                usage.get("cache_creation_input_tokens"),
-                usage.get("output_tokens"),
-            )
-            if message.get("model"):
-                out["models"][message["model"]] += 1
-            if rec.get("sessionId"):
-                out["sessions"].add(rec["sessionId"])
-
-
-
-def _collect_dispatches(message, out):
-    content = message.get("content")
-    if not isinstance(content, list):
-        return
-    for block in content:
-        if not isinstance(block, dict) or block.get("type") != "tool_use":
+def _scan_claude_file(path, bucket, since, out, seen, dispatch_seen):
+    for index, rec in enumerate(records(path, out)):
+        if rec.get("type") != "assistant" and rec.get("subtype") != "compact_boundary":
             continue
-        if block.get("name") not in DISPATCH_TOOLS:
+        if not in_window(rec, since, out):
             continue
-        args = block.get("input")
-        if not isinstance(args, dict):
+        if rec.get("subtype") == "compact_boundary":
+            out["compactions"] += 1
+            out["precompact_tokens"] += count((rec.get("compactMetadata") or {}).get("preTokens"))
             continue
-        out["dispatches"].append({
-            "agent": args.get("subagent_type") or "-",
-            "model": args.get("model"),
-            "prompt_bytes": len((args.get("prompt") or "").encode("utf-8", "replace")),
-        })
+        message = rec.get("message")
+        if not isinstance(message, dict):
+            continue
+        key = rec.get("requestId") or message.get("id") or (path, index)
+        content = message.get("content")
+        for block in content if isinstance(content, list) else []:
+            if not isinstance(block, dict) or block.get("type") != "tool_use" or block.get("name") not in DISPATCH_TOOLS:
+                continue
+            args = block.get("input")
+            if not isinstance(args, dict):
+                continue
+            block_id = block.get("id") or hashlib.sha256(json.dumps(block, sort_keys=True).encode()).hexdigest()
+            dispatch_key = (str(key), block_id)
+            if dispatch_key in dispatch_seen:
+                continue
+            dispatch_seen.add(dispatch_key)
+            prompt = args.get("prompt")
+            out["dispatches"].append({"agent": args.get("subagent_type") or "-", "model": args.get("model"),
+                                      "prompt_bytes": len(prompt.encode("utf-8", "replace")) if isinstance(prompt, str) else 0})
+        usage = message.get("usage")
+        if not isinstance(usage, dict) or not usage:
+            continue
+        values = tuple(count(usage.get(k)) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens"))
+        if key in seen:
+            old_bucket, model, previous, session = seen[key]
+            # Streaming snapshots are cumulative per response, not new requests.
+            # Keep the greatest observed counter for each category.
+            values = tuple(max(a, b) for a, b in zip(previous, values))
+            seen[key] = old_bucket, model, values, session
+        else:
+            seen[key] = bucket, message.get("model"), values, rec.get("sessionId") or path
+
 
 
 def _agent_type(path):
@@ -244,94 +214,133 @@ def _agent_type(path):
 
 
 def scan_codex(since, root=None):
-    """~/.codex/sessions/<Y>/<M>/<D>/rollout-*.jsonl -- token_count deltas."""
     root = root or SOURCES["codex"]
     if not os.path.isdir(root):
         return None
-    out = {"buckets": _blank(), "models": {}, "sessions": 0, "subagent_events": 0}
-    files = glob.glob(os.path.join(root, "*", "*", "*", "rollout-*.jsonl"))
-    files += glob.glob(os.path.join(root, "rollout-*.jsonl"))
-    for path in files:
-        try:
-            if os.path.getmtime(path) < since:
+    out = new_scan()
+    out["subagent_events"] = 0
+    keys = ("input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens")
+    for path in sorted(set(glob.glob(os.path.join(root, "**", "rollout-*.jsonl"), recursive=True))):
+        previous, model, bucket = None, None, "main"
+        for rec in records(path, out):
+            payload = rec.get("payload")
+            if not isinstance(payload, dict):
                 continue
-        except OSError:
-            continue
-        out["sessions"] += 1
-        try:
-            handle = open(path, encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        with handle as fh:
-            for line in fh:
-                if "token_count" not in line and "sub_agent_activity" not in line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                except ValueError:
-                    continue
-                if not isinstance(rec, dict):
-                    continue
-                stamp = _iso_epoch(rec.get("timestamp"))
-                if stamp is not None and stamp < since:
-                    continue
-                payload = rec.get("payload") or {}
-                if not isinstance(payload, dict):
-                    continue
-                if payload.get("type") == "sub_agent_activity":
+            if rec.get("type") == "session_meta":
+                source = payload.get("source")
+                if isinstance(source, dict) and "subagent" in source:
+                    bucket = "subagent"
+                continue
+            if rec.get("type") == "turn_context":
+                model = payload.get("model") or model
+                continue
+            if payload.get("type") == "sub_agent_activity":
+                if in_window(rec, since, out):
                     out["subagent_events"] += 1
-                    continue
-                if payload.get("type") != "token_count":
-                    continue
-                # last_token_usage is the delta for this request; total_token_usage
-                # is cumulative and must never be summed.
-                last = ((payload.get("info") or {}).get("last_token_usage")) or {}
-                out["buckets"]["main"].add(
-                    last.get("input_tokens"),
-                    last.get("cached_input_tokens"),
-                    last.get("cache_write_input_tokens"),
-                    last.get("output_tokens"),
-                )
-    return out
+                continue
+            if payload.get("type") != "token_count":
+                continue
+            info = payload.get("info") or {}
+            total, last = info.get("total_token_usage"), info.get("last_token_usage")
+            if not isinstance(total, dict):
+                out["diagnostics"]["missing_cumulative_usage"] += 1
+                continue  # repeated last-only events cannot be safely deduplicated
+            current = tuple(count(total.get(k)) for k in keys)
+            if current == previous:
+                continue
+            if previous is not None and all(a >= b for a, b in zip(current, previous)):
+                values = tuple(a - b for a, b in zip(current, previous))
+            elif isinstance(last, dict):
+                values = tuple(count(last.get(k)) for k in keys)
+                if previous is not None:
+                    out["diagnostics"]["cumulative_resets"] += 1
+            else:
+                previous = current
+                out["diagnostics"]["missing_initial_delta"] += 1
+                continue
+            previous = current  # even pre-window events establish the baseline
+            if not in_window(rec, since, out) or not any(values):
+                continue
+            inp, read, write, output = values
+            if read + write > inp:
+                out["diagnostics"]["cache_exceeds_input"] += 1
+            # Codex input includes cached input; output already includes reasoning.
+            add_usage(out, bucket, model, (max(0, inp - read - write), read, write, output), path)
+    return finish(out)
 
 
 def scan_opencode(since, db=None):
-    """The one harness with a pre-aggregated per-session rollup, cost included."""
+    """Use message-time usage, never whole-session totals filtered by last update."""
     db = db or SOURCES["opencode"]
     if not os.path.isfile(db):
         return None
+    import sqlite3
+    from urllib.parse import quote
+    out = new_scan()
+    out.update({"reported_cost_usd": 0.0, "reported_cost_records": 0})
     try:
-        import sqlite3
-        # Read-only URI: never take a write lock on a live harness's database.
-        conn = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=2.0)
-    except Exception as exc:
-        return {"error": "%s: %s" % (type(exc).__name__, exc)}
-    out = {"buckets": _blank(), "cost": 0.0, "sessions": 0, "models": collections.Counter()}
-    try:
-        rows = conn.execute(
-            "SELECT tokens_input, tokens_output, tokens_cache_read, tokens_cache_write, "
-            "cost, model, parent_id FROM session WHERE time_updated >= ?",
-            (int(since * 1000),),
-        ).fetchall()
-    except Exception as exc:
-        conn.close()
-        return {"error": "%s: %s" % (type(exc).__name__, exc)}
-    conn.close()
-    for inp, output, cread, cwrite, cost, model, parent in rows:
-        out["sessions"] += 1
-        out["cost"] += cost or 0.0
-        out["buckets"]["subagent" if parent else "main"].add(inp, cread, cwrite, output)
-        if model:
-            out["models"][model] += 1
-    out["models"] = dict(out["models"])
-    return out
+        conn = sqlite3.connect("file:" + quote(os.path.abspath(db)) + "?mode=ro", uri=True, timeout=2)
+        try:
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            supported = [table for table in ("session_message", "message") if table in tables]
+            if not supported:
+                raise sqlite3.OperationalError("no supported message usage table")
+            seen = set()
+            for table in supported:
+                # New store first, then v1 mirrors with the same message IDs.
+                type_column = "m.type" if table == "session_message" else "NULL"
+                rows = conn.execute("SELECT m.id, m.session_id, m.data, s.parent_id, " + type_column + " FROM " + table + " m "
+                                    "JOIN session s ON m.session_id=s.id WHERE m.time_created >= ?",
+                                    (int(since * 1000),))
+                for message_id, session, raw, parent, stored_type in rows:
+                    if message_id in seen:
+                        continue
+                    try:
+                        message = json.loads(raw)
+                    except (ValueError, TypeError):
+                        out["diagnostics"]["invalid_records"] += 1
+                        continue
+                    if not isinstance(message, dict):
+                        continue
+                    role = message.get("type") if table == "session_message" else message.get("role")
+                    # In v2 the type is a separate column, omitted from data.
+                    if table == "session_message":
+                        role = stored_type
+                    if role != "assistant":
+                        continue
+                    tokens = message.get("tokens")
+                    if not isinstance(tokens, dict):
+                        out["diagnostics"]["missing_usage"] += 1
+                        continue
+                    seen.add(message_id)
+                    cache = tokens.get("cache") or {}
+                    model_ref = message.get("model") or {}
+                    model = message.get("modelID") or model_ref.get("id")
+                    provider = message.get("providerID") or model_ref.get("providerID")
+                    if model and provider and "/" not in model:
+                        model = provider + "/" + model
+                    # OpenCode stores output excluding reasoning; sum them once.
+                    output = count(tokens.get("output")) + count(tokens.get("reasoning"))
+                    add_usage(out, "subagent" if parent else "main", model,
+                              (tokens.get("input"), cache.get("read"), cache.get("write"), output), session)
+                    cost = message.get("cost")
+                    if isinstance(cost, (float, int)) and not isinstance(cost, bool) and 0 <= cost < float("inf"):
+                        out["reported_cost_usd"] += cost
+                        out["reported_cost_records"] += 1
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError) as exc:
+        return {"error": str(exc), "status": "schema-unavailable"}
+    return finish(out)
 
 
-def scan_guard():
+def scan_guard(since=0, only=None):
     """The guard's own record, and whether its blocks changed anything."""
     try:
         import dispatch_log
-        return dispatch_log.summarise(dispatch_log.read())
+        return dispatch_log.summarise([row for row in dispatch_log.read()
+                                       if (_iso_epoch(row.get("ts")) or 0) >= since
+                                       and (not only or row.get("harness") == only)])
     except Exception as exc:
         return {"error": "%s: %s" % (type(exc).__name__, exc)}
 
@@ -343,7 +352,7 @@ def _is_tier(agent):
         import dispatch_log
         return dispatch_log.is_tier(agent)
     except Exception:
-        return bool(agent) and agent.rsplit(":", 1)[-1].startswith("leo-")
+        return False
 
 
 def routing_compliance(dispatches):
@@ -358,94 +367,103 @@ def routing_compliance(dispatches):
         elif d.get("model"):
             tiers["explicit model"] += 1
         else:
-            tiers["inherited"] += 1
+            tiers["model unspecified"] += 1
             inherited_bytes += d.get("prompt_bytes") or 0
     total = sum(tiers.values())
     return {
         "dispatches": total,
         "tiers": dict(tiers),
-        "inherited_share": round(tiers["inherited"] / total, 3) if total else 0.0,
-        "inherited_brief_bytes": inherited_bytes,
+        "unspecified_share": round(tiers["model unspecified"] / total, 3) if total else 0.0,
+        "unspecified_brief_bytes": inherited_bytes,
     }
 
 
+def reference_cost(model, buckets, catalog):
+    import pricing
+    from decimal import Decimal
+    match = pricing.resolve(model, catalog)
+    result = {**match.report(), "minimum_usd": 0.0, "maximum_usd": 0.0, "unpriced_tokens": 0}
+    amounts = {key: sum(role[key] for role in buckets.values()) for key in TOKEN_KEYS}
+    low, high = Decimal(0), Decimal(0)
+    for key, rate_key in zip(TOKEN_KEYS, ("prompt", "input_cache_read", "input_cache_write", "completion")):
+        if not amounts[key]:
+            continue
+        rates = [match.pricing] + match.pricing.get("overrides", [])
+        values = [pricing.decimal(row.get(rate_key, match.pricing.get(rate_key))) for row in rates]
+        if None in values:
+            result["unpriced_tokens"] += amounts[key]
+            continue
+        low += amounts[key] * min(values)
+        high += amounts[key] * max(values)
+    result.update(minimum_usd=float(low), maximum_usd=float(high))
+    return result
+
+
 def collect(since, only=None):
-    report = {"since": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(since)), "harnesses": {}}
+    import pricing
+    catalog = pricing.load()
+    report = {"since": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(since)), "harnesses": {},
+              "pricing": {"source": catalog.get("source"), "fetched_at": catalog.get("fetched_at"),
+                          "basis": "Current reference text-token rates; conditional rates shown as ranges. Not historical bills. Excludes non-token fees and negotiated/subscription pricing."},
+              "savings": {"status": "not measured", "reason": "No comparable task baseline; delegation share is not savings."}}
     scanners = {"claude": scan_claude, "codex": scan_codex, "opencode": scan_opencode}
-    for name in ("claude", "codex", "opencode", "cursor", "hermes", "pi"):
+    for name in SOURCES:
         if only and name != only:
             continue
         scanner = scanners.get(name)
-        data = scanner(since) if scanner else None
+        if scanner is None:
+            report["harnesses"][name] = {"status": "unsupported", "reason": "Local usage schema not supported; installation status unknown."}
+            continue
+        data = scanner(since)
         if data is None:
             report["harnesses"][name] = {"status": "no data", "looked_in": SOURCES[name]}
             continue
-        buckets = data.pop("buckets", None)
-        if buckets:
-            data["main"] = buckets["main"].as_dict()
-            data["subagent"] = buckets["subagent"].as_dict()
-            main, sub = data["main"]["effective"], data["subagent"]["effective"]
-            data["subagent_share"] = round(sub / (main + sub), 3) if (main + sub) else 0.0
-        data["status"] = "ok"
+        if data.get("error"):
+            data["status"] = "error"
+        else:
+            buckets = data.pop("buckets")
+            data.update({role: total.as_dict() for role, total in buckets.items()})
+            main, sub = buckets["main"].raw(), buckets["subagent"].raw()
+            data["subagent_token_share"] = round(sub / (main + sub), 3) if main + sub else 0
+            data["reference_cost"] = {model: reference_cost(model, usage, catalog) for model, usage in data["model_usage"].items()}
+            data["status"] = "partial" if data.get("diagnostics") else "ok"
         report["harnesses"][name] = data
-
     claude = report["harnesses"].get("claude") or {}
-    report["routing"] = routing_compliance(claude.get("dispatches") or [])
-    claude.pop("dispatches", None)
-    report["guard"] = scan_guard()
+    report["routing"] = routing_compliance(claude.pop("dispatches", []))
+    report["guard"] = scan_guard(since, only)
     return report
 
 
 def render(report):
-    lines = ["leos-agent usage and effectiveness, since %s" % report["since"], ""]
-    for name, data in sorted(report["harnesses"].items()):
-        if data.get("status") != "ok":
-            lines.append("%-9s no data (%s)" % (name, data["looked_in"]))
+    lines = ["leos-agent observed usage since " + report["since"],
+             "Reference costs are not bills. Savings require a comparable task baseline.", ""]
+    for name, data in report["harnesses"].items():
+        if data.get("status") not in ("ok", "partial"):
+            lines.append(name + ": " + data["status"] + " — " + str(data.get("error") or data.get("reason") or data.get("looked_in", "")))
             continue
-        if data.get("error"):
-            lines.append("%-9s unreadable: %s" % (name, data["error"]))
-            continue
-        main, sub = data.get("main", {}), data.get("subagent", {})
-        lines.append("%-9s %d session(s)   effective tokens: main %s, subagents %s (%.0f%% delegated)" % (
-            name, data.get("sessions", 0), "{:,}".format(main.get("effective", 0)),
-            "{:,}".format(sub.get("effective", 0)), 100 * data.get("subagent_share", 0.0)))
-        if main.get("cache_write"):
-            ratio = main["cache_read"] / main["cache_write"]
-            lines.append("          cache read/write ratio %.1f  (higher is cheaper; a low ratio means cold prefixes)" % ratio)
-        if data.get("cost"):
-            lines.append("          provider-reported cost $%.2f" % data["cost"])
+        lines.append("%s: %s session(s); main %s tokens, subagents %s tokens" %
+                     (name, data["sessions"], data["main"]["total"], data["subagent"]["total"]))
+        for model, cost in sorted(data["reference_cost"].items()):
+            lines.append("  %s: reference $%.4f–$%.4f (%s); %d unpriced tokens" %
+                         (model, cost["minimum_usd"], cost["maximum_usd"], cost["status"], cost["unpriced_tokens"]))
+        if data.get("reported_cost_records"):
+            lines.append("  harness-reported cost $%.4f; may reflect reference prices rather than billing" % data["reported_cost_usd"])
         if data.get("compactions"):
-            lines.append("          %d compaction(s), %s tokens discarded" % (
-                data["compactions"], "{:,}".format(data["precompact_tokens"])))
-        if data.get("agent_types"):
-            top = sorted(data["agent_types"].items(), key=lambda kv: -kv[1])[:6]
-            lines.append("          subagents: " + ", ".join("%s %d" % kv for kv in top))
-
+            lines.append("  %d compactions; %d pre-compaction context tokens (not tokens discarded)" % (data["compactions"], data["precompact_tokens"]))
+        if data.get("diagnostics"):
+            lines.append("  gaps: " + json.dumps(data["diagnostics"], sort_keys=True))
     routing = report["routing"]
-    lines += ["", "Routing compliance (Claude Code dispatches seen in transcripts)"]
-    if not routing["dispatches"]:
-        lines.append("  none in this window")
-    else:
-        lines.append("  %d dispatch(es): %s" % (
-            routing["dispatches"], ", ".join("%s %d" % kv for kv in sorted(routing["tiers"].items()))))
-        lines.append("  %.0f%% named no model and inherited the parent's" % (100 * routing["inherited_share"]))
-
+    lines += ["", "Claude dispatch requests: " + json.dumps(routing["tiers"], sort_keys=True),
+              "Unspecified model does not prove inheritance; native profiles and overrides may choose it."]
     guard = report["guard"]
-    lines += ["", "Guard"]
     if guard.get("error"):
-        lines.append("  log unreadable: %s" % guard["error"])
-    elif not guard.get("records"):
-        lines.append("  no dispatches recorded -- the guard may not be installed or approved on any harness")
+        lines.append("Guard log unreadable: " + guard["error"])
     else:
-        lines.append("  %d recorded, %d blocked, %d re-dispatched with a tier named" % (
-            guard["records"], guard.get("blocked", 0), guard.get("converted", 0)))
-        lines.append("  %d lone small spawn(s) (fan-outs excluded)" % guard.get("trivial_lone_spawns", 0))
+        lines.append("Guard: %d retained records, %d blocked, %d confirmed executions in this window." %
+                     (guard.get("records", 0), guard.get("blocked", 0), guard.get("confirmed_executions", 0)))
+        lines.append("Rotated logs can omit older events; no records does not establish installation or hook failure.")
         if guard.get("errors"):
-            lines.append("  !! %d guard error(s): it failed open this many times" % guard["errors"])
-        missing = [h for h, d in report["harnesses"].items()
-                   if d.get("status") == "ok" and h not in (guard.get("harnesses") or {})]
-        if missing:
-            lines.append("  no guard rows from: %s -- installed but not enforcing?" % ", ".join(sorted(missing)))
+            lines.append("Guard errors: %d" % guard["errors"])
     return "\n".join(lines)
 
 
