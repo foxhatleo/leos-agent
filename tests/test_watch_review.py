@@ -254,7 +254,62 @@ class TestClaimsAndPagination(unittest.TestCase):
         with mock.patch.object(self.w, "identity", return_value=("o/r", "leo")):
             with self.assertRaises(ValueError):
                 self.w.main(["record", "1", "--head", "a" * 40, "--result", str(report)])
+            # The acknowledgement is the new bypass surface. It dismisses omitted
+            # findings; it must not stand in for a stage that never made a review.
+            report.write_text(json.dumps({"repo": "o/r", "pr": 1, "commit": "a" * 40,
+                                          "complete": False,
+                                          "omitted": [{"path": "a.py", "reason": "malformed"}]}))
+            with self.assertRaisesRegex(ValueError, "no review was created"):
+                self.w.main(["record", "1", "--head", "a" * 40, "--result", str(report),
+                             "--acknowledge-omitted", "not our call"])
         self.assertEqual(self.w.reviewed_heads("o/r"), {})
+
+    def test_a_carried_finding_records_without_an_override(self):
+        """One finding the diff could not anchor used to make a head
+        permanently unrecordable. It is carried in the review body now."""
+        report = Path(self.tmp.name) / "result.json"
+        report.write_text(json.dumps({"repo": "o/r", "pr": 1, "commit": "a" * 40,
+                                      "complete": True, "review_created": True,
+                                      "staged": 1, "carried": 1, "omitted": []}))
+        with mock.patch.object(self.w, "identity", return_value=("o/r", "leo")):
+            self.w.main(["record", "1", "--head", "a" * 40, "--result", str(report)])
+        self.assertEqual(self.w.reviewed_heads("o/r"), {1: "a" * 40})
+
+    def test_an_omission_is_refused_until_it_is_acknowledged_with_reasons(self):
+        base = {"repo": "o/r", "pr": 1, "commit": "a" * 40, "complete": False,
+                "review_created": True, "staged": 1, "carried": 0}
+        report = Path(self.tmp.name) / "result.json"
+        with mock.patch.object(self.w, "identity", return_value=("o/r", "leo")):
+            report.write_text(json.dumps(dict(base, omitted=[{"path": "a.py", "reason": "malformed"}])))
+            with self.assertRaisesRegex(ValueError, "acknowledge-omitted"):
+                self.w.main(["record", "1", "--head", "a" * 40, "--result", str(report)])
+            # A forged report with nothing to dismiss, and one whose entries give
+            # no reason, are both refused even with the flag.
+            report.write_text(json.dumps(dict(base, omitted=[])))
+            with self.assertRaisesRegex(ValueError, "nothing is omitted"):
+                self.w.main(["record", "1", "--head", "a" * 40, "--result", str(report),
+                             "--acknowledge-omitted", "why"])
+            report.write_text(json.dumps(dict(base, omitted=[{"path": "a.py"}])))
+            with self.assertRaisesRegex(ValueError, "must carry a reason"):
+                self.w.main(["record", "1", "--head", "a" * 40, "--result", str(report),
+                             "--acknowledge-omitted", "why"])
+            self.assertEqual(self.w.reviewed_heads("o/r"), {})
+            # Acknowledged, with reasons: recorded, and the dismissal is stated.
+            report.write_text(json.dumps(dict(base, omitted=[{"path": "a.py", "line": 3, "reason": "malformed"}])))
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                self.w.main(["record", "1", "--head", "a" * 40, "--result", str(report),
+                             "--acknowledge-omitted", "duplicate of an existing thread"])
+        self.assertEqual(self.w.reviewed_heads("o/r"), {1: "a" * 40})
+        self.assertIn("duplicate of an existing thread", err.getvalue())
+        self.assertIn("a.py:3", err.getvalue())
+
+    def test_a_report_from_the_previous_release_behaves_as_before(self):
+        """No review_created and no omitted keys: complete alone decides."""
+        report = Path(self.tmp.name) / "result.json"
+        with mock.patch.object(self.w, "identity", return_value=("o/r", "leo")):
+            report.write_text(json.dumps({"repo": "o/r", "pr": 1, "commit": "a" * 40, "complete": True}))
+            self.w.main(["record", "1", "--head", "a" * 40, "--result", str(report)])
+            self.assertEqual(self.w.reviewed_heads("o/r"), {1: "a" * 40})
 
     def test_record_binds_clean_report_to_repository_and_pr(self):
         report = Path(self.tmp.name) / "result.json"
@@ -264,6 +319,13 @@ class TestClaimsAndPagination(unittest.TestCase):
                                               "commit": "a" * 40, "complete": True}))
                 with self.assertRaisesRegex(ValueError, "another repository"):
                     self.w.main(["record", "1", "--head", "a" * 40, "--result", str(report)])
+            # The binding must hold with the acknowledgement flag present too.
+            report.write_text(json.dumps({"repo": "other/repo", "pr": 1, "commit": "a" * 40,
+                                          "complete": False, "review_created": True,
+                                          "omitted": [{"path": "a.py", "reason": "malformed"}]}))
+            with self.assertRaisesRegex(ValueError, "another repository"):
+                self.w.main(["record", "1", "--head", "a" * 40, "--result", str(report),
+                             "--acknowledge-omitted", "why"])
             report.write_text(json.dumps({"repo": "o/r", "pr": 1,
                                           "commit": "a" * 40, "complete": True}))
             self.w.main(["record", "1", "--head", "a" * 40, "--result", str(report)])

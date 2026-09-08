@@ -14,9 +14,11 @@ review. Idle ticks use only the GitHub API; pagination increases calls for large
 A head must settle before emission. Cross-process leases prevent duplicate
 workers; renew every 15 minutes during a long review. Expired or released
 claims retry up to three times per head, then require explicit `forget`.
-Emission is not completion. Only a successful pinned review report can record
-a head as reviewed. A new push is eligible again. Drafts, team-only requests,
-and PRs already approved by another user are excluded.
+Emission is not completion. A head is recorded only when every finding is
+covered -- anchored in the diff, carried in the review body, or dismissed with
+a stated reason via --acknowledge-omitted, which is never automatic. A new push
+is eligible again. Drafts, team-only requests, and PRs already approved by
+another user are excluded.
 
 Intended for Claude Code's Monitor tool, which turns each stdout line into a
 session notification. Any `read`-driven shell loop works the same way.
@@ -179,6 +181,39 @@ def record(repo, number, head, claim_token=None):
 		state_mod.atomic_write(path, data)
 
 
+def completion_refusal(result, repo, number, head, acknowledgement=None):
+	"""Why this stage report may not mark `head` reviewed, or None when it may.
+
+	Coverage, not staging success. A finding counts as covered when it is anchored
+	inline, carried in the review body, or dismissed by a person who said why. A
+	report from an older release carries neither `review_created` nor `omitted`, so
+	it can only pass on `complete` and behaves exactly as it did before.
+	"""
+	if not isinstance(result, dict):
+		return "completion report must be a JSON object"
+	if result.get("commit") != head:
+		return "result must confirm successful completion at the supplied head"
+	if result.get("repo") != repo or result.get("pr") != number:
+		return "completion report belongs to another repository or pull request"
+	if result.get("complete") is True:
+		return None
+	omitted = result.get("omitted")
+	if not acknowledgement:
+		return ("review omits %s finding(s) that reached neither the diff nor the review body; "
+			"restage, or pass --acknowledge-omitted with a reason"
+			% (len(omitted) if isinstance(omitted, list) else "some"))
+	# An acknowledgement dismisses omitted findings. It must never rescue a stage
+	# that failed outright, nor a hand-written report with nothing to dismiss.
+	if result.get("review_created") is not True:
+		return "no review was created at this head; an acknowledgement cannot stand in for one"
+	if not isinstance(omitted, list) or not omitted:
+		return "nothing is omitted in this report; an acknowledgement has nothing to dismiss"
+	if not all(isinstance(entry, dict) and isinstance(entry.get("reason"), str) and entry["reason"].strip()
+			for entry in omitted):
+		return "every omitted finding must carry a reason"
+	return None
+
+
 def due(matches, known, first_seen, emitted, now, settle):
 	"""Which pull requests to emit this tick, as (verb, pr, previous head).
 
@@ -305,6 +340,9 @@ def main(argv):
 	rec.add_argument("--head", required=True, help="full reviewed head SHA")
 	rec.add_argument("--result", required=True, help="JSON report emitted by ghreview.py stage")
 	rec.add_argument("--claim", help="claim token emitted by monitor")
+	rec.add_argument("--acknowledge-omitted", metavar="REASON",
+		help="record a head whose review omits findings the tool could not represent; "
+			"state why they are dismissed. Never automatic.")
 	for operation in ("renew", "release"):
 		command = sub.add_parser(operation)
 		command.add_argument("-C", "--directory", default=".")
@@ -329,10 +367,18 @@ def main(argv):
 	if args.mode == "record":
 		with open(args.result) as handle:
 			result = json.load(handle)
-		if result.get("commit") != args.head or result.get("complete") is not True:
-			raise ValueError("result must confirm successful completion at the supplied head")
-		if result.get("repo") != repo or result.get("pr") != args.numbers[0]:
-			raise ValueError("completion report belongs to another repository or pull request")
+		refusal = completion_refusal(result, repo, args.numbers[0], args.head, args.acknowledge_omitted)
+		if refusal:
+			raise ValueError(refusal)
+		if args.acknowledge_omitted:
+			# A dismissal is never invisible: it and its reasons go to the operator's
+			# transcript, next to the head it is closing out.
+			print("watch-review: recorded %s#%d at %s; %d finding(s) dismissed — %s"
+				% (repo, args.numbers[0], args.head, len(result["omitted"]), args.acknowledge_omitted),
+				file=sys.stderr, flush=True)
+			for entry in result["omitted"]:
+				print("watch-review:   omitted %s:%s — %s"
+					% (entry.get("path"), entry.get("line"), entry.get("reason")), file=sys.stderr, flush=True)
 		if result.get("review_id"):
 			review = json.loads(gh(["api", f"repos/{repo}/pulls/{args.numbers[0]}/reviews/{result['review_id']}"], args.directory))
 			if review.get("commit_id") != args.head:

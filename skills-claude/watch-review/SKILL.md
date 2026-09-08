@@ -58,6 +58,12 @@ expire after 30 minutes, preventing duplicate review workers.
    ID is verified against GitHub. Use the SHA actually reviewed, never the
    latest head substituted after a push. Do not record partial coverage,
    incomplete staging, failed replies, or an unresolved required action.
+
+   A finding the diff could not anchor is carried in the review body and counts
+   as covered; it needs nothing extra here. `complete: false` means a finding
+   reached neither the diff nor the body. Restage if you can. Otherwise add
+   `--acknowledge-omitted "<reason>"`, which records the head and states the
+   dismissal in the report. Never pass it to clear a report you have not read.
 4. On failure, do not record. Release the lease and report the failure:
 
    ```
