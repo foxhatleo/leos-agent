@@ -52,6 +52,10 @@ def diagnose(harness, root=None):
     except (OSError, ValueError):
         report["pricing"]["last_refresh"] = "no local refresh diagnostic"
     if harness == "claude":
+        for tier in ("cheap", "standard"):
+            model = (report.get("tiers", {}).get(tier) or {}).get("requested")
+            if model and model not in ("haiku", "sonnet", "opus", "fable"):
+                report["issues"].append(f"Claude {tier} model must be an Agent alias: haiku, sonnet, opus, or fable")
         report["forced_subagent_model"] = (os.environ.get("CLAUDE_CODE_SUBAGENT_MODEL")
                                              if os.environ.get("CLAUDE_CODE_SUBAGENT_MODEL_FORCE") == "1" else None)
     if harness == "codex":

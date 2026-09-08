@@ -1,7 +1,7 @@
 # leos-agent
 
 Cost-aware delegation and portable workflows for Claude Code, Codex, Cursor,
-OpenCode, Hermes, and Pi. Version **12.2026090800.0**.
+OpenCode, Hermes, and Pi. Version **12.2026090801.0**.
 
 The main agent handles small work directly and delegates substantial, bounded
 work to the cheapest competent tier. The policy separates **whether to delegate**
@@ -54,7 +54,7 @@ operation.
 
 | Harness | Policy delivery | Model control | Important limit |
 |---|---|---|---|
-| Claude Code | SessionStart, including forks | Agent/Task argument correction; native profiles | Forced settings and provider/org substitutions can affect execution; observe child transcripts. |
+| Claude Code | SessionStart, including forks | Agent/Task argument correction; native profiles | The first dispatch may precede parent transcript persistence; missing parent data permits dispatch with a diagnostic. Forced settings/provider substitutions also limit enforcement. |
 | Codex | Separate native SessionStart hook | Tier-enforcing explicit spawn selection; model-free native profiles | Hooks need native trust. Other/customized profiles can still override spawn settings. |
 | Cursor | Native always-apply rule | Installed user agents; resolved subagentStart model ceiling | No invented Task model argument; hook diagnostics distinguish planned models from completion. |
 | OpenCode | One registered rendered instruction | Native agent selection, confirmed through the SDK | Task has no model field; source/config paths must remain valid. |
@@ -270,6 +270,12 @@ Tests use fixtures and mock provider events; CI makes no paid model calls.
 Native live smoke tests are separate, explicitly authorized, and budgeted.
 Static/adapter tests establish contracts, not complete end-to-end parity on
 all six installed harnesses.
+
+Local Claude smoke tests on 2026-09-08 verified actual Haiku/Sonnet children
+from an Opus parent and a Sonnet-to-Haiku correction when the Haiku parent was
+observable. Total CLI-reported reference cost, including diagnostic runs, was
+about $0.223. A fresh session's first dispatch can precede parent transcript
+persistence, so that case remains an explicit unknown-parent allowance.
 
 Commits run validation only. Release versions use `12.YYYYMMDDXX.0`, with a UTC
 calendar date and a two-digit serial from 00 to 99. Run `scripts/bump.py` only

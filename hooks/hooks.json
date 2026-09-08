@@ -45,6 +45,17 @@
           }
         ]
       }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "LEOS_AGENT_HARNESS=claude python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/observe_agent.py\"",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

@@ -5,7 +5,7 @@ none proves that a future child request will succeed under organization rules.
 
 | Harness | Selection and application |
 |---|---|
-| Claude | Native model picker; Agent/Task model overrides and shipped profiles. The guard corrects a missing/known-overpriced choice without granting tool permission. Forced settings and provider substitution need actual-model checks. |
+| Claude | Agent accepts haiku, sonnet, opus, or fable aliases; configure these aliases, not full transcript model IDs. The guard corrects a missing/known-overpriced choice without granting tool permission. Forced settings and provider substitution need actual-model checks. |
 | Codex | Native model picker and active config. Installer writes model-free user agent TOMLs. The guard requires the selected tier model and configured effort at spawn, with a parent-price ceiling. Other/customized profiles may override spawn settings. Native hook trust remains required. |
 | Cursor | Account model picker; installer writes ~/.cursor/agents profiles. Resolved subagentStart model is checked before launch. Do not assume a Task model field or a loaded ~/.cursor/rules directory. |
 | OpenCode | Native model list/provider config; installer writes native agents and one instruction entry. Task selects a subagent_type, not a model argument; the adapter queries actual registered agents before switching profiles. |

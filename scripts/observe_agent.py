@@ -2,6 +2,8 @@
 """Record observed child models without injecting text or continuing a child."""
 import json
 import os
+from pathlib import Path
+import re
 import sys
 import time
 
@@ -13,6 +15,25 @@ import session_models
 
 def observe(event, harness):
     kind = event.get("hook_event_name")
+    if kind == "SessionEnd" and harness == "claude":
+        # Claude may flush the child's response only after SubagentStop.
+        # Reconcile bounded lifecycle records once, after the session finishes.
+        session = dispatch_log.digest(event.get("session_id"))
+        transcript = event.get("transcript_path")
+        if not session or not isinstance(transcript, str):
+            return
+        rows = [row for row in dispatch_log.read() if row.get("session") == session and row.get("harness") == harness]
+        observed = {row.get("agent_id") for row in rows if row.get("decision") == "executed"}
+        for row in rows:
+            agent = row.get("agent_id")
+            if row.get("decision") != "completed" or agent in observed or not isinstance(agent, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", agent):
+                continue
+            path = Path(transcript).with_suffix("") / "subagents" / ("agent-" + agent + ".jsonl")
+            if transcript_model := session_models.transcript_model(str(path)):
+                dispatch_log.append({**row, "decision": "executed", "effective_model": transcript_model,
+                                     "reason": "session-end-child-transcript-model"})
+                observed.add(agent)
+        return
     if kind == "PostModelSwitch":
         session_models.remember(event, harness)
         return

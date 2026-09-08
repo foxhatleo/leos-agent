@@ -43,3 +43,11 @@ References:
 - [Codex hooks and plugin overrides](https://learn.chatgpt.com/docs/hooks)
 - [Cursor hooks](https://cursor.com/docs/hooks)
 - [Cursor plugin format](https://cursor.com/docs/reference/plugins)
+
+Claude live verification established that Agent accepts the aliases haiku,
+sonnet, opus, and fable, rather than full transcript model IDs. The guard
+translates an observed parent to an alias only after checking its price.
+Fresh-session PreToolUse may run before the first assistant response is
+written: the parent is then unavailable and the approved unknown-price policy
+allows dispatch with a diagnostic. SubagentStop can likewise precede the child
+transcript flush; SessionEnd reconciles those observations without model calls.

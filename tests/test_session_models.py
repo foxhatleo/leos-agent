@@ -58,3 +58,17 @@ class ModelObservations(unittest.TestCase):
         self.assertEqual(rows[-1]["effective_model"], "haiku")
         self.assertEqual(rows[-1]["decision"], "executed")
         self.assertNotIn("PRIVATE_PROMPT", json.dumps(rows))
+
+    def test_session_end_recovers_delayed_child_model_once(self):
+        parent = self.root / "session.jsonl"
+        child = self.root / "session/subagents/agent-delayed.jsonl"
+        observe_agent.observe({"hook_event_name": "SubagentStop", "session_id": "s",
+                               "agent_id": "delayed", "agent_transcript_path": str(child)}, "claude")
+        child.parent.mkdir(parents=True)
+        child.write_text(json.dumps({"type": "assistant", "message": {"model": "haiku"}}))
+        event = {"hook_event_name": "SessionEnd", "session_id": "s", "transcript_path": str(parent)}
+        observe_agent.observe(event, "claude")
+        observe_agent.observe(event, "claude")
+        rows = [r for r in dispatch_log.read() if r["decision"] == "executed"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["effective_model"], "haiku")

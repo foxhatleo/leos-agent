@@ -31,6 +31,15 @@ class RoutingEngine(unittest.TestCase):
         result = self.route("claude", {"subagent_type": "leo-cheap", "model": "opus"}, "sonnet")
         self.assertEqual(result["updated_input"]["model"], "sonnet")
 
+    def test_claude_parent_transcript_id_becomes_a_valid_native_alias(self):
+        result = self.route("claude", {"subagent_type": "leo-standard", "model": "sonnet"}, "claude-haiku-4-5-20251001")
+        self.assertEqual(result["updated_input"]["model"], "haiku")
+
+    def test_first_claude_dispatch_reports_missing_parent(self):
+        result = self.route("claude", {"model": "sonnet"}, None)
+        self.assertEqual(result["action"], "allow")
+        self.assertEqual(result["reason"], "parent-model-unavailable")
+
     def test_unknown_explicit_model_is_allowed_unchanged(self):
         result = self.route("claude", {"model": "corporate-new-model"}, "haiku")
         self.assertEqual(result["action"], "allow")

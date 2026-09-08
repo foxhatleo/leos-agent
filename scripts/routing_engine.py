@@ -110,6 +110,18 @@ or global settings determine the actual requested child model.
                       retry="Use a model-routed spawn without the overriding native profile, at the current parent model.")
         return result
     if needs_model:
+        if harness == "claude" and selected not in ("haiku", "sonnet", "opus", "fable"):
+            # Agent's model enum accepts aliases, not transcript/provider IDs.
+            # Translate only an observed parent ceiling, never a configured ID.
+            identity = pricing.identity(selected) if selected == parent else None
+            alias = identity[1] if identity and identity[0] == "claude" else None
+            if alias in ("haiku", "sonnet", "opus", "fable") and pricing.compare(alias, parent, catalog)["status"] == "allowed":
+                selected = alias
+                result["effective_model"] = alias
+            else:
+                result.update(action="block", reason="unsupported-native-model",
+                              retry="Claude Agent accepts haiku, sonnet, opus, or fable. Use a supported alias within the parent ceiling, or do the work locally.")
+                return result
         if cap["rewrite"]:
             updated = copy.deepcopy(args)
             updated[field] = selected
@@ -128,5 +140,5 @@ or global settings determine the actual requested child model.
             result.update(action="block", reason="native-profile-over-ceiling",
                           retry="Use the parent-level native agent, or perform the work in the current parent.")
     else:
-        result["reason"] = "price-unknown" if result["price"] is None or result["price"]["status"] == "unknown" else "within-ceiling"
+        result["reason"] = "parent-model-unavailable" if not parent else "price-unknown" if result["price"] is None or result["price"]["status"] == "unknown" else "within-ceiling"
     return result
