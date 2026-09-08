@@ -21,8 +21,13 @@ Subcommands:
 stage --input file: {"comments": [{"path", "line", "side", "body",
                                    "start_line"?, "start_side"?}, ...]}
 line = absolute line number in the new file for side RIGHT (old file for LEFT).
-Off-diff lines are snapped to the nearest addressable line in the same hunk,
-or dropped (reported on stderr) — one bad line would 422 the entire review.
+A line that is not addressable in the diff cannot be an inline comment — one
+bad line would 422 the entire review — so that finding is CARRIED in the
+review body instead, with its path, line and the reason it could not anchor.
+The body is private until the review is submitted, which is why it is the
+right carrier and a public PR comment is not. Only input with nothing
+renderable in it (a non-object, or no path or no text) is `omitted`.
+`complete` means every finding reached the author: staged inline or carried.
 
 Exit codes: 0 success; 1 API failure after retry; 2 usage/input error;
 3 refused — a pending review being cleared (clear-pending, or stage
@@ -58,6 +63,13 @@ MARKER = "<!-- leos-agent:review-pr -->"
 # own backstop well above it, so a reviewer talked past its cap by a hostile
 # diff still cannot blanket a pull request.
 MAX_STAGE_COMMENTS = 50
+
+# A finding that cannot be anchored is still a finding. It goes in the review
+# BODY, which is private until the review is submitted -- that privacy is the
+# whole reason the body is the right carrier and a public PR comment is not.
+# GitHub caps a review body at 65536 characters; leave room for a preamble.
+MAX_BODY_CHARS = 60000
+MAX_FINDING_CHARS = 2000
 
 
 def _mark(body):
@@ -196,6 +208,52 @@ def validate_comments(comments, maps):
             snapped.append({"path": path, "from": line, "to": new_line})
         staged.append(entry)
     return staged, snapped, dropped
+
+
+def representable(entry):
+    """Can this dropped finding still be shown to the author?
+
+    Yes when it kept a usable path and a usable body: the anchor failed, the
+    finding did not. No for structurally malformed input -- a non-object, or a
+    comment with no path or no text -- which has nothing to render.
+    """
+    if not isinstance(entry, dict):
+        return False
+    path, body = entry.get("path"), entry.get("body")
+    return bool(isinstance(path, str) and path.strip() and isinstance(body, str) and body.strip())
+
+
+def render_carried(findings):
+    """(body, carried, overflow) for findings with no addressable line.
+
+    Truncation is never silent: a finding that does not fit is returned as
+    overflow and counted as omitted, because a finding nobody can read has not
+    been preserved just because we tried.
+    """
+    if not findings:
+        return "", [], []
+    header = (MARKER + "\n\n## Findings without an addressable line\n\n"
+              "Recorded here because this diff has no line to anchor them to. Not dropped.\n\n")
+    carried, overflow, size = [], [], len(header)
+    for entry in findings:
+        text = str(entry.get("body", "")).strip()
+        if len(text) > MAX_FINDING_CHARS:
+            text = text[:MAX_FINDING_CHARS].rstrip() + " …"
+        line = entry.get("line")
+        where = "%s:%s" % (entry.get("path"), line if line is not None else "?")
+        rendered = "- `%s` (%s) — %s\n%s\n\n" % (
+            where, entry.get("side") or "RIGHT", entry.get("reason", "not addressable"),
+            "\n".join("  > " + row for row in text.splitlines() or [""]),
+        )
+        if size + len(rendered) > MAX_BODY_CHARS:
+            overflow.append(dict(entry, reason="did not fit in the review body; %s" % entry.get("reason", "not addressable")))
+            continue
+        carried.append(entry)
+        size += len(rendered)
+        header += rendered
+    if overflow:
+        header += "… %d further finding(s) did not fit; see the stage report.\n" % len(overflow)
+    return header, carried, overflow
 
 
 def current_login():
@@ -388,7 +446,13 @@ def fetch_threads(repo, pr):
 
 
 def post_review(repo, pr, commit, staged, body=""):
-    payload = json.dumps({"commit_id": commit, "comments": staged, "body": body})  # no "event" -> PENDING
+    # No "event" field -> the review stays PENDING. `comments` is omitted rather
+    # than sent empty when nothing anchored: that is the payload shape cmd_reply
+    # already relies on to open an empty pending shell.
+    fields = {"commit_id": commit, "body": body}
+    if staged:
+        fields["comments"] = staged
+    payload = json.dumps(fields)
     out = gh(["api", f"repos/{repo}/pulls/{pr}/reviews", "--method", "POST", "--input", "-"], payload)
     return json.loads(out)
 
@@ -551,7 +615,9 @@ def cmd_stage(a):
             if refusal:
                 print(json.dumps(refusal, indent=1))
                 sys.exit(3)
-        print(json.dumps({"repo": a.repo, "pr": a.pr, "commit": a.commit, "complete": not a.dry_run, "staged": 0, "note": "no findings; nothing created"}))
+        print(json.dumps({"repo": a.repo, "pr": a.pr, "commit": a.commit, "complete": not a.dry_run,
+                          "review_created": False, "staged": 0, "carried": 0, "omitted": [],
+                          "note": "no findings; nothing created"}))
         return
     if len(comments) > MAX_STAGE_COMMENTS:
         print(
@@ -563,16 +629,26 @@ def cmd_stage(a):
 
     files = pinned_files(a.repo, a.pr, a.commit)
     staged, snapped, dropped = validate_comments(comments, build_maps(files))
-    report = {"repo": a.repo, "pr": a.pr, "commit": a.commit, "complete": False, "staged": len(staged), "snapped": snapped, "dropped": dropped}
-    for d in dropped:
-        print(f"unstageable: {d.get('path')}:{d.get('line')} — {d['reason']}", file=sys.stderr)
+    # A finding that failed to anchor is carried in the review body; only input
+    # with nothing renderable in it is omitted. `complete` therefore means every
+    # finding reached the author, not that every finding reached a diff line.
+    body, carried, overflow = render_carried([d for d in dropped if representable(d)])
+    omitted = [d for d in dropped if not representable(d)] + overflow
+    report = {"repo": a.repo, "pr": a.pr, "commit": a.commit, "complete": False, "review_created": False,
+              "staged": len(staged), "carried": len(carried), "omitted": omitted,
+              "snapped": snapped, "dropped": dropped}
+    for d in carried:
+        print(f"carried in review body: {d.get('path')}:{d.get('line')} — {d['reason']}", file=sys.stderr)
+    for d in omitted:
+        print(f"omitted: {d.get('path')}:{d.get('line')} — {d['reason']}", file=sys.stderr)
 
     if a.dry_run:
         report["comments"] = staged
+        report["body"] = body
         print(json.dumps(report, indent=1))
         return
-    if not staged:
-        print(json.dumps({**report, "note": "all comments were unstageable; no review created"}))
+    if not staged and not carried:
+        print(json.dumps({**report, "note": "nothing renderable in the input; no review created"}))
         return
 
     if a.replace_pending:
@@ -587,7 +663,7 @@ def cmd_stage(a):
 
     try:
         require_head(a.repo, a.pr, a.commit)
-        review = post_review(a.repo, a.pr, a.commit, staged)
+        review = post_review(a.repo, a.pr, a.commit, staged, body)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
         # Never retry uncertain publication or reinterpret anchors at a new
         # head. Retain a local recovery snapshot of any replaced owned draft.
@@ -600,13 +676,15 @@ def cmd_stage(a):
                     old = previous["review"]
                     restored = post_review(a.repo, a.pr, old["commit_id"],
                                            [comment_content(c) for c in previous["comments"]], old.get("body") or "")
-                    remember_review(a.repo, a.pr, restored, previous["comments"], old.get("body") or "")
+                    remember_review(a.repo, a.pr, restored, previous["comments"],
+                                    restored.get("body") or old.get("body") or "")
             except (OSError, ValueError, KeyError, subprocess.SubprocessError):
                 print("automatic restoration unavailable; recovery snapshot retained", file=sys.stderr)
         raise
-    remember_review(a.repo, a.pr, review, staged)
+    remember_review(a.repo, a.pr, review, staged, review.get("body") or body)
 
-    report.update({"complete": not dropped, "review_id": review["id"], "state": review["state"], "staged": len(staged)})
+    report.update({"complete": not omitted, "review_created": True, "review_id": review["id"],
+                   "state": review["state"], "staged": len(staged), "carried": len(carried)})
     print(json.dumps(report, indent=1))
 
 

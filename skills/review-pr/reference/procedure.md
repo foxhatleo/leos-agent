@@ -104,9 +104,18 @@ reported, never silently moved. A changed head or uncertain API outcome is not
 blindly retried. An empty comment list creates no empty review, but may clear
 an unchanged owned draft when replacement was requested.
 
-Inspect both exit status and result JSON. `complete: false` means incomplete
-staging; address missing anchors before continuing. On failure preserve the
-report and recovery path, and apply no subsequent mutations.
+A finding whose line is not addressable in the diff is **carried in the review
+body**, with its path, line and the reason it could not anchor. It is not
+dropped. The body is private until the review is submitted, so this reaches the
+author on submission and nobody before it; never convert such a finding into a
+public PR comment. Only input with nothing renderable in it — a non-object, or
+no path or no text — is `omitted`.
+
+Inspect both exit status and result JSON. `staged` anchored inline, `carried`
+reached the body, `omitted` reached neither. `complete: false` means at least
+one finding is omitted; fix the input and restage rather than proceeding. A
+carried finding needs no action: it is already in the review. On failure
+preserve the report and recovery path, and apply no subsequent mutations.
 
 Stage replies using scratch files:
 
@@ -137,8 +146,10 @@ Include:
 - Existing threads: left, pending reply, or resolved; resolutions are already
   public. For outdated lines use original_line; file-level only if both lines
   are null. Mention replaced drafts and any recovery files.
-- Unstaged findings and coverage gaps, excluded files, CI status, and ticket
-  coverage. Never hide a failed lens or imply it completed.
+- Carried and omitted findings, coverage gaps, excluded files, CI status, and
+  ticket coverage. A carried finding is only visible to whoever opens the draft,
+  so it still belongs in the report. Never hide a failed lens or imply it
+  completed.
 - Verdict with brief rationale: **ready-to-merge** only with adequate coverage,
   no major/blocking issues, and acceptable CI; **neutral** for uncertainty or
   nonblocking concerns; **seriously-problematic** for verified blocking issues.

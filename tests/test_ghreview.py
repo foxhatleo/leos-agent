@@ -1,6 +1,8 @@
 """Behavioral tests for review staging and diff-line validation."""
 
+import contextlib
 import importlib.util
+import io
 import json
 import unittest
 from pathlib import Path
@@ -194,6 +196,133 @@ class TestPinnedReviewSafety(unittest.TestCase):
 
     def test_exact_anchor_required_even_one_line_away(self):
         self.assertIsNone(ghreview.snap_line({"right": {10}, "hunks": [{"r": (10, 10)}]}, "RIGHT", 9))
+
+
+class TestCarriedFindings(unittest.TestCase):
+    """A finding that cannot be anchored must still reach the author."""
+
+    def test_a_finding_that_kept_a_path_and_a_body_is_representable(self):
+        self.assertTrue(ghreview.representable({"path": "a.py", "body": "text", "reason": "r"}))
+        self.assertFalse(ghreview.representable({"path": "a.py", "body": "   "}))
+        self.assertFalse(ghreview.representable({"body": "text"}))
+        self.assertFalse(ghreview.representable("not an object"))
+
+    def test_the_rendered_body_names_path_line_side_and_reason(self):
+        body, carried, overflow = ghreview.render_carried([
+            {"path": "a.py", "line": 42, "side": "LEFT", "body": "the finding",
+             "reason": "line 42 (LEFT) not addressable in any hunk"},
+        ])
+        self.assertEqual((len(carried), len(overflow)), (1, 0))
+        for needle in ("a.py:42", "LEFT", "not addressable", "the finding", ghreview.MARKER):
+            self.assertIn(needle, body)
+
+    def test_a_finding_that_does_not_fit_is_omitted_rather_than_quietly_cut(self):
+        """Coverage honesty: a finding nobody can read has not been preserved
+        just because we tried, so it must be reported as omitted, not carried."""
+        findings = [{"path": f"f{i}.py", "line": i, "side": "RIGHT",
+                     "body": "x" * ghreview.MAX_FINDING_CHARS, "reason": "r"} for i in range(60)]
+        body, carried, overflow = ghreview.render_carried(findings)
+        self.assertTrue(overflow)
+        self.assertEqual(len(carried) + len(overflow), len(findings))
+        self.assertLessEqual(len(body), ghreview.MAX_BODY_CHARS + 200)
+        self.assertIn("did not fit", body)
+        self.assertTrue(all("did not fit" in o["reason"] for o in overflow))
+
+    def test_one_huge_finding_cannot_crowd_out_the_others(self):
+        body, carried, _ = ghreview.render_carried([
+            {"path": "big.py", "line": 1, "side": "RIGHT", "body": "y" * 50000, "reason": "r"},
+            {"path": "small.py", "line": 2, "side": "RIGHT", "body": "short", "reason": "r"},
+        ])
+        self.assertEqual(len(carried), 2)
+        self.assertIn("small.py", body)
+
+
+class TestStageCoverage(unittest.TestCase):
+    """cmd_stage's report is what watch_review trusts to close out a head."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.files = [{"filename": "a.py", "additions": 1, "deletions": 0,
+                       "patch": "@@ -1,1 +1,1 @@\n+anchored\n"}]
+
+    def stage(self, comments, **overrides):
+        path = Path(self.tmp.name) / "in.json"
+        path.write_text(json.dumps({"comments": comments}))
+        args = types.SimpleNamespace(repo="o/r", pr=1, commit="a" * 40, input=str(path),
+                                     replace_pending=False, force=False, dry_run=False)
+        for key, value in overrides.items():
+            setattr(args, key, value)
+        posted = {}
+
+        def fake_post(repo, pr, commit, staged, body=""):
+            posted.update(staged=staged, body=body)
+            return {"id": 7, "node_id": "n", "state": "PENDING", "body": body}
+
+        buffer = io.StringIO()
+        with mock.patch.object(ghreview, "pinned_files", return_value=self.files), \
+             mock.patch.object(ghreview, "require_head"), \
+             mock.patch.object(ghreview, "post_review", side_effect=fake_post), \
+             mock.patch.object(ghreview, "remember_review") as remember, \
+             contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(io.StringIO()):
+            ghreview.cmd_stage(args)
+        return json.loads(buffer.getvalue()), posted, remember
+
+    def test_a_partly_anchored_review_carries_the_rest_and_is_complete(self):
+        """The reproduced deadlock: one unanchorable finding used to make the
+        whole head unrecordable. It is now carried, and the review is complete."""
+        report, posted, _ = self.stage([
+            {"path": "a.py", "line": 1, "body": "anchored finding"},
+            {"path": "a.py", "line": 999, "body": "no line for this one"},
+        ])
+        self.assertEqual((report["staged"], report["carried"], report["omitted"]), (1, 1, []))
+        self.assertTrue(report["complete"])
+        self.assertTrue(report["review_created"])
+        self.assertIn("no line for this one", posted["body"])
+
+    def test_findings_with_no_anchorable_line_still_create_a_review(self):
+        report, posted, _ = self.stage([{"path": "a.py", "line": 999, "body": "only finding"}])
+        self.assertTrue(report["complete"])
+        self.assertTrue(report["review_created"])
+        self.assertEqual(posted["staged"], [])
+        self.assertIn("only finding", posted["body"])
+
+    def test_malformed_input_is_omitted_and_the_report_is_not_complete(self):
+        report, _, _ = self.stage([
+            {"path": "a.py", "line": 1, "body": "anchored"},
+            {"path": "a.py", "line": 5, "body": "   "},
+        ])
+        self.assertEqual(len(report["omitted"]), 1)
+        self.assertFalse(report["complete"])
+
+    def test_nothing_renderable_creates_no_review(self):
+        report, posted, _ = self.stage([{"line": 5, "body": ""}])
+        self.assertFalse(report["review_created"])
+        self.assertFalse(report["complete"])
+        self.assertEqual(posted, {})
+
+    def test_the_receipt_records_the_body_github_returned(self):
+        """The trap. remember_review used to hash body="" while a non-empty body
+        was posted, so pending_snapshot stopped recognising our own draft and
+        every later --replace-pending refused -- on the NEXT review, not this one."""
+        _, posted, remember = self.stage([{"path": "a.py", "line": 999, "body": "carried"}])
+        self.assertEqual(remember.call_args[0][4], posted["body"])
+        self.assertTrue(posted["body"])
+
+    def test_an_owned_draft_with_a_carried_body_is_still_recognised_later(self):
+        comments = [{"path": "a.py", "line": 1, "side": "RIGHT", "body": "anchored"}]
+        body, _, _ = ghreview.render_carried([
+            {"path": "a.py", "line": 9, "side": "RIGHT", "body": "carried", "reason": "r"}])
+        fingerprint = ghreview.review_fingerprint(body, comments)
+        review = {"id": 7, "body": body}
+        with mock.patch.object(ghreview, "pending_review", return_value=review), \
+             mock.patch.object(ghreview, "review_comments", return_value=comments), \
+             mock.patch.object(ghreview, "receipt_path") as receipt:
+            receipt.return_value = Path(self.tmp.name) / "receipt.json"
+            receipt.return_value.write_text(json.dumps({"fingerprint": fingerprint, "review_id": 7}))
+            snapshot, refusal = ghreview.pending_snapshot("o/r", 1)
+        self.assertIsNone(refusal)
+        self.assertFalse(snapshot["forced"])
 
 
 if __name__ == "__main__":
