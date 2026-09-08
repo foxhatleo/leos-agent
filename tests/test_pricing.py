@@ -56,6 +56,10 @@ class ModelPrices(unittest.TestCase):
             with self.assertRaises(pricing.PricingError):
                 catalog(("openai/gpt-5.6-sol", value, 1))
 
+    def test_conflicting_duplicate_model_prices_are_rejected(self):
+        with self.assertRaisesRegex(pricing.PricingError, "duplicate model"):
+            catalog(("openai/gpt-5.6-sol", 1, 2), ("openai/gpt-5.6-sol", 3, 4))
+
     def test_refresh_failure_preserves_catalog_and_throttles_retries(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, LEOS_AGENT_LOCAL_PATH=tmp):
             path = pricing.cache_path()

@@ -81,11 +81,15 @@ def snapshot(raw, fetched_at=None):
     if not isinstance(raw, dict) or not isinstance(raw.get("data"), list):
         raise PricingError("catalog must contain a data array")
     models = []
+    seen = set()
     for row in raw["data"]:
         if not isinstance(row, dict) or not isinstance(row.get("id"), str):
             raise PricingError("invalid model entry")
         if identity(row["id"]) is None:
             continue
+        if row["id"] in seen:
+            raise PricingError("duplicate model entry: " + row["id"])
+        seen.add(row["id"])
         prices = row.get("pricing")
         if not isinstance(prices, dict):
             raise PricingError("missing pricing for " + row["id"])

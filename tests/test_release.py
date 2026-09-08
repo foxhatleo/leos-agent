@@ -8,7 +8,11 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
+import shutil
 import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -49,6 +53,26 @@ class TestPackGuard(unittest.TestCase):
         # The declared `files` allowlist must exclude residue on its own, since
         # CI runs the test suite — which writes __pycache__ — before publishing.
         publish_npm.check_inventory(publish_npm.pack_inventory())
+
+    def test_packaged_opencode_installer_round_trip(self):
+        inventory = publish_npm.pack_inventory()
+        with tempfile.TemporaryDirectory(prefix="leo packaged install ") as tmp:
+            base = Path(tmp)
+            package = base / "package"
+            for name in inventory:
+                target = package / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(ROOT / name, target)
+            env = {**os.environ, "LEOS_AGENT_ROOT": str(package),
+                   "OPENCODE_CONFIG_DIR": str(base / "config"),
+                   "OPENCODE_CONFIG": str(base / "config" / "opencode.jsonc"),
+                   "LEOS_AGENT_LOCAL_PATH": str(base / "data"),
+                   "LEOS_AGENT_PRICE_REFRESH": "off", "PYTHONDONTWRITEBYTECODE": "1"}
+            command = [sys.executable, str(package / "scripts/leo-install.py"), "opencode"]
+            for flags in ([], ["--check"], ["--uninstall"]):
+                result = subprocess.run(command + flags, env=env, capture_output=True, text=True, timeout=20)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertFalse((base / "config" / "agents" / "leo-standard.md").exists())
 
 
 class TestRegistryState(unittest.TestCase):
