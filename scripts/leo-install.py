@@ -636,6 +636,10 @@ def manage_opencode_config(root, cfg, args, label):
 	current = path.read_text() if path.exists() else "{}\n"
 	_, spans, _ = properties(current)
 	wanted = {"instructions": [str(cfg / "leos-agent-routing.md")], "plugin": [(root / "index.js").resolve().as_uri()]}
+	# Older receipts did not record key ownership. Preserve those keys rather
+	# than guessing that an empty user setting belonged to this installer.
+	created_keys = set(previous.get("created_keys", []))
+	created_keys.update(key for key in wanted if key not in spans)
 	updated = current
 	for key, additions in wanted.items():
 		remove = list(previous.get(key, []))
@@ -652,7 +656,7 @@ def manage_opencode_config(root, cfg, args, label):
 		# Do not remove/re-add unchanged entries: idempotency includes bytes.
 		remove = [v for v in remove if args.uninstall or v not in additions]
 		updated = update_array(updated, key, [] if args.uninstall else additions, remove)
-		if args.uninstall:
+		if args.uninstall and key in created_keys:
 			# Leave behind no key we invented, but never take one that still holds
 			# an entry the user put there.
 			updated = drop_empty_array(updated, key)
@@ -663,7 +667,7 @@ def manage_opencode_config(root, cfg, args, label):
 			if receipt.exists():
 				remove_file(receipt)
 		else:
-			atomic_write(receipt, json.dumps(wanted, indent=2) + "\n", False)
+			atomic_write(receipt, json.dumps({**wanted, "created_keys": sorted(created_keys)}, indent=2) + "\n", False)
 	return Result(label, "unchanged" if current == updated else "updated" if path.exists() else "created")
 
 

@@ -11,6 +11,9 @@ hooks emit the compact deterministic policy; Claude also covers fork starts.
 Cursor loads its native rule directly, so its lifecycle hook emits no policy.
 
 Claude PreToolUse can supply updatedInput without granting tool permission.
+The 2026-09-08 local smoke tests verified this exact output shape by observing
+actual Haiku/Sonnet child models, including a Sonnet-to-Haiku correction; see
+README.md for the scope and cold-session limitation.
 Codex's documented rewrite format requires an allow decision; this cost guard
 uses rejection with a precise retry instead of granting permission. Native
 profile precedence must also be respected. These are cost guardrails, not a

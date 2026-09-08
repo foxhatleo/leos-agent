@@ -70,7 +70,6 @@ MAX_STAGE_COMMENTS = 50
 # whole reason the body is the right carrier and a public PR comment is not.
 # GitHub caps a review body at 65536 characters; leave room for a preamble.
 MAX_BODY_CHARS = 60000
-MAX_FINDING_CHARS = 2000
 
 
 def _mark(body):
@@ -238,8 +237,6 @@ def render_carried(findings):
     carried, overflow, size = [], [], len(header)
     for entry in findings:
         text = str(entry.get("body", "")).strip()
-        if len(text) > MAX_FINDING_CHARS:
-            text = text[:MAX_FINDING_CHARS].rstrip() + " …"
         line = entry.get("line")
         where = "%s:%s" % (entry.get("path"), line if line is not None else "?")
         rendered = "- `%s` (%s) — %s\n%s\n\n" % (

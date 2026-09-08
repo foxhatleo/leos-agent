@@ -220,7 +220,7 @@ class TestCarriedFindings(unittest.TestCase):
         """Coverage honesty: a finding nobody can read has not been preserved
         just because we tried, so it must be reported as omitted, not carried."""
         findings = [{"path": f"f{i}.py", "line": i, "side": "RIGHT",
-                     "body": "x" * ghreview.MAX_FINDING_CHARS, "reason": "r"} for i in range(60)]
+                     "body": "x" * 2000, "reason": "r"} for i in range(60)]
         body, carried, overflow = ghreview.render_carried(findings)
         self.assertTrue(overflow)
         self.assertEqual(len(carried) + len(overflow), len(findings))
@@ -235,6 +235,7 @@ class TestCarriedFindings(unittest.TestCase):
         ])
         self.assertEqual(len(carried), 2)
         self.assertIn("small.py", body)
+        self.assertIn("y" * 50000, body)
 
 
 class TestStageCoverage(unittest.TestCase):

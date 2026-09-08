@@ -100,6 +100,72 @@ class SymlinkAndCleanup(unittest.TestCase):
             self.assertFalse(link.is_symlink())
             self.assertTrue(target.is_file())
 
+    def test_deleted_links_round_trip_including_dangling_relative_links(self):
+        for target_name in ("target", "missing"):
+            with self.subTest(target=target_name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "target").write_bytes(b"untouched")
+                link = root / "link"
+                link.symlink_to(target_name)
+                tx = transaction.Transaction(root / "backup.json")
+                tx.stage(link, None)
+                tx.commit()
+                self.assertFalse(link.is_symlink())
+                self.assertEqual(transaction.rollback(tx.backup), 1)
+                self.assertTrue(link.is_symlink())
+                self.assertEqual(transaction.os.readlink(link), target_name)
+                self.assertEqual((root / "target").read_bytes(), b"untouched")
+
+    def test_failed_transaction_restores_deleted_link(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            link, later = root / "link", root / "later"
+            link.symlink_to("missing")
+            tx = transaction.Transaction(root / "backup.json")
+            tx.stage(link, None)
+            tx.stage(later, b"new")
+            real = transaction.replace
+            def fail(path, data, mode=0o600):
+                if path == later:
+                    raise OSError("disk failure")
+                return real(path, data, mode)
+            with patch.object(transaction, "replace", side_effect=fail), self.assertRaises(OSError):
+                tx.commit()
+            self.assertEqual(transaction.os.readlink(link), "missing")
+            self.assertFalse(later.exists())
+            self.assertEqual(transaction.rollback(tx.backup), 0)
+
+    def test_retargeted_link_is_a_concurrent_edit_even_with_identical_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("a", "b"):
+                (root / name).write_bytes(b"same")
+            link = root / "link"
+            link.symlink_to("a")
+            tx = transaction.Transaction(root / "backup.json")
+            tx.stage(link, None)
+            link.unlink()
+            link.symlink_to("b")
+            with self.assertRaisesRegex(OSError, "concurrent edit"):
+                tx.commit()
+            self.assertEqual(transaction.os.readlink(link), "b")
+
+    def test_pruning_resolves_parent_aliases_but_does_not_escape_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            boundary = root / "config"
+            (boundary / "deep").mkdir(parents=True)
+            alias = root / "alias"
+            alias.symlink_to(boundary, target_is_directory=True)
+            transaction.prune_empty_dirs({alias / "deep" / "x": (b"x", None, 0o600)}, boundary)
+            self.assertFalse((boundary / "deep").exists())
+            outside = root / "outside"
+            outside.mkdir()
+            (boundary / "external").symlink_to(outside, target_is_directory=True)
+            transaction.prune_empty_dirs({boundary / "external" / "x": (b"x", None, 0o600)}, boundary)
+            self.assertTrue(outside.is_dir())
+            self.assertTrue(boundary.is_dir())
+
     def test_rollback_leaves_neither_receipt_nor_emptied_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

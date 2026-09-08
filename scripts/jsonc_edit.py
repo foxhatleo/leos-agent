@@ -143,28 +143,27 @@ def update_array(text, key, additions=(), removals=()):
 def drop_empty_array(text, key):
     """Remove `key` entirely when its array has no values left.
 
-    Uninstall should not leave behind a key the installer invented. A key that
-    still holds anything is never touched, so a list the user already had --
-    emptied by them, or holding entries we never wrote -- keeps its place.
+    The caller must establish that it created this key. Nonempty arrays are
+    untouched, and comments survive removing the property syntax.
     """
     source, spans, close = properties(text)
     if key not in spans or spans[key][2] != []:
         return text
     _, end, _, key_start = spans[key]
-    # Take one adjacent comma with the property, preferring the one before it so
-    # a trailing comment after the previous value is not orphaned.
+    # Remove syntax only; retain comments even inside the emptied array or
+    # between this property and its neighbours.
     punctuation = clean(text, trailing=False)
-    start = key_start
-    while start > 0 and punctuation[start - 1].isspace():
-        start -= 1
-    if start > 0 and punctuation[start - 1] == ",":
-        start -= 1
-    else:
-        after = end
-        while after < close and punctuation[after].isspace():
-            after += 1
-        if after < close and punctuation[after] == ",":
-            end = after + 1
-    result = text[:start] + text[end:]
+    removed = {i for i in range(key_start, end) if not punctuation[i].isspace()}
+    before = key_start - 1
+    while before >= 0 and punctuation[before].isspace():
+        before -= 1
+    after = end
+    while after < close and punctuation[after].isspace():
+        after += 1
+    if after < close and punctuation[after] == ",":
+        removed.add(after)
+    elif before >= 0 and punctuation[before] == ",":
+        removed.add(before)
+    result = "".join(c for i, c in enumerate(text) if i not in removed)
     properties(result)
     return result

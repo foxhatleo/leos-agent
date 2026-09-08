@@ -1,6 +1,7 @@
 """Stage file changes, validate conflicts first, retain a reversible backup."""
 import base64
 import contextvars
+from dataclasses import dataclass
 import hashlib
 import json
 import os
@@ -10,7 +11,21 @@ import tempfile
 ACTIVE = contextvars.ContextVar("leo_install_transaction", default=None)
 
 
+@dataclass(frozen=True)
+class Symlink:
+    target: str
+
+
+def snapshot(path):
+    """Capture a directory entry without following its final symlink."""
+    if path.is_symlink():
+        return Symlink(os.readlink(path))
+    return path.read_bytes() if path.exists() else None
+
+
 def digest(data):
+    if isinstance(data, Symlink):
+        return "symlink:" + hashlib.sha256(os.fsencode(data.target)).hexdigest()
     return hashlib.sha256(data).hexdigest() if data is not None else None
 
 
@@ -19,6 +34,13 @@ def replace(path, data, mode=0o600):
         path.unlink(missing_ok=True)
         return
     path.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(data, Symlink):
+        # A private directory avoids a name-reuse race when preparing the link.
+        with tempfile.TemporaryDirectory(dir=path.parent, prefix=".leo-install-") as tmp:
+            link = Path(tmp) / "link"
+            link.symlink_to(data.target)
+            os.replace(link, path)
+        return
     fd, name = tempfile.mkstemp(dir=path.parent, prefix=".leo-install-")
     try:
         with os.fdopen(fd, "wb") as handle:
@@ -42,9 +64,11 @@ class Transaction:
         # is the opposite -- resolving would unlink the target and leave a
         # dangling link where the caller asked for the link itself to go.
         path = Path(path)
-        if data is not None or not path.is_symlink():
+        if isinstance(data, Symlink) or (data is None and path.is_symlink()):
+            path = path.parent.resolve() / path.name
+        else:
             path = path.resolve()
-        original = path.read_bytes() if path.exists() else None
+        original = snapshot(path)
         mode = mode if mode is not None else (path.stat().st_mode & 0o777 if path.exists() else 0o600)
         if original != data:
             self.changes[path] = (original, data, mode)
@@ -53,11 +77,13 @@ class Transaction:
         if not self.changes:
             return
         for path, (before, _, _) in self.changes.items():
-            current = path.read_bytes() if path.exists() else None
+            current = snapshot(path)
             if current != before:
                 raise OSError(f"concurrent edit at {path}; installation aborted")
-        backup = {"schema": 1, "files": [
-            {"path": str(path), "before": base64.b64encode(before).decode() if before is not None else None,
+        backup = {"schema": 2 if any(isinstance(value, Symlink)
+                  for before, after, _ in self.changes.values() for value in (before, after)) else 1, "files": [
+            {"path": str(path), "before": base64.b64encode(before).decode() if isinstance(before, bytes) else None,
+             **({"before_symlink": before.target} if isinstance(before, Symlink) else {}),
              "after_sha256": digest(after), "mode": mode}
             for path, (before, after, mode) in self.changes.items()]}
         # Persist recovery before any target change. No prompts or credentials
@@ -78,13 +104,18 @@ def rollback(backup, boundary=None):
     """Undo an installation. `boundary` bounds the empty-directory cleanup."""
     backup = Path(backup)
     data = json.loads(backup.read_text())
-    if data.get("schema") != 1 or not isinstance(data.get("files"), list):
+    if data.get("schema") not in (1, 2) or not isinstance(data.get("files"), list):
         raise ValueError("invalid installation backup")
     tx = Transaction(backup.with_name(backup.stem + "-redo.json"))
     for entry in data["files"]:
         path = Path(entry["path"])
-        current = path.read_bytes() if path.exists() else None
+        current = snapshot(path)
         original = base64.b64decode(entry["before"], validate=True) if entry["before"] is not None else None
+        if "before_symlink" in entry:
+            target = entry["before_symlink"]
+            if data["schema"] != 2 or not isinstance(target, str) or not target or "\0" in target:
+                raise ValueError("invalid symlink backup")
+            original = Symlink(target)
         if not path.is_absolute():
             raise ValueError("backup paths must be absolute")
         if current == original:
@@ -110,7 +141,7 @@ def prune_empty_dirs(changes, boundary):
     for path, entry in changes.items():
         if entry[1] is not None:
             continue
-        parent = Path(path).parent
+        parent = Path(path).parent.resolve()
         while parent != boundary and boundary in parent.parents:
             try:
                 parent.rmdir()

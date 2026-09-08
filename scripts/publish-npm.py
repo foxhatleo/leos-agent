@@ -17,6 +17,7 @@ import argparse
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -108,6 +109,16 @@ def publish(npm="npm"):
 	return (published.stdout + published.stderr).strip()
 
 
+def wait_for_public_version(version, npm="npm"):
+	"""Allow brief registry propagation; never retry the upload or bypass staging."""
+	for delay in (0, 5, 10, 20):
+		if delay:
+			time.sleep(delay)
+		if registry_state(version, npm) == "present":
+			return True
+	return False
+
+
 def main(argv=None):
 	parser = argparse.ArgumentParser(description=__doc__)
 	parser.add_argument("--tag", help="git tag being released; must match package.json")
@@ -137,7 +148,7 @@ def main(argv=None):
 		publish(args.npm)
 		# npm can accept an upload into staging without making it public.
 		# A zero exit code proves upload acceptance, not registry availability.
-		if registry_state(version, args.npm) != "present":
+		if not wait_for_public_version(version, args.npm):
 			raise ReleaseError("upload accepted but the version is not publicly available; inspect npm staged packages for approval or registry propagation before retrying")
 		print(f"published and verified {PACKAGE}@{version}")
 		return 0

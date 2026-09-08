@@ -48,6 +48,16 @@ class DropEmptyArrays(unittest.TestCase):
         self.assertIn("// keep me", result)
         self.assertEqual(json.loads(edit.clean(result)), {"theme": "x"})
 
+    def test_comments_around_and_inside_removed_key_survive(self):
+        for text in ('{"b": 1, /* before */ "a": [/* inside */], /* after */ "c": 2}',
+                     '{/* before */ "a": [/* inside */], /* after */ "c": 2}',
+                     '{"b": 1, /* before */ "a": [/* inside */] /* after */}'):
+            with self.subTest(text=text):
+                result = edit.drop_empty_array(text, "a")
+                self.assertNotIn("a", json.loads(edit.clean(result)))
+                for comment in ("/* before */", "/* inside */", "/* after */"):
+                    self.assertIn(comment, result)
+
     def test_a_key_that_still_holds_something_is_never_touched(self):
         text = '{"plugin": ["mine"], "theme": "x"}'
         self.assertEqual(edit.drop_empty_array(text, "plugin"), text)

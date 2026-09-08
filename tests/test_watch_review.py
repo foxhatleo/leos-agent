@@ -303,6 +303,13 @@ class TestClaimsAndPagination(unittest.TestCase):
         self.assertIn("duplicate of an existing thread", err.getvalue())
         self.assertIn("a.py:3", err.getvalue())
 
+    def test_acknowledgement_requires_a_reason_and_actual_omissions(self):
+        base = {"repo": "o/r", "pr": 1, "commit": "a" * 40, "complete": False,
+                "review_created": True, "omitted": [{"reason": "invalid finding"}]}
+        self.assertIn("non-blank", self.w.completion_refusal(base, "o/r", 1, "a" * 40, "   "))
+        complete = dict(base, complete=True, omitted=[])
+        self.assertIn("nothing is omitted", self.w.completion_refusal(complete, "o/r", 1, "a" * 40, "why"))
+
     def test_a_report_from_the_previous_release_behaves_as_before(self):
         """No review_created and no omitted keys: complete alone decides."""
         report = Path(self.tmp.name) / "result.json"

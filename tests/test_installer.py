@@ -1,6 +1,7 @@
 """Behavioral tests for the cross-harness installer."""
 
 import importlib.util
+import json
 import os
 import tempfile
 import types
@@ -181,6 +182,35 @@ class TestOpenCodePayload(unittest.TestCase):
             for name in self.installer.OPENCODE_SKILLS:
                 self.assertFalse((cfg / "skills" / name).exists(), name)
             self.assertEqual(list((cfg / "commands").glob("*.md")), [])
+
+    def test_uninstall_preserves_preexisting_empty_settings(self):
+        from jsonc_edit import clean
+        for original in ('{"plugin": [], "instructions": []}', '{}'):
+            with self.subTest(original=original), tempfile.TemporaryDirectory() as tmp:
+                home = Path(tmp)
+                cfg = home / ".config" / "opencode"
+                cfg.mkdir(parents=True)
+                path = cfg / "opencode.json"
+                path.write_text(original)
+                for options in ({}, {}, {"uninstall": True}):
+                    results = self.run_opencode(home, **options)
+                    self.assertFalse(any(r.failed for r in results), str(results))
+                self.assertEqual(json.loads(clean(path.read_text())), json.loads(original))
+
+    def test_legacy_receipt_does_not_claim_ownership_of_empty_keys(self):
+        from jsonc_edit import clean
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            self.run_opencode(home)
+            cfg = home / ".config" / "opencode"
+            receipt = cfg / "leos-agent-paths.json"
+            previous = json.loads(receipt.read_text())
+            previous.pop("created_keys")
+            receipt.write_text(json.dumps(previous))
+            results = self.run_opencode(home, uninstall=True)
+            self.assertFalse(any(r.failed for r in results), str(results))
+            self.assertEqual(json.loads(clean((cfg / "opencode.json").read_text())),
+                             {"plugin": [], "instructions": []})
 
     def test_opencode_config_is_managed_without_losing_comments(self):
         with tempfile.TemporaryDirectory() as tmp:

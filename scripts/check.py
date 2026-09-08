@@ -281,6 +281,16 @@ def main():
 		if path.is_file():
 			check(installer.PROVENANCE in path.read_text(encoding="utf-8"), f"{rel}: must contain {installer.PROVENANCE!r} so the installer recognises its own copy")
 
+	# Frozen pre-v12 ownership evidence, not an inventory of current payloads.
+	legacy = json.loads((ROOT / "payload/legacy-copy-hashes.json").read_text())
+	check(legacy.get("schema") == 1, "legacy hashes: unsupported schema")
+	check(bool(re.fullmatch(r"[0-9a-f]{40}", str(legacy.get("source_commit", "")))),
+		"legacy hashes: source must be a full commit SHA")
+	hashes = legacy.get("sha256")
+	check(isinstance(hashes, list) and bool(hashes)
+		and all(isinstance(h, str) and re.fullmatch(r"[0-9a-f]{64}", h) for h in hashes)
+		and hashes == sorted(set(hashes)), "legacy hashes: expected sorted unique SHA-256 digests")
+
 	# An OpenCode install bakes the absolute plugin root into every copy it makes.
 	# On the next upgrade the installer has to recover <plugin-root> from that
 	# baked path to recognise its own work by hash -- and when it cannot, the copy

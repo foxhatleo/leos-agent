@@ -195,7 +195,9 @@ def completion_refusal(result, repo, number, head, acknowledgement=None):
 		return "result must confirm successful completion at the supplied head"
 	if result.get("repo") != repo or result.get("pr") != number:
 		return "completion report belongs to another repository or pull request"
-	if result.get("complete") is True:
+	if acknowledgement is not None and not acknowledgement.strip():
+		return "acknowledgement must state a non-blank reason"
+	if result.get("complete") is True and acknowledgement is None:
 		return None
 	omitted = result.get("omitted")
 	if not acknowledgement:
