@@ -281,6 +281,29 @@ def main():
 		if path.is_file():
 			check(installer.PROVENANCE in path.read_text(encoding="utf-8"), f"{rel}: must contain {installer.PROVENANCE!r} so the installer recognises its own copy")
 
+	# An OpenCode install bakes the absolute plugin root into every copy it makes.
+	# On the next upgrade the installer has to recover <plugin-root> from that
+	# baked path to recognise its own work by hash -- and when it cannot, the copy
+	# reads as a stranger's file, the target reports a conflict, and the whole
+	# transaction aborts. That is not a hypothetical: one skill file referenced
+	# only `<plugin-root>/skills/...`, the root detector looked only for
+	# `/scripts/*.py`, and a single unrecognised file blocked the entire upgrade.
+	# So require the round trip for every copied file, under roots chosen to be
+	# awkward: one containing a plugin directory name, one containing a space.
+	for root_text in ("/home/leo/.local/share/leos-agent", "/opt/agents/leos-agent",
+		"/Users/leo/Library/Application Support/leos-agent"):
+		for rel in sorted(set(copied)):
+			if not (ROOT / rel).is_file():
+				continue
+			source = installer.opencode_payload(ROOT / rel, installer.PLUGIN_ROOT_TOKEN)
+			baked = installer.opencode_payload(ROOT / rel, root_text)
+			recovered = [baked.replace(r, installer.PLUGIN_ROOT_TOKEN) for r in installer.candidate_roots(baked)]
+			check(
+				baked == source or source in recovered,
+				f"{rel}: candidate_roots cannot recover the plugin root baked in under {root_text!r}; "
+				"an upgrade would treat this copy as a stranger's file and abort the install",
+			)
+
 	# 5a-agents. Claude Code auto-discovers agents/ at the plugin root. The set
 	# must stay in lockstep with the Codex profiles (same names, one policy), and
 	# each definition needs the frontmatter Claude reads — a missing model field

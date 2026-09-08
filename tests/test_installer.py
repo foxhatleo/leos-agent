@@ -511,10 +511,6 @@ class TestLegacyBlockMigration(unittest.TestCase):
             self.assertIn("# Mine", body)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestLegacyMigration(unittest.TestCase):
     def test_unchanged_old_commands_are_removed_but_edits_preserved(self):
         installer = load_installer()
@@ -528,3 +524,58 @@ class TestLegacyMigration(unittest.TestCase):
             dest.write_text(original + "My change\n")
             installer.remove_legacy_command(dest, args(), "legacy")
             self.assertTrue(dest.exists())
+
+    def test_a_baked_absolute_root_is_recovered_from_any_reference_shape(self):
+        """The upgrade path turns on this. An OpenCode install rewrites
+        <plugin-root> to an absolute path in every copy; the next upgrade has to
+        undo that to recognise its own work by hash. Detection that only knew the
+        `/scripts/*.py` shape missed the one skill file whose sole reference was
+        `<plugin-root>/skills/...` in backticks, and a single unrecognised copy
+        aborted the whole transaction. Roots that themselves contain a plugin
+        directory name, or a space, are the cases a naive regex gets wrong."""
+        installer = load_installer()
+        for root in ("/home/leo/.local/share/leos-agent", "/opt/agents/leos-agent",
+                     "/home/leo/skills/leos-agent",
+                     "/Users/leo/Library/Application Support/leos-agent"):
+            for shape in (
+                'python3 "{}/scripts/handoff.py" list',
+                "  python3 {}/scripts/doctor.py --harness pi",
+                "read `{}/skills/review-pr/reference/procedure.md` and follow it",
+                "see {}/rules/preferences.md for the policy",
+            ):
+                text = shape.format(root)
+                with self.subTest(root=root, shape=shape):
+                    self.assertIn(root, installer.candidate_roots(text))
+                    self.assertEqual(
+                        text.replace(root, installer.PLUGIN_ROOT_TOKEN),
+                        min((v for v in (text.replace(r, installer.PLUGIN_ROOT_TOKEN)
+                                         for r in installer.candidate_roots(text))
+                             if installer.PLUGIN_ROOT_TOKEN in v), key=len, default=None),
+                    )
+
+    def test_a_skill_copy_whose_only_reference_is_a_skill_path_is_recognised(self):
+        """The exact file that blocked the v11 upgrade: its lone <plugin-root>
+        reference points at a skill, not a script, so root detection keyed on
+        `/scripts/*.py` never fired and the copy read as a stranger's file."""
+        installer = load_installer()
+        source = (ROOT / "skills" / "review-pr" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn(installer.PLUGIN_ROOT_TOKEN + "/skills/", source)
+        self.assertNotIn(installer.PLUGIN_ROOT_TOKEN + "/scripts/", source)
+        baked = installer.opencode_payload(ROOT / "skills" / "review-pr" / "SKILL.md",
+                                           "/home/leo/.local/share/leos-agent")
+        recovered = [baked.replace(r, installer.PLUGIN_ROOT_TOKEN) for r in installer.candidate_roots(baked)]
+        self.assertIn(installer.opencode_payload(ROOT / "skills" / "review-pr" / "SKILL.md",
+                                                 installer.PLUGIN_ROOT_TOKEN), recovered)
+
+    def test_an_edited_copy_is_never_recognised_however_many_roots_are_offered(self):
+        """Offering more candidate roots is only safe because a full-content hash
+        stays the arbiter. If that ever stopped being true, this deletes work."""
+        installer = load_installer()
+        original = "---\ndescription: Stage a pending (unsubmitted) GitHub review on a pull request of this repository.\nargument-hint: \"[pr-number]\"\n---\n\nUse the leos-agent `review-pr` skill on `$ARGUMENTS`.\n\nWith no argument, review the pull request for the current branch. Comments are\nstaged as a PENDING review — never submitted, never made public.\n"
+        self.assertTrue(installer.legacy_copy(original))
+        self.assertFalse(installer.legacy_copy(original + "one appended line\n"))
+        self.assertFalse(installer.legacy_copy("# a file we never wrote\n"))
+
+
+if __name__ == "__main__":
+    unittest.main()

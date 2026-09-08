@@ -374,6 +374,39 @@ def owned_copy(text):
 
 
 
+# The directories a plugin root sits directly above. A baked absolute path is
+# recognised by the first of these that follows it, which is what makes the root
+# recoverable from any reference shape -- quoted, backticked, or bare prose.
+ROOT_DIRS = frozenset(("agents", "commands", "hooks", "payload", "rules", "scripts", "skills"))
+
+# Paths are delimited by a quote, a backtick or a newline rather than by
+# whitespace: a macOS root like "/Users/leo/Library/Application Support/leos-agent"
+# contains a space and would otherwise be truncated to "/Users/leo/Library".
+PATH_TOKEN = re.compile(r'/[^\n"\'`]+')
+
+
+def candidate_roots(text, limit=64):
+	"""Absolute paths in `text` that could be an older install's plugin root.
+
+	Every split point is offered, not just the first: a root that itself contains
+	a plugin directory name -- /opt/agents/leos-agent, ~/Library/skills/leos-agent --
+	would otherwise resolve to /opt, and the copy would read as a stranger's file.
+	Over-offering is free, because a full-content hash is still the arbiter.
+	"""
+	out = []
+	for token in PATH_TOKEN.findall(text):
+		parts = token.split("/")
+		for index, part in enumerate(parts):
+			# index > 1 keeps "/skills/..." itself from being read as a root.
+			if part in ROOT_DIRS and index > 1:
+				root = "/".join(parts[:index])
+				if root and root not in out:
+					out.append(root)
+		if len(out) >= limit:
+			return out[:limit]
+	return out
+
+
 def legacy_copy(text):
 	"""Recognize unchanged pre-v12 copies by full content, not a loose marker."""
 	import hashlib
@@ -382,14 +415,13 @@ def legacy_copy(text):
 		expected = set(manifest["sha256"])
 	except (OSError, ValueError, KeyError):
 		return False
+	# Older OpenCode installs replaced <plugin-root> with an absolute source path.
+	# Undo that for each candidate root and require the entire known hash: a file
+	# with a single edited line still fails every variant, which is the property
+	# that lets this delete a copy without ever deleting someone's work.
 	variants = {text}
-	# Older OpenCode installs replaced <plugin-root> with an absolute source
-	# path. Normalize only candidate roots and require the entire known hash.
-	roots = re.findall(r'"([^"\n]+)/scripts/[\w-]+\.py', text)
-	roots += re.findall(r'(?m)^\s*python3 (/[^\n]+?)/scripts/[\w-]+\.py', text)
-	for root in roots:
-		if root.startswith("/"):
-			variants.add(text.replace(root, "<plugin-root>"))
+	for root in candidate_roots(text):
+		variants.add(text.replace(root, PLUGIN_ROOT_TOKEN))
 	return any(hashlib.sha256(value.encode()).hexdigest() in expected for value in variants)
 
 
