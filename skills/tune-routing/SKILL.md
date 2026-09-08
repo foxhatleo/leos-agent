@@ -18,6 +18,10 @@ or the nearest ancestor containing `rules/preferences.md`.
    python3 "<plugin-root>/scripts/doctor.py" --harness <harness> --json
    ```
 
+   For Hermes, stop after diagnostics: per-task tiers are unsupported. Explain
+   that the delegation-worthwhile policy still applies, preserve its native
+   delegation setting, and do not configure ineffective cheap/standard mappings.
+
 2. Identify concrete model IDs available to this account. Read
    `reference/harnesses.md` for the native selection mechanism. Price catalog
    presence does not establish account availability. Ask the user when their

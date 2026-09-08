@@ -58,6 +58,9 @@ def diagnose(harness, root=None):
         report["hook_trust"] = "Review current definitions in /hooks; this tool does not approve them."
     if harness in ("hermes", "pi"):
         report["routing_limit"] = "No native per-dispatch model field; configured tier labels do not establish model selection."
+    if harness == "hermes":
+        report["tiers"] = {"status": "unsupported", "saved_mappings_applied": False}
+        report["native_delegation_setting"] = "Preserved; not managed by this installer."
     return report
 
 

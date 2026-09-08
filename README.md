@@ -140,8 +140,10 @@ Use Hermes's local-plugin directory under your active HERMES_HOME/profile to
 install this repository as `plugins/leos-agent`, then enable it through Hermes's
 plugin manager. Run the registered `leo-install` command. The native plugin
 registers portable skills, one frozen policy section, and dispatch diagnostics.
-Its global delegation-model limitation remains visible; tier configuration
-alone does not prove per-task routing.
+Hermes supports the policy for deciding whether to delegate, but not per-task
+model tiers. The installer preserves its native delegation-model setting;
+saved cheap/standard mappings are not applied. The guard can still check known
+child/parent prices when both models are observable.
 
 ### Pi
 

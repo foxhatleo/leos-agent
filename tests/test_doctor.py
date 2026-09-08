@@ -10,6 +10,18 @@ import doctor
 
 
 class ReadOnlyDoctor(unittest.TestCase):
+    def test_hermes_does_not_present_saved_tiers_as_applied(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "routing.json").write_text('{"hermes":{"cheap":{"model":"haiku"}}}')
+            with patch.dict(os.environ, {"HERMES_HOME": str(root / "hermes"), "LEOS_AGENT_LOCAL_PATH": str(root), "LEOS_AGENT_PRICE_REFRESH": "off"}):
+                result = doctor.diagnose("hermes")
+                stanza = doctor.routing.stanza("hermes", doctor.routing.load())
+            self.assertEqual(result["tiers"]["status"], "unsupported")
+            self.assertFalse(result["tiers"]["saved_mappings_applied"])
+            self.assertNotIn("haiku", stanza)
+            self.assertFalse((root / "hermes").exists())
+
     def test_clean_claude_check_does_not_create_config_or_claim_activation(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

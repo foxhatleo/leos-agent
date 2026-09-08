@@ -134,6 +134,10 @@ def _named(entry):
 
 def stanza(harness, config):
     """Small stable routing instructions; full price metadata stays off-prompt."""
+    if harness == "hermes":
+        return ("Hermes has no per-task model tiers. Decide whether delegation is worthwhile; "
+                "use its existing native delegation model. The installer does not change that setting. "
+                "The guard checks known child/parent prices when observable.")
     assignments = []
     for role in ("cheap", "standard"):
         entry = profile(config, harness, role)
@@ -146,8 +150,6 @@ def stanza(harness, config):
         return line + " Use the supported spawn model field; profile model settings take precedence when selecting a native profile."
     if harness == "opencode":
         return line + " Use installed native tier agents; task calls have no model field."
-    if harness == "hermes":
-        return line + " Native delegation uses one configured model for all children; per-task model routing is unavailable."
     return line + " Use only model/profile selection supported by this harness; report unavailable routing."
 
 
