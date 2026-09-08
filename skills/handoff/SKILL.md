@@ -32,7 +32,8 @@ That path is fixed and needs no plugin root.
    python3 "<plugin-root>/scripts/handoff.py" new <slug>
    ```
 
-   It atomically reserves a private empty file, then prints the de-collided name on the first line, the path to write on the
+   It atomically reserves a private file holding only `created:`, then prints
+   the de-collided name on the first line, the path to write on the
    second, and the `created:` timestamp on the third. Use the name it printed,
    not the slug you asked for — it may have appended a suffix — and copy the
    timestamp verbatim rather than composing one.

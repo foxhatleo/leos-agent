@@ -330,7 +330,11 @@ def cmd_set(args):
 def cmd_unset(args):
     roles = tuple(role for role in ROLES if getattr(args, role))
     before, after = edit(lambda d: apply_unset(d, args.harness, roles), write=not args.dry_run)
-    touched = roles or ROLES
+    # Report canonical tiers only. _resolved follows aliases in both directions,
+    # so walking ROLES printed every configured tier twice -- once as cheap,
+    # again as runner -- as if two separate things had been unset.
+    canonical = tuple(dict.fromkeys(ALIASES.get(role, role) for role in (roles or ROLES)))
+    touched = canonical
     for role in touched:
         was = _resolved(before, args.harness, role)
         if was:
@@ -374,16 +378,16 @@ def main(argv):
     setter.add_argument("--executor", metavar="MODEL", help="replaces the executor entry whole")
     setter.add_argument("--executor-effort", metavar="E", help="needs --executor; omitting it clears any effort")
     for role in ("cheap", "standard"):
-        setter.add_argument(f"--{role}", metavar="MODEL")
-        setter.add_argument(f"--{role}-effort", metavar="E")
+        setter.add_argument(f"--{role}", metavar="MODEL", help=f"replaces the {role} tier entry whole")
+        setter.add_argument(f"--{role}-effort", metavar="E", help=f"needs --{role}; omitting it clears any effort")
     setter.add_argument("--dry-run", action="store_true", help="show the result, write nothing")
 
     unsetter = sub.add_parser("unset", help="drop a harness's roles, back to its shipped default")
     unsetter.add_argument("--harness", choices=HARNESSES, required=True)
     unsetter.add_argument("--runner", action="store_true")
     unsetter.add_argument("--executor", action="store_true")
-    unsetter.add_argument("--cheap", action="store_true")
-    unsetter.add_argument("--standard", action="store_true")
+    unsetter.add_argument("--cheap", action="store_true", help="drop the cheap tier")
+    unsetter.add_argument("--standard", action="store_true", help="drop the standard tier")
     unsetter.add_argument("--dry-run", action="store_true", help="show the result, write nothing")
 
     args = parser.parse_args(argv)

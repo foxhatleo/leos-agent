@@ -50,9 +50,15 @@ def _iso_epoch(text):
         return None
     try:
         stamp = datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
-        return stamp.timestamp() if stamp.tzinfo else None
     except (ValueError, OverflowError):
         return None
+    # Every harness here writes UTC. Reading a naive stamp as UTC restores the
+    # old rule -- a record is counted, never dropped -- because returning None
+    # excludes it from the window entirely, and a harness that stopped writing
+    # the offset would report zero usage rather than a diagnostic.
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=datetime.timezone.utc)
+    return stamp.timestamp()
 
 
 def count(value):

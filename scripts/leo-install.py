@@ -628,7 +628,7 @@ def native_agent(root, name, harness, config):
 
 
 def manage_opencode_config(root, cfg, args, label):
-	from jsonc_edit import update_array, properties
+	from jsonc_edit import drop_empty_array, update_array, properties
 	path = Path(os.environ["OPENCODE_CONFIG"]).expanduser() if os.environ.get("OPENCODE_CONFIG") else (
 		cfg / "opencode.jsonc" if (cfg / "opencode.jsonc").exists() else cfg / "opencode.json")
 	receipt = cfg / "leos-agent-paths.json"
@@ -652,6 +652,10 @@ def manage_opencode_config(root, cfg, args, label):
 		# Do not remove/re-add unchanged entries: idempotency includes bytes.
 		remove = [v for v in remove if args.uninstall or v not in additions]
 		updated = update_array(updated, key, [] if args.uninstall else additions, remove)
+		if args.uninstall:
+			# Leave behind no key we invented, but never take one that still holds
+			# an entry the user put there.
+			updated = drop_empty_array(updated, key)
 	if args.writes:
 		if current != updated:
 			atomic_write(path, updated, False)
@@ -664,7 +668,7 @@ def manage_opencode_config(root, cfg, args, label):
 
 
 def run(harness, root, args):
-	from install_transaction import ACTIVE, Transaction
+	from install_transaction import ACTIVE, Transaction, prune_empty_dirs
 	tx = Transaction(config_dir(harness) / "leos-agent-install-backup.json")
 	token = ACTIVE.set(tx) if args.writes else None
 	try:
@@ -678,17 +682,10 @@ def run(harness, root, args):
 			else:
 				tx.commit()
 				# Remove only empty directories left by deleted owned files.
-				boundary = config_dir(harness).resolve()
-				for path, (_, after, _) in tx.changes.items():
-					if after is not None:
-						continue
-					parent = path.parent
-					while parent != boundary and boundary in parent.parents:
-						try:
-							parent.rmdir()
-						except OSError:
-							break
-						parent = parent.parent
+				prune_empty_dirs(tx.changes, config_dir(harness))
+				if args.uninstall:
+					# Nothing left to roll back to, so the receipt is spent too.
+					tx.backup.unlink(missing_ok=True)
 		return results
 	except (ValueError, OSError) as exc:
 		return [Result(harness, "error", str(exc))]
@@ -719,7 +716,8 @@ def main(argv=None):
 	if args.rollback:
 		from install_transaction import rollback
 		try:
-			print(f"restored {rollback(config_dir(args.harness) / 'leos-agent-install-backup.json')} files")
+			boundary = config_dir(args.harness)
+			print(f"restored {rollback(boundary / 'leos-agent-install-backup.json', boundary)} files")
 			return 0
 		except (ValueError, OSError) as exc:
 			print(f"rollback refused: {exc}", file=sys.stderr)

@@ -148,13 +148,19 @@ def cmd_new(argv):
             name = f"{slug}-{suffix}"
             suffix += 1
             continue
-        os.close(fd)
+        # Write the stamp into the reservation, not just to stdout. An abandoned
+        # reservation then reads as a real handoff with a real age rather than
+        # "? ?" in the listing, and the timestamp is one less thing a writer can
+        # get wrong by composing it.
+        created = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with os.fdopen(fd, "w") as handle:
+            handle.write("---\ncreated: %s\n---\n" % created)
         break
     print(name)
     print(file_for(name))
     # The `created:` value, ready to copy verbatim — a model asked to invent
     # "now" gets it wrong often enough to matter.
-    print(dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    print(created)
 
 
 def cmd_path(argv):

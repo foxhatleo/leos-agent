@@ -36,3 +36,32 @@ class JsoncEdits(unittest.TestCase):
         for text in ('{"x":1,"x":2}', '{"instructions":false}', '{"instructions":[{}]}', '[]'):
             with self.assertRaises(ValueError):
                 edit.update_array(text, "instructions", ["a"])
+
+
+class DropEmptyArrays(unittest.TestCase):
+    """Uninstall must not leave behind a key the installer invented."""
+
+    def test_an_emptied_key_is_removed_and_comments_survive(self):
+        text = '{\n  // keep me\n  "theme": "x",\n  "plugin": []\n}\n'
+        result = edit.drop_empty_array(text, "plugin")
+        self.assertNotIn("plugin", result)
+        self.assertIn("// keep me", result)
+        self.assertEqual(json.loads(edit.clean(result)), {"theme": "x"})
+
+    def test_a_key_that_still_holds_something_is_never_touched(self):
+        text = '{"plugin": ["mine"], "theme": "x"}'
+        self.assertEqual(edit.drop_empty_array(text, "plugin"), text)
+        self.assertEqual(edit.drop_empty_array(text, "absent"), text)
+
+    def test_removal_leaves_valid_json_in_every_position(self):
+        for text in ('{"a": [], "b": 1}', '{"b": 1, "a": []}', '{"a": []}',
+                     '{"b": 1, "a": [], "c": 2}'):
+            with self.subTest(text=text):
+                result = edit.drop_empty_array(text, "a")
+                parsed = json.loads(edit.clean(result))
+                self.assertNotIn("a", parsed)
+                self.assertEqual(len(parsed), len(json.loads(edit.clean(text))) - 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

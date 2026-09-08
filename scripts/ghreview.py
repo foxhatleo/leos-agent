@@ -39,6 +39,7 @@ import json
 import re
 import subprocess
 import hashlib
+import time
 import os
 from pathlib import Path
 
@@ -298,10 +299,37 @@ def review_comments(repo, pr, review_id):
     return [json.loads(l) for l in out.splitlines() if l.strip()]
 
 
+# A receipt is only useful while its pending review is still around to be
+# recognised. Nothing ever deleted them, so the directory grew for the life of
+# the machine; a bounded sweep on write keeps it to recent reviews.
+RECEIPT_TTL = 30 * 86400
+
+
 def receipt_path(repo, pr, review_id):
     from state import _data_root
     key = hashlib.sha256(f"{repo}:{pr}:{review_id}".encode()).hexdigest()
     return Path(_data_root()) / "reviews" / (key + ".json")
+
+
+def prune_receipts(keep=None, now=None):
+    """Drop receipts and draft backups past RECEIPT_TTL. Never the current one."""
+    now = time.time() if now is None else now
+    keep = {str(keep)} if keep else set()
+    try:
+        entries = sorted(receipt_path("x", 0, 0).parent.iterdir())
+    except OSError:
+        return 0
+    removed = 0
+    for entry in entries:
+        if str(entry) in keep or not entry.name.endswith(".json"):
+            continue
+        try:
+            if now - entry.stat().st_mtime > RECEIPT_TTL:
+                entry.unlink()
+                removed += 1
+        except OSError:
+            continue
+    return removed
 
 
 def comment_content(comment):
@@ -316,8 +344,9 @@ def review_fingerprint(body, comments):
 
 def remember_review(repo, pr, review, comments, body=""):
     from state import atomic_write
-    atomic_write(str(receipt_path(repo, pr, review["id"])), {
-        "fingerprint": review_fingerprint(body, comments), "review_id": review["id"]})
+    path = receipt_path(repo, pr, review["id"])
+    atomic_write(str(path), {"fingerprint": review_fingerprint(body, comments), "review_id": review["id"]})
+    prune_receipts(keep=path)
 
 
 def pending_snapshot(repo, pr, force=False):

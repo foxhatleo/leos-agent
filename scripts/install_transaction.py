@@ -37,9 +37,13 @@ class Transaction:
         self.changes = {}
 
     def stage(self, path, data, mode=None):
-        # Preserve intentional dotfile symlinks; store the resolved target so
-        # rollback checks exactly the file that was changed.
-        path = Path(path).resolve()
+        # Preserve intentional dotfile symlinks on a write: resolving means the
+        # bytes land on the target and the link keeps pointing there. A DELETE
+        # is the opposite -- resolving would unlink the target and leave a
+        # dangling link where the caller asked for the link itself to go.
+        path = Path(path)
+        if data is not None or not path.is_symlink():
+            path = path.resolve()
         original = path.read_bytes() if path.exists() else None
         mode = mode if mode is not None else (path.stat().st_mode & 0o777 if path.exists() else 0o600)
         if original != data:
@@ -70,7 +74,8 @@ class Transaction:
             raise
 
 
-def rollback(backup):
+def rollback(backup, boundary=None):
+    """Undo an installation. `boundary` bounds the empty-directory cleanup."""
     backup = Path(backup)
     data = json.loads(backup.read_text())
     if data.get("schema") != 1 or not isinstance(data.get("files"), list):
@@ -87,5 +92,28 @@ def rollback(backup):
         if digest(current) != entry["after_sha256"]:
             raise ValueError(f"{path} changed since installation; refusing rollback")
         tx.stage(path, original, entry["mode"])
+    restored = len(tx.changes)
     tx.commit()
-    return len(tx.changes)
+    prune_empty_dirs(tx.changes, boundary)
+    # A completed rollback leaves nothing of its own behind: the redo receipt it
+    # just wrote, and the backup it consumed, are both spent.
+    tx.backup.unlink(missing_ok=True)
+    backup.unlink(missing_ok=True)
+    return restored
+
+
+def prune_empty_dirs(changes, boundary):
+    """Remove directories emptied by a deletion, never past `boundary`."""
+    if boundary is None:
+        return
+    boundary = Path(boundary).resolve()
+    for path, entry in changes.items():
+        if entry[1] is not None:
+            continue
+        parent = Path(path).parent
+        while parent != boundary and boundary in parent.parents:
+            try:
+                parent.rmdir()
+            except OSError:
+                break
+            parent = parent.parent
