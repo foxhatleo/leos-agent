@@ -11,6 +11,7 @@ import importlib.util
 import io
 import json
 import types
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -152,7 +153,7 @@ class TestEventLine(unittest.TestCase):
         line = self.watcher.event_line("re-review", "o/r", pr(7, head="def5678aaa"), "abc1234ffff")
         self.assertEqual(
             line,
-            "re-review o/r#7 https://github.com/o/r/pull/7 def5678 (was abc1234) — Fix the retry backoff",
+            "re-review o/r#7 https://github.com/o/r/pull/7 def5678aaa (was abc1234) — Fix the retry backoff",
         )
 
 
@@ -194,6 +195,66 @@ class TestTickResilience(unittest.TestCase):
         args = types.SimpleNamespace(directory=".", settle=0, interval=300)
         with self.assertRaises(KeyboardInterrupt):
             watcher.monitor(args)
+
+
+class TestClaimsAndPagination(unittest.TestCase):
+    def setUp(self):
+        self.w = load_watcher()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        patch = mock.patch.object(self.w.state_mod, "state_file", return_value=str(Path(self.tmp.name) / "state.json"))
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_expiry_retry_and_stale_completion(self):
+        head = "a" * 40
+        first = self.w.claim_review("o/r", 1, head, 0)
+        self.assertIsNone(self.w.claim_review("o/r", 1, head, 10))
+        second = self.w.claim_review("o/r", 1, head, 1801)
+        self.assertNotEqual(first, second)
+        with self.assertRaises(ValueError):
+            self.w.record("o/r", 1, head, first)
+        self.w.record("o/r", 1, head, second)
+        self.assertIsNone(self.w.claim_review("o/r", 1, head, 4000))
+        self.assertIsNotNone(self.w.claim_review("o/r", 1, "b" * 40, 4000))
+
+    def test_renew_release_and_attempt_bound(self):
+        head = "a" * 40
+        token = self.w.claim_review("o/r", 1, head, 0)
+        self.w.renew_claim("o/r", 1, token, 1700)
+        self.assertIsNone(self.w.claim_review("o/r", 1, head, 1801))
+        self.w.renew_claim("o/r", 1, token, 1801, release=True)
+        self.assertIsNotNone(self.w.claim_review("o/r", 1, head, 1802))
+        self.assertIsNotNone(self.w.claim_review("o/r", 1, head, 4000))
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertIsNone(self.w.claim_review("o/r", 1, head, 6000))
+            self.assertIsNone(self.w.claim_review("o/r", 1, head, 6001))
+        self.assertEqual(err.getvalue().count("exhausted"), 1)
+
+    def test_monitor_emits_and_claims_successful_tick(self):
+        self.w.discover = mock.Mock(return_value=("o/r", "leo", [pr()]))
+        self.w.time = types.SimpleNamespace(time=lambda: 0, sleep=mock.Mock(side_effect=KeyboardInterrupt))
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            with self.assertRaises(KeyboardInterrupt):
+                self.w.monitor(types.SimpleNamespace(directory=".", settle=0, interval=300))
+        self.assertIn("a" * 40, out.getvalue())
+        self.assertIn("claim=", out.getvalue())
+        self.assertEqual(self.w.reviewed_heads("o/r"), {})
+
+    def test_connections_paginate_and_reject_stalled_cursor(self):
+        first = {"nodes": [1], "pageInfo": {"hasNextPage": True, "endCursor": "c1"}}
+        final = {"nodes": [2], "pageInfo": {"hasNextPage": False, "endCursor": "c2"}}
+        self.assertEqual(list(self.w.connection_nodes(first, lambda cursor: final)), [1, 2])
+        with self.assertRaises(ValueError):
+            list(self.w.connection_nodes(first, lambda cursor: first))
+
+    def test_record_requires_success_report(self):
+        report = Path(self.tmp.name) / "result.json"
+        report.write_text(json.dumps({"commit": "a" * 40, "complete": False}))
+        with mock.patch.object(self.w, "identity", return_value=("o/r", "leo")):
+            with self.assertRaises(ValueError):
+                self.w.main(["record", "1", "--head", "a" * 40, "--result", str(report)])
+        self.assertEqual(self.w.reviewed_heads("o/r"), {})
 
 
 if __name__ == "__main__":

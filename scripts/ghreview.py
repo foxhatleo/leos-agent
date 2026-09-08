@@ -33,7 +33,13 @@ import argparse
 import json
 import re
 import subprocess
+import hashlib
+import os
+from pathlib import Path
+
 import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 GENERATED_PATTERNS = [
     r"(^|/)package-lock\.json$", r"(^|/)yarn\.lock$", r"(^|/)pnpm-lock\.yaml$",
@@ -68,6 +74,7 @@ def gh(args, payload=None):
         input=payload,
         capture_output=True,
         text=True,
+        timeout=30,
     )
     if proc.returncode != 0:
         raise subprocess.CalledProcessError(proc.returncode, proc.args, proc.stdout, proc.stderr)
@@ -140,28 +147,8 @@ def ranges(nums):
 
 
 def snap_line(diffmap, side, line):
-    """Return an addressable line for (side, line), or None to drop.
-
-    Candidates are collected across ALL matching hunks (not just the first),
-    and the nearest one wins; if even the nearest is more than
-    SNAP_MAX_DISTANCE away from the requested line, drop rather than snap —
-    a distant snap silently attaches a comment to the wrong code.
-    """
-    lines = diffmap["right" if side == "RIGHT" else "left"]
-    if line in lines:
-        return line
-    key = "r" if side == "RIGHT" else "l"
-    candidates = []
-    for hunk in diffmap["hunks"]:
-        start, end = hunk[key]
-        if start - SNAP_TOLERANCE <= line <= end + SNAP_TOLERANCE:
-            candidates += [n for n in lines if start <= n <= end]
-    if not candidates:
-        return None
-    best = min(candidates, key=lambda n: abs(n - line))
-    if abs(best - line) > SNAP_MAX_DISTANCE:
-        return None
-    return best
+    """Only exact anchors are safe; proximity is not semantic equivalence."""
+    return line if line in diffmap.get(side.lower(), set()) else None
 
 
 def validate_comments(comments, maps):
@@ -242,7 +229,7 @@ def pending_review(repo, pr):
             continue
         review = json.loads(line)
         if review.get("state") == "PENDING" and review.get("user", {}).get("login") == login:
-            return {"id": review["id"], "node_id": review["node_id"]}
+            return review
     return None
 
 
@@ -253,28 +240,77 @@ def review_comments(repo, pr, review_id):
     return [json.loads(l) for l in out.splitlines() if l.strip()]
 
 
-def clear_pending_guarded(repo, pr, force):
-    """Delete the current user's pending review, but only if every comment on
-    it carries MARKER (i.e. this script staged it) — otherwise refuse so we
-    never silently discard something Leo hand-drafted, unless --force.
+def receipt_path(repo, pr, review_id):
+    from state import _data_root
+    key = hashlib.sha256(f"{repo}:{pr}:{review_id}".encode()).hexdigest()
+    return Path(_data_root()) / "reviews" / (key + ".json")
 
-    Returns (result, refusal): exactly one is not None.
-    """
+
+def comment_content(comment):
+    return {key: comment[key] for key in ("path", "line", "side", "start_line", "start_side", "body")
+            if comment.get(key) is not None}
+
+
+def review_fingerprint(body, comments):
+    rows = sorted(json.dumps(comment_content(c), sort_keys=True) for c in comments)
+    return hashlib.sha256(json.dumps([body or "", rows]).encode()).hexdigest()
+
+
+def remember_review(repo, pr, review, comments, body=""):
+    from state import atomic_write
+    atomic_write(str(receipt_path(repo, pr, review["id"])), {
+        "fingerprint": review_fingerprint(body, comments), "review_id": review["id"]})
+
+
+def pending_snapshot(repo, pr, force=False):
     review = pending_review(repo, pr)
-    if not review:
-        return {"deleted": None}, None
+    if review is None:
+        return None, None
     comments = review_comments(repo, pr, review["id"])
-    unmarked = [c for c in comments if MARKER not in (c.get("body") or "")]
-    if unmarked and not force:
-        return None, {
-            "refused": True,
-            "reason": "pending review contains comments not staged by review-pr",
-            "unmarked_count": len(unmarked),
-            "total_count": len(comments),
-            "samples": [((c.get("body") or "").strip().splitlines() or [""])[0][:120] for c in unmarked[:5]],
-        }
+    try:
+        receipt = json.loads(receipt_path(repo, pr, review["id"]).read_text())
+    except (OSError, ValueError):
+        receipt = {}
+    owned = receipt.get("fingerprint") == review_fingerprint(review.get("body"), comments)
+    # Replies cannot be reconstructed safely as new root comments on recovery.
+    recoverable = not any(c.get("in_reply_to_id") for c in comments)
+    if not force and (not owned or not recoverable):
+        return None, {"refused": True, "reason": "pending review is unowned, edited, or contains replies; preserve it",
+                      "review_id": review["id"], "total_count": len(comments)}
+    return {"review": review, "comments": comments, "forced": not owned}, None
+
+
+def clear_pending_guarded(repo, pr, force):
+    snapshot, refusal = pending_snapshot(repo, pr, force)
+    if refusal:
+        return None, refusal
+    if snapshot is None:
+        return {"deleted": None}, None
+    review = snapshot["review"]
+    from state import atomic_write
+    backup = receipt_path(repo, pr, review["id"]).with_suffix(".backup.json")
+    atomic_write(str(backup), snapshot)
     gh(["api", f"repos/{repo}/pulls/{pr}/reviews/{review['id']}", "--method", "DELETE"])
-    return {"deleted": review["id"], "forced": bool(unmarked)}, None
+    return {"deleted": review["id"], "forced": snapshot["forced"], "backup": str(backup)}, None
+
+
+def current_head(repo, pr):
+    return gh(["api", f"repos/{repo}/pulls/{pr}", "--jq", ".head.sha"]).strip()
+
+
+def require_head(repo, pr, commit):
+    if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError("a full 40-character reviewed head SHA is required")
+    actual = current_head(repo, pr)
+    if actual != commit:
+        raise ValueError(f"PR head changed from {commit} to {actual}; re-review before staging or resolving")
+
+
+def pinned_files(repo, pr, commit):
+    require_head(repo, pr, commit)
+    files = fetch_files(repo, pr)
+    require_head(repo, pr, commit)
+    return files
 
 
 THREADS_QUERY = """
@@ -286,16 +322,25 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
         nodes {
           id isResolved isOutdated path line originalLine
           comments(first: 100) {
-            # 100 covers the overwhelming majority of threads without inner
-            # pagination; a thread with >100 comments truncates here, so
-            # comments[-1] / replies_after_mine may be stale for it — accepted
-            # tradeoff, full inner pagination isn't worth the complexity.
+            pageInfo { hasNextPage endCursor }
             nodes {
               id author { login } body createdAt
               pullRequestReview { id state }
             }
           }
         }
+      }
+    }
+  }
+}"""
+
+THREAD_COMMENTS_QUERY = """
+query($thread: ID!, $cursor: String) {
+  node(id: $thread) {
+    ... on PullRequestReviewThread {
+      comments(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes { id author { login } body createdAt pullRequestReview { id state } }
       }
     }
   }
@@ -316,26 +361,40 @@ mutation($thread: ID!, $review: ID!, $body: String!) {
 
 def fetch_threads(repo, pr):
     owner, name = repo.split("/", 1)
-    nodes, cursor = [], None
+    nodes, cursor, seen_pages = [], None, set()
     while True:
         variables = {"owner": owner, "name": name, "number": int(pr)}
         if cursor:
             variables["cursor"] = cursor
         conn = graphql(THREADS_QUERY, variables)["data"]["repository"]["pullRequest"]["reviewThreads"]
-        nodes += conn["nodes"]
+        for thread in conn["nodes"]:
+            comments = thread["comments"]
+            seen = set()
+            while comments.get("pageInfo", {}).get("hasNextPage"):
+                after = comments["pageInfo"]["endCursor"]
+                if not after or after in seen:
+                    raise ValueError("thread comment pagination did not advance")
+                seen.add(after)
+                page = graphql(THREAD_COMMENTS_QUERY, {"thread": thread["id"], "cursor": after})["data"]["node"]["comments"]
+                comments["nodes"].extend(page["nodes"])
+                comments["pageInfo"] = page["pageInfo"]
+            nodes.append(thread)
         if not conn["pageInfo"]["hasNextPage"]:
             return nodes
         cursor = conn["pageInfo"]["endCursor"]
+        if not cursor or cursor in seen_pages:
+            raise ValueError("review thread pagination did not advance")
+        seen_pages.add(cursor)
 
 
-def post_review(repo, pr, commit, staged):
-    payload = json.dumps({"commit_id": commit, "comments": staged})  # no "event" -> PENDING
+def post_review(repo, pr, commit, staged, body=""):
+    payload = json.dumps({"commit_id": commit, "comments": staged, "body": body})  # no "event" -> PENDING
     out = gh(["api", f"repos/{repo}/pulls/{pr}/reviews", "--method", "POST", "--input", "-"], payload)
     return json.loads(out)
 
 
 def cmd_map(a):
-    files = fetch_files(a.repo, a.pr)
+    files = pinned_files(a.repo, a.pr, a.commit)
     report = []
     for f in files:
         diffmap = parse_patch(f["patch"]) if f.get("patch") else None
@@ -351,6 +410,7 @@ def cmd_map(a):
         })
     reviewable = [f for f in report if f["has_patch"] and not f["generated"]]
     print(json.dumps({
+        "commit": a.commit,
         "files": report,
         "reviewable_files": len(reviewable),
         "reviewable_lines": sum(f["additions"] + f["deletions"] for f in reviewable),
@@ -359,7 +419,7 @@ def cmd_map(a):
 
 def cmd_extract(a):
     wanted = set(a.paths)
-    for f in fetch_files(a.repo, a.pr):
+    for f in pinned_files(a.repo, a.pr, a.commit):
         if wanted and f["filename"] not in wanted:
             continue
         if f.get("patch"):
@@ -419,20 +479,37 @@ def cmd_threads(a):
     print(json.dumps({"my_login": login, "threads": threads}, indent=1))
 
 
+def require_thread(repo, pr, thread_id, own=False):
+    thread = next((t for t in fetch_threads(repo, pr) if t["id"] == thread_id), None)
+    if thread is None:
+        raise ValueError("thread does not belong to the specified repository and PR")
+    if own:
+        comments = thread.get("comments", {}).get("nodes", [])
+        if not comments or (comments[0].get("author") or {}).get("login") != current_login():
+            raise ValueError("automatic resolution is limited to threads started by the authenticated user")
+        if (comments[0].get("pullRequestReview") or {}).get("state") == "PENDING":
+            raise ValueError("cannot resolve a pending draft thread")
+    return thread
+
+
 def cmd_resolve_thread(a):
-    if a.dry_run:
-        print(json.dumps({"would_resolve": a.thread_id}))
+    require_head(a.repo, a.pr, a.commit)
+    thread = require_thread(a.repo, a.pr, a.thread_id, own=True)
+    evidence = json.loads(Path(a.evidence_file).read_text())
+    if (evidence.get("thread_id") != a.thread_id or evidence.get("head_sha") != a.commit
+            or not isinstance(evidence.get("explanation"), str) or not evidence["explanation"].strip()):
+        raise ValueError("resolution evidence must identify this thread, reviewed head, and why the issue is addressed")
+    if a.dry_run or thread.get("isResolved"):
+        print(json.dumps({"would_resolve": a.thread_id, "commit": a.commit, "already_resolved": thread.get("isResolved", False)}))
         return
-    try:
-        result = graphql(RESOLVE_MUTATION, {"thread": a.thread_id})
-    except subprocess.CalledProcessError as e:
-        # Resolving needs PR authorship or repo write access.
-        print(f"could not resolve thread (no write access to this repo?): {e.stderr.strip()}", file=sys.stderr)
-        sys.exit(1)
-    print(json.dumps({"resolved": result["data"]["resolveReviewThread"]["thread"]}))
+    require_head(a.repo, a.pr, a.commit)
+    result = graphql(RESOLVE_MUTATION, {"thread": a.thread_id})
+    print(json.dumps({"resolved": result["data"]["resolveReviewThread"]["thread"], "commit": a.commit}))
 
 
 def cmd_reply(a):
+    require_thread(a.repo, a.pr, a.thread_id)
+    require_head(a.repo, a.pr, a.commit)
     with open(a.body_file) as fh:
         body = fh.read().strip()
     if not body:
@@ -440,6 +517,8 @@ def cmd_reply(a):
         sys.exit(2)
     body = _mark(body)
     review = pending_review(a.repo, a.pr)
+    if review and review.get("commit_id") != a.commit:
+        raise ValueError("pending review is anchored to another head; re-review before adding replies")
     if a.dry_run:
         print(json.dumps({"would_reply_to": a.thread_id, "pending_review": review, "body": body}))
         return
@@ -447,9 +526,10 @@ def cmd_reply(a):
         # Empty pending shell: POST with no event and no comments stays PENDING.
         created = json.loads(gh(
             ["api", f"repos/{a.repo}/pulls/{a.pr}/reviews", "--method", "POST", "--input", "-"],
-            json.dumps({}),
+            json.dumps({"commit_id": a.commit}),
         ))
         review = {"id": created["id"], "node_id": created["node_id"]}
+    require_head(a.repo, a.pr, a.commit)
     result = graphql(REPLY_MUTATION, {
         "thread": a.thread_id, "review": review["node_id"], "body": body,
     })
@@ -465,7 +545,13 @@ def cmd_stage(a):
         data = json.load(fh)
     comments = data["comments"] if isinstance(data, dict) else data
     if not comments:
-        print(json.dumps({"staged": 0, "note": "no comments provided; nothing created"}))
+        require_head(a.repo, a.pr, a.commit)
+        if a.replace_pending and not a.dry_run:
+            _, refusal = clear_pending_guarded(a.repo, a.pr, a.force)
+            if refusal:
+                print(json.dumps(refusal, indent=1))
+                sys.exit(3)
+        print(json.dumps({"commit": a.commit, "complete": not a.dry_run, "staged": 0, "note": "no findings; nothing created"}))
         return
     if len(comments) > MAX_STAGE_COMMENTS:
         print(
@@ -475,9 +561,9 @@ def cmd_stage(a):
         )
         sys.exit(2)
 
-    files = fetch_files(a.repo, a.pr)
+    files = pinned_files(a.repo, a.pr, a.commit)
     staged, snapped, dropped = validate_comments(comments, build_maps(files))
-    report = {"staged": len(staged), "snapped": snapped, "dropped": dropped}
+    report = {"commit": a.commit, "complete": False, "staged": len(staged), "snapped": snapped, "dropped": dropped}
     for d in dropped:
         print(f"unstageable: {d.get('path')}:{d.get('line')} — {d['reason']}", file=sys.stderr)
 
@@ -500,31 +586,27 @@ def cmd_stage(a):
             report["deleted_pending"] = cleared["deleted"]
 
     try:
+        require_head(a.repo, a.pr, a.commit)
         review = post_review(a.repo, a.pr, a.commit, staged)
-    except subprocess.CalledProcessError as e:
-        # Most likely a head moved under us or a line drifted: refresh and retry once.
-        print(f"first attempt failed, revalidating against current head: {e.stderr.strip()}", file=sys.stderr)
-        head = gh(["api", f"repos/{a.repo}/pulls/{a.pr}", "-q", ".head.sha"]).strip()
-        files = fetch_files(a.repo, a.pr)
-        # Revalidate the ORIGINAL comments (not `staged`, which already
-        # reflects the first pass's snapped output) so the reported snap is
-        # the real one-hop mapping, not a fictitious second hop.
-        staged, snapped2, dropped2 = validate_comments(comments, build_maps(files))
-        # The retry replaces the first attempt's outcome.  Reporting both
-        # attempts as one result makes a comment appear both snapped and
-        # dropped even though only the final revalidation is stageable.
-        report["snapped"] = snapped2
-        report["dropped"] = dropped2
-        if not staged:
-            print(json.dumps({**report, "note": "nothing left to stage after revalidation"}))
-            sys.exit(1)
-        try:
-            review = post_review(a.repo, a.pr, head, staged)
-        except subprocess.CalledProcessError as e2:
-            print(f"GitHub rejected the review again: {e2.stderr.strip()}", file=sys.stderr)
-            sys.exit(1)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
+        # Never retry uncertain publication or reinterpret anchors at a new
+        # head. Retain a local recovery snapshot of any replaced owned draft.
+        if report.get("deleted_pending"):
+            backup = cleared["backup"]
+            print(f"replacement failed; prior draft is recoverable from {backup}", file=sys.stderr)
+            try:
+                previous = json.loads(Path(backup).read_text())
+                if pending_review(a.repo, a.pr) is None:
+                    old = previous["review"]
+                    restored = post_review(a.repo, a.pr, old["commit_id"],
+                                           [comment_content(c) for c in previous["comments"]], old.get("body") or "")
+                    remember_review(a.repo, a.pr, restored, previous["comments"], old.get("body") or "")
+            except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+                print("automatic restoration unavailable; recovery snapshot retained", file=sys.stderr)
+        raise
+    remember_review(a.repo, a.pr, review, staged)
 
-    report.update({"review_id": review["id"], "state": review["state"], "staged": len(staged)})
+    report.update({"complete": not dropped, "review_id": review["id"], "state": review["state"], "staged": len(staged)})
     print(json.dumps(report, indent=1))
 
 
@@ -550,11 +632,14 @@ def main():
         if name == "clear-pending":
             sp.add_argument("--force", action="store_true",
                              help="delete even if it holds comments not staged by this script")
+        if name in ("map", "extract", "resolve-thread", "reply"):
+            sp.add_argument("--commit", required=True, help="full reviewed head SHA")
         if name == "extract":
             sp.add_argument("paths", nargs="*")
         if name == "threads":
             sp.add_argument("--all", action="store_true", help="include resolved threads")
         if name == "resolve-thread":
+            sp.add_argument("--evidence-file", required=True, help="JSON: thread_id, head_sha, explanation")
             sp.add_argument("--thread-id", required=True, help="PRRT_… thread node id")
             sp.add_argument("--dry-run", action="store_true")
         if name == "reply":
@@ -572,6 +657,9 @@ def main():
     a = p.parse_args()
     try:
         COMMANDS[a.cmd](a)
+    except subprocess.TimeoutExpired:
+        print("gh timed out; inspect remote state before retrying a mutation", file=sys.stderr)
+        sys.exit(1)
     except subprocess.CalledProcessError as e:
         print(f"gh failed: {e.stderr.strip() if e.stderr else e}", file=sys.stderr)
         sys.exit(1)

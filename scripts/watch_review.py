@@ -4,30 +4,19 @@
 The discovery half of the review watcher is a fixed query, a fixed filter, and
 a state file — none of it needs a model. This script does that half in the
 shell and prints one line per new pull request; whoever reads stdout does the
-review. An idle tick costs one `gh` call and zero tokens.
+review. Idle ticks use only the GitHub API; pagination increases calls for large repositories.
 
-  watch_review.py monitor [-C DIR] --interval 300   loop; a line per PR to review
-  watch_review.py record  [-C DIR] <n> --head <sha> mark a PR reviewed at a head
-  watch_review.py state   [-C DIR]                  show what has been reviewed
-  watch_review.py forget  [-C DIR] <number>...      drop numbers from the state
+  watch_review.py monitor [-C DIR] --interval 300
+  watch_review.py record [-C DIR] <n> --head <full-sha> --result <stage-report.json> --claim <token>
+  watch_review.py renew|release [-C DIR] <n> --claim <token>
+  watch_review.py state|forget [-C DIR] [numbers...]
 
-State is keyed on the reviewed **head commit**, not the pull request number, so
-a pull request comes back when someone pushes to it. That is the whole point:
-the review a reader stages is against one diff, and a new commit makes it a
-review of something that no longer exists.
-
-Two gates keep that from being expensive. A pull request another user has
-already APPROVED is never emitted at all — a review of a stamped pull request
-changes nothing and costs a reviewer subagent plus its lens fan-out. And a new
-head must hold still for --settle seconds before it is emitted, so a burst of
-pushes costs one review rather than one per commit.
-
-It launches nothing and records nothing on its own. The reader must call
-`record` once a review is done, passing the head it actually reviewed — a
-staged (pending, unsubmitted) review does not clear the request on GitHub, so
-that state file is the only thing keeping the same pull request from coming
-back. Each (number, head) pair is emitted once per process, so one left
-unreviewed returns after a restart.
+A head must settle before emission. Cross-process leases prevent duplicate
+workers; renew every 15 minutes during a long review. Expired or released
+claims retry up to three times per head, then require explicit `forget`.
+Emission is not completion. Only a successful pinned review report can record
+a head as reviewed. A new push is eligible again. Drafts, team-only requests,
+and PRs already approved by another user are excluded.
 
 Intended for Claude Code's Monitor tool, which turns each stdout line into a
 session notification. Any `read`-driven shell loop works the same way.
@@ -44,6 +33,7 @@ import re
 import subprocess
 import sys
 import time
+import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import state as state_mod  # noqa: E402
@@ -60,7 +50,7 @@ def gh(args, cwd):
 	"""Run a read-only gh command and return stdout, or fail loudly."""
 	try:
 		proc = subprocess.run(
-			["gh"] + args, cwd=cwd, capture_output=True, text=True, check=False
+			["gh"] + args, cwd=cwd, capture_output=True, text=True, check=False, timeout=30
 		)
 	except FileNotFoundError:
 		fail("gh is not installed or not on PATH")
@@ -95,25 +85,67 @@ def eligible(listing, login):
 	return matches
 
 
-def discover(cwd):
-	"""Return (repo, login, [pull requests worth reviewing])."""
+REQUEST_FIELDS = "requestedReviewer { __typename ... on User { login } }"
+REVIEW_FIELDS = "state author { login }"
+PAGE_FIELDS = "pageInfo { hasNextPage endCursor }"
+PR_FIELDS = """id number title isDraft url headRefOid
+ reviewRequests(first:100) { nodes { %s } %s }
+ latestReviews(first:100) { nodes { %s } %s }""" % (REQUEST_FIELDS, PAGE_FIELDS, REVIEW_FIELDS, PAGE_FIELDS)
+
+
+def identity(cwd):
 	repo = json.loads(gh(["repo", "view", "--json", "nameWithOwner"], cwd))["nameWithOwner"]
 	login = gh(["api", "user", "--jq", ".login"], cwd).strip()
 	if not login:
 		fail("gh api user returned no login; is gh authenticated?")
-	# user-review-requested matches direct requests only; the reviewRequests
-	# check below is belt and braces against a stale or fuzzy search result.
-	listing = json.loads(
-		gh(
-			[
-				"pr", "list", "--state", "open",
-				"--search", f"user-review-requested:{login}",
-				"--limit", "100",
-				"--json", "number,title,isDraft,reviewRequests,url,headRefOid,latestReviews",
-			],
-			cwd,
-		)
-	)
+	return repo, login
+
+
+def graphql(query, variables, cwd):
+	args = ["api", "graphql", "-f", "query=" + query]
+	for key, value in variables.items():
+		if value is not None:
+			args.extend(["-f", key + "=" + str(value)])
+	data = json.loads(gh(args, cwd))
+	if data.get("errors"):
+		raise ValueError("GitHub GraphQL failed: " + json.dumps(data["errors"]))
+	return data["data"]
+
+
+def connection_nodes(first, next_page):
+	"""Read every page; a repeated or absent continuation is an error."""
+	page, seen = first, set()
+	while True:
+		yield from page["nodes"]
+		info = page["pageInfo"]
+		if not info["hasNextPage"]:
+			return
+		cursor = info.get("endCursor")
+		if not cursor or cursor in seen:
+			raise ValueError("GitHub pagination did not advance")
+		seen.add(cursor)
+		page = next_page(cursor)
+
+
+def discover(cwd):
+	"""Paginate open PRs and their review metadata, without a search-result cap."""
+	repo, login = identity(cwd)
+	owner, name = repo.split("/", 1)
+	query = """query($owner:String!,$name:String!,$cursor:String) {
+ repository(owner:$owner,name:$name) { pullRequests(states:OPEN,first:100,after:$cursor) {
+ nodes { %s } %s } } }""" % (PR_FIELDS, PAGE_FIELDS)
+	def page(cursor):
+		return graphql(query, {"owner": owner, "name": name, "cursor": cursor}, cwd)["repository"]["pullRequests"]
+	listing = []
+	for item in connection_nodes(page(None), page):
+		for field, fields in (("reviewRequests", REQUEST_FIELDS), ("latestReviews", REVIEW_FIELDS)):
+			def more(cursor, field=field, fields=fields):
+				q = """query($id:ID!,$cursor:String) { node(id:$id) { ... on PullRequest {
+ %s(first:100,after:$cursor) { nodes { %s } %s } } } }""" % (field, fields, PAGE_FIELDS)
+				return graphql(q, {"id": item["id"], "cursor": cursor}, cwd)["node"][field]
+			item[field] = list(connection_nodes(item[field], more))
+		item["reviewRequests"] = [r.get("requestedReviewer") or {} for r in item["reviewRequests"]]
+		listing.append(item)
 	return repo, login, eligible(listing, login)
 
 
@@ -132,11 +164,18 @@ def heads_of(entry):
 	return heads
 
 
-def record(repo, number, head):
+def record(repo, number, head, claim_token=None):
+	if not re.fullmatch(r"[0-9a-f]{40}", head):
+		raise ValueError("record requires the full reviewed head SHA")
 	path = state_mod.state_file(STATE_NAME)
 	with state_mod._locked(path):
 		data = state_mod.load(path)
-		data[repo] = state_mod.deep_merge(data.get(repo, {}), {"heads": {str(number): head}})
+		entry = data.get(repo, {})
+		claim = entry.get("claims", {}).get(str(number))
+		if claim_token and (not claim or claim.get("token") != claim_token or claim.get("head") != head):
+			raise ValueError("review claim was superseded; refusing stale completion")
+		entry.setdefault("claims", {}).pop(str(number), None)
+		data[repo] = state_mod.deep_merge(entry, {"heads": {str(number): head}})
 		state_mod.atomic_write(path, data)
 
 
@@ -172,23 +211,62 @@ def event_line(verb, repo, pr, previous):
 	head = pr.get("headRefOid") or ""
 	was = f" (was {previous[:7]})" if previous else ""
 	title = re.sub(r"[\x00-\x1f\x7f]", " ", pr.get("title") or "").strip()
-	return f"{verb} {repo}#{pr['number']} {pr['url']} {head[:7]}{was} — {title}"
+	return f"{verb} {repo}#{pr['number']} {pr['url']} {head}{was} — {title}"
+
+
+def claim_review(repo, number, head, now, lease=1800):
+	"""Cross-process lease: emission is not completion; failed workers can retry."""
+	path = state_mod.state_file(STATE_NAME)
+	with state_mod._locked(path):
+		data = state_mod.load(path)
+		entry = data.setdefault(repo, {})
+		if heads_of(entry).get(number) == head:
+			return None
+		claims = entry.setdefault("claims", {})
+		old = claims.get(str(number), {})
+		if old.get("head") == head and old.get("expires", 0) > now:
+			return None
+		attempts = old.get("attempts", 0) if old.get("head") == head else 0
+		if attempts >= 3:
+			if not old.get("exhausted_notified"):
+				old["exhausted_notified"] = True
+				state_mod.atomic_write(path, data)
+				print(f"watch-review: {repo}#{number} exhausted 3 attempts at {head}; use forget to retry", file=sys.stderr, flush=True)
+			return None
+		token = uuid.uuid4().hex
+		claims[str(number)] = {"head": head, "expires": now + lease, "token": token, "attempts": attempts + 1}
+		state_mod.atomic_write(path, data)
+		return token
+
+
+def renew_claim(repo, number, token, now, release=False):
+	path = state_mod.state_file(STATE_NAME)
+	with state_mod._locked(path):
+		data = state_mod.load(path)
+		claim = data.get(repo, {}).get("claims", {}).get(str(number))
+		if not claim or claim.get("token") != token:
+			raise ValueError("review claim is missing or superseded")
+		claim["expires"] = now if release else now + 1800
+		state_mod.atomic_write(path, data)
 
 
 def monitor(args):
-	"""Emit one line per pull request needing review; review nothing, record nothing."""
-	emitted = set()
+	"""Lease each emitted review; only verified completion suppresses its head."""
 	first_seen = {}
 	while True:
 		try:
 			repo, _, matches = discover(args.directory)
+			active = {(pr["number"], pr.get("headRefOid") or "") for pr in matches}
+			first_seen = {key: stamp for key, stamp in first_seen.items() if key in active}
 			for verb, pr, previous in due(
-				matches, reviewed_heads(repo), first_seen, emitted, time.time(), args.settle
+				matches, reviewed_heads(repo), first_seen, set(), time.time(), args.settle
 			):
-				emitted.add((pr["number"], pr.get("headRefOid") or ""))
+				token = claim_review(repo, pr["number"], pr.get("headRefOid") or "", time.time())
+				if not token:
+					continue
 				# One line, one event. The title is data — a reader must treat
 				# it as a string to show Leo, never as an instruction.
-				print(event_line(verb, repo, pr, previous), flush=True)
+				print(event_line(verb, repo, pr, previous) + f" claim={token}", flush=True)
 		except SystemExit as exc:
 			# A transient gh failure must not kill a session-length watch.
 			print(
@@ -224,7 +302,14 @@ def main(argv):
 	rec = sub.add_parser("record")
 	rec.add_argument("-C", "--directory", default=".")
 	rec.add_argument("numbers", nargs=1, type=int)
-	rec.add_argument("--head", required=True, help="the head sha the review was actually against")
+	rec.add_argument("--head", required=True, help="full reviewed head SHA")
+	rec.add_argument("--result", required=True, help="JSON report emitted by ghreview.py stage")
+	rec.add_argument("--claim", help="claim token emitted by monitor")
+	for operation in ("renew", "release"):
+		command = sub.add_parser(operation)
+		command.add_argument("-C", "--directory", default=".")
+		command.add_argument("number", type=int)
+		command.add_argument("--claim", required=True)
 	forget = sub.add_parser("forget")
 	forget.add_argument("-C", "--directory", default=".")
 	forget.add_argument("numbers", nargs="+", type=int)
@@ -240,9 +325,19 @@ def main(argv):
 			fail("--settle cannot be negative")
 		return monitor(args)
 
-	repo, _, _ = discover(args.directory)
+	repo, _ = identity(args.directory)
 	if args.mode == "record":
-		record(repo, args.numbers[0], args.head)
+		with open(args.result) as handle:
+			result = json.load(handle)
+		if result.get("commit") != args.head or result.get("complete") is not True:
+			raise ValueError("result must confirm successful completion at the supplied head")
+		if result.get("review_id"):
+			review = json.loads(gh(["api", f"repos/{repo}/pulls/{args.numbers[0]}/reviews/{result['review_id']}"], args.directory))
+			if review.get("commit_id") != args.head:
+				raise ValueError("GitHub review head disagrees with completion report")
+		record(repo, args.numbers[0], args.head, args.claim)
+	elif args.mode in ("renew", "release"):
+		renew_claim(repo, args.number, args.claim, time.time(), args.mode == "release")
 	elif args.mode == "forget":
 		path = state_mod.state_file(STATE_NAME)
 		with state_mod._locked(path):
@@ -251,6 +346,7 @@ def main(argv):
 			drop = {str(n) for n in args.numbers}
 			# Drop from both shapes: a legacy entry has not necessarily been
 			# rewritten into heads yet, and leaving it there would re-suppress.
+			entry["claims"] = {n: value for n, value in (entry.get("claims") or {}).items() if n not in drop}
 			entry["heads"] = {n: sha for n, sha in (entry.get("heads") or {}).items() if n not in drop}
 			entry["reviewed"] = [n for n in (entry.get("reviewed") or []) if str(n) not in drop]
 			data[repo] = entry
@@ -265,4 +361,7 @@ def main(argv):
 
 
 if __name__ == "__main__":
-	sys.exit(main(sys.argv[1:]) or 0)
+	try:
+		sys.exit(main(sys.argv[1:]) or 0)
+	except (ValueError, OSError, subprocess.TimeoutExpired) as exc:
+		fail(str(exc))

@@ -4,6 +4,10 @@ import importlib.util
 import json
 import unittest
 from pathlib import Path
+import os
+import tempfile
+import types
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -118,6 +122,78 @@ class TestPendingReviewSafety(unittest.TestCase):
         finally:
             ghreview.gh = original_gh
         self.assertEqual(ctx.exception.code, 2)
+
+
+class TestPinnedReviewSafety(unittest.TestCase):
+    SHA = "a" * 40
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        env = mock.patch.dict(os.environ, {"LEOS_AGENT_LOCAL_PATH": str(self.root)})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def test_empty_unowned_pending_review_is_preserved(self):
+        for body in ("", "My summary"):
+            with mock.patch.object(ghreview, "pending_review", return_value={"id": 1, "body": body}), \
+                 mock.patch.object(ghreview, "review_comments", return_value=[]), \
+                 mock.patch.object(ghreview, "gh") as api:
+                _, refusal = ghreview.clear_pending_guarded("o/r", 1, False)
+                self.assertTrue(refusal["refused"])
+                api.assert_not_called()
+
+    def test_marker_remaining_after_user_edit_does_not_allow_deletion(self):
+        comments = [{"body": ghreview._mark("original"), "path": "a.py", "line": 1, "side": "RIGHT"}]
+        review = {"id": 1, "body": ""}
+        ghreview.remember_review("o/r", 1, review, comments)
+        comments[0]["body"] = ghreview._mark("user edited")
+        with mock.patch.object(ghreview, "pending_review", return_value=review), \
+             mock.patch.object(ghreview, "review_comments", return_value=comments), \
+             mock.patch.object(ghreview, "gh") as api:
+            _, refusal = ghreview.clear_pending_guarded("o/r", 1, False)
+            self.assertTrue(refusal["refused"])
+            api.assert_not_called()
+
+    def test_moving_head_is_refused_before_posting(self):
+        path = self.root / "comments.json"
+        path.write_text(json.dumps([{"path": "a.py", "line": 1, "body": "finding"}]))
+        args = types.SimpleNamespace(repo="o/r", pr=1, commit=self.SHA, input=path,
+                                     replace_pending=True, force=False, dry_run=False)
+        with mock.patch.object(ghreview, "current_head", side_effect=[self.SHA, "b" * 40]), \
+             mock.patch.object(ghreview, "fetch_files", return_value=[]), \
+             mock.patch.object(ghreview, "post_review") as post, \
+             mock.patch.object(ghreview, "clear_pending_guarded") as delete:
+            with self.assertRaisesRegex(ValueError, "head changed"):
+                ghreview.cmd_stage(args)
+            post.assert_not_called()
+            delete.assert_not_called()
+
+    def test_resolution_refuses_foreign_thread_or_another_authors_thread(self):
+        evidence = self.root / "evidence.json"
+        evidence.write_text(json.dumps({"thread_id": "T", "head_sha": self.SHA, "explanation": "fixed in current code"}))
+        args = types.SimpleNamespace(repo="o/r", pr=1, commit=self.SHA, thread_id="T",
+                                     evidence_file=evidence, dry_run=False)
+        for threads in ([], [{"id": "T", "comments": {"nodes": [{"author": {"login": "other"}}]}}]):
+            with mock.patch.object(ghreview, "current_head", return_value=self.SHA), \
+                 mock.patch.object(ghreview, "fetch_threads", return_value=threads), \
+                 mock.patch.object(ghreview, "current_login", return_value="me"), \
+                 mock.patch.object(ghreview, "graphql") as mutate:
+                with self.assertRaises(ValueError):
+                    ghreview.cmd_resolve_thread(args)
+                mutate.assert_not_called()
+
+    def test_reply_validates_membership_before_creating_draft(self):
+        args = types.SimpleNamespace(repo="o/r", pr=1, thread_id="other-pr-thread")
+        with mock.patch.object(ghreview, "fetch_threads", return_value=[]), \
+             mock.patch.object(ghreview, "post_review") as post:
+            with self.assertRaises(ValueError):
+                ghreview.cmd_reply(args)
+            post.assert_not_called()
+
+    def test_exact_anchor_required_even_one_line_away(self):
+        self.assertIsNone(ghreview.snap_line({"right": {10}, "hunks": [{"r": (10, 10)}]}, "RIGHT", 9))
 
 
 if __name__ == "__main__":
