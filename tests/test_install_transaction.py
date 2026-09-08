@@ -58,3 +58,19 @@ class Transactions(unittest.TestCase):
             transaction.rollback(root / "backup.json")
             self.assertEqual(a.read_text(), "original")
             self.assertEqual(a.stat().st_mode & 0o777, 0o640)
+
+    def test_rollback_recovers_a_partially_applied_install(self):
+        import base64
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            a, b = root / "a", root / "b"
+            a.write_bytes(b"new")
+            b.write_bytes(b"old")
+            backup = root / "backup.json"
+            backup.write_text(json.dumps({"schema": 1, "files": [
+                {"path": str(path), "before": base64.b64encode(b"old").decode(),
+                 "after_sha256": transaction.digest(b"new"), "mode": 0o600} for path in (a, b)]}))
+            self.assertEqual(transaction.rollback(backup), 1)
+            self.assertEqual(a.read_bytes(), b"old")
+            self.assertEqual(b.read_bytes(), b"old")

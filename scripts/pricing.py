@@ -92,6 +92,13 @@ def snapshot(raw, fetched_at=None):
         for key, value in prices.items():
             if key != "overrides" and decimal(value) is None:
                 raise PricingError("invalid price for " + row["id"])
+        overrides = prices.get("overrides", [])
+        if not isinstance(overrides, list) or any(not isinstance(v, dict) for v in overrides):
+            raise PricingError("invalid conditional rates for " + row["id"])
+        for override in overrides:
+            for key in ("prompt", "completion", "input_cache_read", "input_cache_write"):
+                if key in override and decimal(override[key]) is None:
+                    raise PricingError("invalid conditional price for " + row["id"])
         models.append({k: row[k] for k in ("id", "canonical_slug", "name", "created", "pricing") if k in row})
     if not models:
         raise PricingError("catalog contains no supported model families")
@@ -261,19 +268,26 @@ def refresh(force=False, opener=urlopen):
             next_url = (page.get("links") or {}).get("next")
             if not next_url:
                 atomic_write(str(path), snapshot({"data": rows}))
+                atomic_write(str(path.with_suffix(".status.json")), {"status": "ok", "attempted_at": time.time()})
                 return True
             url = urljoin(SOURCE, next_url)
         raise PricingError("catalog exceeded pagination limit")
+    except (OSError, ValueError, TypeError) as exc:
+        try:
+            atomic_write(str(path.with_suffix(".status.json")), {"status": "error", "attempted_at": time.time(), "error": str(exc)[:300]})
+        except OSError:
+            pass
+        raise
     finally:
         os.close(fd)
 
 
-def refresh_background():
+def refresh_background(force=False):
     path = cache_path().with_suffix(".attempt")
     try:
-        if path.exists() and time.time() - path.stat().st_mtime < TTL:
+        if not force and path.exists() and time.time() - path.stat().st_mtime < TTL:
             return
-        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "refresh"],
+        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "refresh"] + (["--force"] if force else []),
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
     except OSError:

@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import time
 
@@ -53,6 +54,19 @@ def parent_model(event, harness):
     explicit = event.get("parent_model")
     if isinstance(explicit, str) and explicit:
         return explicit
+    if harness == "codex" and isinstance(event.get("model"), str) and event["model"]:
+        return event["model"]  # documented active-model field, newer than transcript
+    if harness == "claude" and event.get("agent_id"):
+        # Nested review dispatches must be capped to their immediate caller,
+        # never the more expensive root conversation. Claude exposes agent_id
+        # in subagent hooks, while transcript_path can still name the root.
+        path = event.get("agent_transcript_path")
+        agent = event["agent_id"]
+        transcript = event.get("transcript_path")
+        if not path and isinstance(agent, str) and re.fullmatch(r"[A-Za-z0-9_-]+", agent) and isinstance(transcript, str):
+            filename = agent if agent.startswith("agent-") else "agent-" + agent
+            path = str(Path(transcript).with_suffix("") / "subagents" / (filename + ".jsonl"))
+        return transcript_model(path)  # unknown is safer than using the root price
     # PreToolUse follows an assistant response: its transcript model is newer
     # than SessionStart and reflects per-turn provider fallback as well.
     model = transcript_model(event.get("agent_transcript_path") or event.get("transcript_path"))

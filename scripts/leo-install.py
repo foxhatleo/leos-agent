@@ -767,6 +767,9 @@ def main(argv=None):
 		print(f"\n{len(changed)} target(s) would change; nothing written")
 	else:
 		print(f"\n{len(changed)} target(s) changed")
+		if not args.uninstall and os.environ.get("LEOS_AGENT_PRICE_REFRESH") != "off":
+			import pricing
+			pricing.refresh_background(force=True)
 	return 0
 
 

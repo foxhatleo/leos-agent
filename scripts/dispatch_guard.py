@@ -251,9 +251,11 @@ def main(argv=None):
         if len(raw) > 2 * 1024 * 1024:
             raise ValueError("hook input exceeded 2 MiB")
         event = json.loads(raw) if raw.strip() else {}
-    except Exception:
+    except Exception as exc:
+        _breadcrumb(harness({}), exc)
         return 0
     if not isinstance(event, dict):
+        _breadcrumb(harness({}), ValueError("hook input must be an object"))
         return 0
     name = harness(event)
     result = process(event, name)

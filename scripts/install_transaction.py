@@ -79,9 +79,13 @@ def rollback(backup):
     for entry in data["files"]:
         path = Path(entry["path"])
         current = path.read_bytes() if path.exists() else None
+        original = base64.b64decode(entry["before"], validate=True) if entry["before"] is not None else None
+        if not path.is_absolute():
+            raise ValueError("backup paths must be absolute")
+        if current == original:
+            continue  # interrupted install had not applied this entry
         if digest(current) != entry["after_sha256"]:
             raise ValueError(f"{path} changed since installation; refusing rollback")
-        original = base64.b64decode(entry["before"], validate=True) if entry["before"] is not None else None
         tx.stage(path, original, entry["mode"])
     tx.commit()
     return len(tx.changes)

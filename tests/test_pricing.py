@@ -66,6 +66,9 @@ class ModelPrices(unittest.TestCase):
             with self.assertRaises(OSError):
                 pricing.refresh(opener=unavailable)
             self.assertEqual(path.read_bytes(), before)
+            status = json.loads(path.with_suffix(".status.json").read_text())
+            self.assertEqual(status["status"], "error")
+            self.assertEqual(status["error"], "offline")
             self.assertFalse(pricing.refresh(opener=unavailable))
 
     def test_refresh_pagination_and_atomic_result(self):

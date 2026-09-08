@@ -17,6 +17,24 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+# A fake Path.home() must not be bypassed by the invoking user's config env.
+_CONFIG_ENV = {"CODEX_HOME", "CLAUDE_CONFIG_DIR", "HERMES_HOME", "PI_CODING_AGENT_DIR",
+               "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG", "XDG_CONFIG_HOME"}
+_TEST_ENV = None
+
+
+def setUpModule():
+    global _TEST_ENV
+    env = {k: v for k, v in os.environ.items() if k not in _CONFIG_ENV}
+    env["LEOS_AGENT_PRICE_REFRESH"] = "off"
+    _TEST_ENV = mock.patch.dict(os.environ, env, clear=True)
+    _TEST_ENV.start()
+
+
+def tearDownModule():
+    _TEST_ENV.stop()
+
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -254,7 +272,7 @@ class TestWriting(WriteCase):
     def test_effort_needs_its_model_and_a_role_is_required(self):
         self.assertIn("--runner-effort needs --runner", self.expect_refusal(
             "set", "--harness", "codex", "--runner-effort", "low"))
-        self.assertIn("needs --runner and/or --executor", self.expect_refusal(
+        self.assertIn("needs --cheap and/or --standard", self.expect_refusal(
             "set", "--harness", "codex"))
         self.assertFalse((self.data / "routing.json").exists())
 

@@ -1,0 +1,39 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "LEOS_AGENT_HARNESS=codex python3 \"${PLUGIN_ROOT}/scripts/emit_payload.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^(spawn_agent|Agent)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "LEOS_AGENT_HARNESS=codex python3 \"${PLUGIN_ROOT}/scripts/dispatch_guard.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "LEOS_AGENT_HARNESS=codex python3 \"${PLUGIN_ROOT}/scripts/observe_agent.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

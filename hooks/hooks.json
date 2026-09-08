@@ -2,11 +2,11 @@
   "hooks": {
     "SessionStart": [
       {
-        "matcher": "startup|resume|clear|compact",
+        "matcher": "startup|resume|clear|compact|fork",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/emit_payload.py\"",
+            "command": "LEOS_AGENT_HARNESS=claude python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/emit_payload.py\"",
             "timeout": 10
           }
         ]
@@ -18,7 +18,29 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_guard.py\"",
+            "command": "LEOS_AGENT_HARNESS=claude python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/dispatch_guard.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "LEOS_AGENT_HARNESS=claude python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/observe_agent.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostModelSwitch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "LEOS_AGENT_HARNESS=claude python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/observe_agent.py\"",
             "timeout": 10
           }
         ]

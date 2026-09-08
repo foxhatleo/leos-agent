@@ -32,5 +32,6 @@
       "Install Leo's preferences into this harness.",
       "Plan this change and dispatch the work to subagents."
     ]
-  }
+  },
+  "hooks": "./hooks/hooks-codex.json"
 }

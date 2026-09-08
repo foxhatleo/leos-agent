@@ -292,6 +292,9 @@ def _finish(args, before, after, root_hint=True):
 
 
 def cmd_set(args):
+    for canonical, legacy in (("cheap", "runner"), ("standard", "executor")):
+        if getattr(args, canonical) is not None and getattr(args, legacy) is not None:
+            raise RoutingError(f"use --{canonical} or its legacy alias --{legacy}, not both")
     roles = {}
     for role in ROLES:
         model = getattr(args, role)
@@ -306,7 +309,7 @@ def cmd_set(args):
             _bad(f"{args.harness}.{role}.effort: must be a non-empty string when present")
         roles[role] = (model.strip(), effort.strip() if effort else None)
     if not roles:
-        sys.exit("routing: set needs --runner and/or --executor")
+        sys.exit("routing: set needs --cheap and/or --standard")
 
     before, after = edit(lambda d: apply_set(d, args.harness, roles), write=not args.dry_run)
     for role in ROLES:

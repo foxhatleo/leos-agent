@@ -62,10 +62,8 @@ def main():
 	yaml_name = re.search(r"^name:\s*['\"]?([^'\"\s]+)", yaml_text, re.MULTILINE)
 	check(yaml_name is not None and yaml_name.group(1) == NAME, f"plugin.yaml: name != {NAME!r}")
 
-	# 2. Neither Claude Code nor Codex may declare hooks/hooks.json: both load it
-	# automatically, and naming it again is a duplicate. Claude Code fails the
-	# whole plugin at load time for this, and its own `plugin validate` does not
-	# catch it -- only a real install does.
+	# 2. Claude auto-loads its default hook file. Codex supports a manifest
+	# override and uses its own event list and explicit harness environment.
 	claude_manifest = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
 	declared = claude_manifest.get("hooks")
 	declared = declared if isinstance(declared, list) else [declared] if declared else []
@@ -74,7 +72,7 @@ def main():
 		".claude-plugin/plugin.json: must not declare hooks/hooks.json (auto-loaded; declaring it fails the plugin)",
 	)
 	codex = json.loads((ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
-	check("hooks" not in codex, ".codex-plugin/plugin.json: must omit `hooks` (validator rejects it; hooks/ is auto-discovered)")
+	check(codex.get("hooks") == "./hooks/hooks-codex.json", ".codex-plugin/plugin.json: must select the Codex-native hook manifest")
 	check(codex.get("description"), ".codex-plugin/plugin.json: description is required")
 	check(codex.get("author", {}).get("name"), ".codex-plugin/plugin.json: author.name is required")
 	interface = codex.get("interface", {})
