@@ -1,42 +1,8 @@
 #!/usr/bin/env python3
-"""dispatch_guard: refuse a subagent dispatch that names no model.
+"""Harness-aware offline dispatch guard.
 
-WHY THIS EXISTS IN CODE RATHER THAN PROSE. The policy already said every dispatch
-must name a model, and the policy was forgotten. Prose enforcement also costs
-always-loaded bytes on every turn of every session, and the budget in
-measure_context.py is nearly spent -- so the rule that a machine can check moved
-into a hook, which costs nothing, and the payload kept only the judgment a hook
-cannot make. Moving it out of the payload was what paid for the move.
-
-WHAT IT REFUSES, AND WHAT IT DELIBERATELY DOES NOT. A dispatch that selects an
-agent, carries a brief, names no model, and runs on a harness that can express
-one per spawn is refused -- because on that path the harness silently inherits
-the parent's expensive model, which is the failure this file exists to prevent.
-Everything else is allowed. The guard NEVER picks a model: it cannot force a
-cheap tier onto work that needed an expensive one, so it cannot cause a quality
-regression, only an explicit choice. That is also why the block stays narrow. A
-false block costs one re-dispatch turn; a caught inherited fan-out saves the cold
-prefix of every child it would have spawned. The margin is wide precisely because
-the rule refuses to make judgment calls, and every widening spends it.
-
-SHAPE-BASED, NOT NAME-BASED. Only Claude Code's dispatch tool is verified; the
-argument shapes on Codex, Cursor, Hermes and OpenCode are not. So the decision
-turns on the arguments -- an agent-selection field plus a brief -- and an
-unanticipated tool degrades to a no-op rather than a broken harness. The hook
-manifests still carry a name matcher, but only as a cheap prefilter: without one,
-every Read and Grep would pay a python3 spawn.
-
-FAILS OPEN, LOUDLY. The harm here is money, not data loss. A guard that fails
-closed on a broken interpreter wedges every dispatch on every harness, which is
-far worse than the miss it prevents -- and on Claude Code a timed-out hook is
-non-blocking anyway, so fail-closed is not even expressible there. Every internal
-error allows the call and leaves a breadcrumb with decision "error", kept
-rigorously distinct from a decision to allow.
-
-  LEOS_AGENT_DISPATCH_GUARD  on (default) | warn (log, never block) | off | verbose
-  LEOS_AGENT_HARNESS         overrides harness detection
-
-Exit codes: 0 allow, 2 block (reason on stderr).
+CLI: native command-hook output by default; --json emits the adapter protocol.
+LEOS_AGENT_DISPATCH_GUARD=on|warn|off. Errors fail open and are logged distinctly.
 """
 import collections
 import json
@@ -144,6 +110,10 @@ def normalize(event, _harness=None):
 
     agent = _first_str(args, AGENT_KEYS)
     prompt = _first_str(args, PROMPT_KEYS)
+    if tool == "delegate_task" and args.get("action", "spawn") == "spawn":
+        tasks = args.get("tasks") or ([args] if args.get("goal") else [])
+        prompt = "\n".join(str(task.get("goal", "")) for task in tasks if isinstance(task, dict))
+        agent = "delegate_task"
     known = tool in DISPATCH_TOOLS
     if not prompt or not (agent or known):
         return None
@@ -193,76 +163,23 @@ def triviality(dispatch):
 
 
 def routable(name):
-    """Can this harness name a model per spawn?
-
-    Claude Code's dispatch tool takes one, and any harness Leo has configured in
-    routing.json has a model to name. Everywhere else the payload itself says to
-    inherit and say so -- blocking there would demand something the harness
-    cannot do, a false positive by construction.
-    """
-    # Both take a model per spawn: Claude Code on its dispatch tool, Codex as
-    # spawn_agent's `model` argument.
-    if name in ("claude", "codex"):
-        return True
-    try:
-        import routing
-        return name in routing.load()
-    except BaseException:
-        # routing.py exits on a malformed config. A hook must never inherit that.
-        return False
+    from routing_engine import CAPABILITIES
+    return bool(CAPABILITIES.get(name, {}).get("model_field"))
 
 
 def _is_tier(agent):
-    try:
-        from dispatch_log import is_tier
-        return is_tier(agent)
-    except Exception:
-        # Never let a missing sibling module turn a compliant dispatch into a
-        # refusal: fall back to allowing anything that looks like a tier.
-        return bool(agent) and agent.rsplit(":", 1)[-1].startswith("leo-")
+    from routing_engine import tier_for
+    return tier_for(agent) is not None
 
 
-def decide(dispatch, name, is_routable):
-    """(action, reason). The entire policy, and deliberately four lines of it."""
-    if dispatch is None:
-        return ALLOW, "not-a-dispatch"
-    if _is_tier(dispatch.agent):
-        return ALLOW, "leo-tier"          # the agent definition carries the model
-    if dispatch.model:
-        return ALLOW, "explicit-model"    # a choice was typed; cheap or not
-    if not is_routable:
-        return ALLOW, "harness-cannot-route"
-    return BLOCK, "no-model"
-
-
-def render_block(dispatch, name=None):
-    """The refusal. It must name the remedies, or it costs a turn to discover them.
-
-    The remedies differ by harness: Codex routes by `model` on spawn_agent and
-    has no agent to name, so offering it a subagent_type would be advice it
-    cannot take.
-    """
-    if dispatch.tool in DISPATCH_TOOLS or name == "codex":
-        return (
-            "[leo routing] BLOCKED - %s names no model, so it would silently inherit\n"
-            "the parent's. Re-dispatch with `model` set (and `reasoning_effort` with it),\n"
-            "naming the economical tier's model for narrow work.\n"
-            "Set LEOS_AGENT_DISPATCH_GUARD=off to disable, =warn to log only."
-        ) % dispatch.tool
-    return (
-        '[leo routing] BLOCKED - dispatch to agent "%s" names no model, so it would\n'
-        "silently inherit the parent's. Re-dispatch with one of:\n"
-        '  subagent_type "leo-runner"    reading, search, tests, logs, codemods, fan-out\n'
-        '  subagent_type "leo-executor"  an approved plan or a specified change\n'
-        '    (a plugin install namespaces these: "leos-agent:leo-runner")\n'
-        '  model: "<name>"               investigation/debugging - naming it IS the reason\n'
-        "Set LEOS_AGENT_DISPATCH_GUARD=off to disable, =warn to log only."
-    ) % dispatch.agent
+def render_block(dispatch, name=None, result=None):
+    retry = (result or {}).get("retry", "Retry with an explicit model within the parent price ceiling.")
+    return "[leo routing] BLOCKED: " + (result or {}).get("reason", "model choice required") + ". " + retry
 
 
 def render_notice(dispatch):
     return (
-        "[leo routing] %d-byte brief to %s: a fresh agent context is uncached and "
+        "[leo routing] %d-byte brief to %s: delegation has setup overhead and "
         "costs more than an inline read. Inline it when one file answers it."
     ) % (dispatch.prompt_bytes, dispatch.agent)
 
@@ -277,68 +194,80 @@ def _log(entry):
         pass
 
 
-def evaluate(event, name=None):
-    """(action, reason, dispatch, trivial) for one event. Shared by every adapter.
-
-    An in-process adapter knows which harness it is and passes `name`; detection
-    exists only for the command hooks, which get no say.
-    """
+def process(event, name=None):
+    """Shared mode handling, decision and logging for command/in-process adapters."""
+    from routing_engine import route
+    from session_models import parent_model
     name = name or harness(event)
+    mode = os.environ.get("LEOS_AGENT_DISPATCH_GUARD", "on").strip().lower()
+    result = {"action": "allow", "reason": "disabled" if mode == "off" else "not-a-dispatch", "updated_input": None}
+    if mode == "off" or not isinstance(event, dict):
+        return result
+    tool = _first_str(event, TOOL_KEYS)
+    args = _first_dict(event, INPUT_KEYS)
+    try:
+        parent = parent_model(event, name)
+        effective = event.get("effective_model")
+        if name == "claude" and os.environ.get("CLAUDE_CODE_SUBAGENT_MODEL_FORCE") == "1":
+            forced = os.environ.get("CLAUDE_CODE_SUBAGENT_MODEL") or parent
+            result = route(name, tool, args, parent, effective_model=forced)
+            # Forced settings cannot be overridden by updatedInput.
+            if (result.get("price") or {}).get("status") == "over-ceiling":
+                result.update(action="block", reason="forced-model-over-ceiling", updated_input=None,
+                              retry="The forced subagent model exceeds the parent. Change the force setting or do this work locally.")
+            else:
+                result.update(action="allow", reason="forced-model-setting", updated_input=None)
+        else:
+            result = route(name, tool, args, parent, effective_model=effective, native_profiles=event.get("native_profiles"))
+        if result["reason"] == "not-a-dispatch":
+            return result
+        dispatch = normalize(event, name)
+        import dispatch_log
+        action = result["action"]
+        if mode == "warn" and action in ("block", "correct"):
+            result.update(action="warn", proposed_action=action, updated_input=None)
+        entry = dispatch_log.record(dispatch, result["action"], result["reason"], name,
+                                    _first_str(event, ("session_id", "sessionId")),
+                                    _first_str(event, ("cwd", "workspace", "directory")), triviality(dispatch))
+        entry.update({k: result.get(k) for k in ("requested_model", "effective_model", "price", "proposed_action")})
+        entry["call_id"] = event.get("tool_use_id") or event.get("call_id") or event.get("toolCallId")
+        _log(entry)
+        return result
+    except Exception as exc:
+        _breadcrumb(name, exc)
+        return {"action": "allow", "reason": "guard-error", "updated_input": None}
+
+
+def evaluate(event, name=None):
+    result = process(event, name)
     dispatch = normalize(event, name)
-    action, reason = decide(dispatch, name, routable(name))
-    return action, reason, dispatch, triviality(dispatch)
+    return result["action"], result["reason"], dispatch, triviality(dispatch)
 
 
 def main(argv=None):
-    mode = os.environ.get("LEOS_AGENT_DISPATCH_GUARD", "on").strip().lower()
-    if mode == "off":
-        return 0
-
+    argv = sys.argv[1:] if argv is None else argv
     try:
-        raw = sys.stdin.buffer.read().decode("utf-8", "replace")
-        event = json.loads(raw) if raw.strip() else None
+        raw = sys.stdin.buffer.read(2 * 1024 * 1024 + 1)
+        if len(raw) > 2 * 1024 * 1024:
+            raise ValueError("hook input exceeded 2 MiB")
+        event = json.loads(raw) if raw.strip() else {}
     except Exception:
         return 0
-
-    name = harness(event if isinstance(event, dict) else {})
-    try:
-        action, reason, dispatch, trivial = evaluate(event)
-    except Exception as exc:
-        # The guard broke. Allow, and say so distinctly -- an "error" row is the
-        # only way a dead guard is ever noticed.
-        _breadcrumb(name, exc)
+    if not isinstance(event, dict):
         return 0
-
-    if dispatch is None:
+    name = harness(event)
+    result = process(event, name)
+    if "--json" in argv:
+        print(json.dumps(result))
         return 0
-
-    session = _first_str(event, ("session_id", "sessionId")) if isinstance(event, dict) else ""
-    cwd = _first_str(event, ("cwd", "workspace", "directory")) if isinstance(event, dict) else ""
-
-    try:
-        import dispatch_log
-        entry = dispatch_log.record(dispatch, action, reason, name, session, cwd, trivial)
-        _log(entry)
-    except Exception:
-        pass
-
-    if action == BLOCK and mode != "warn":
-        sys.stderr.write(render_block(dispatch, name) + "\n")
+    if result["action"] == BLOCK:
+        sys.stderr.write(render_block(None, name, result) + "\n")
         return 2
-
-    # A notice is user-facing only. systemMessage reaches Leo's transcript and
-    # never the model's context, so a false positive here costs zero tokens.
-    # verbose additionally spends ~60 tokens putting it in front of the model;
-    # it stays off until the log says the problem is frequent enough to be worth
-    # paying for.
-    if trivial >= 2:
-        payload = {"systemMessage": render_notice(dispatch)}
-        if mode == "verbose":
-            payload["hookSpecificOutput"] = {
-                "hookEventName": "PreToolUse",
-                "additionalContext": render_notice(dispatch),
-            }
-        sys.stdout.write(json.dumps(payload) + "\n")
+    if result["action"] == "correct" and name == "claude":
+        # Do not grant tool permission: update only arguments and leave the
+        # harness's normal permission checks intact.
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                                "updatedInput": result["updated_input"]}}))
     return 0
 
 

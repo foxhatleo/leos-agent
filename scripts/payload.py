@@ -29,6 +29,10 @@ OPEN_RE = re.compile(r"^<leos-agent\b[^>]*>[ \t]*$", re.MULTILINE)
 CLOSE_RE = re.compile(r"^</leos-agent>[ \t]*$", re.MULTILINE)
 
 
+class PayloadError(ValueError):
+	pass
+
+
 def plugin_root():
 	for name in ("LEOS_AGENT_ROOT", "CLAUDE_PLUGIN_ROOT", "PLUGIN_ROOT"):
 		value = os.environ.get(name)
@@ -45,11 +49,11 @@ def read_version(root):
 	try:
 		return json.loads(manifest.read_text(encoding="utf-8"))["version"]
 	except FileNotFoundError:
-		sys.exit(f"leos-agent: {manifest} is missing; the plugin install looks incomplete")
+		raise PayloadError(f"leos-agent: {manifest} is missing; the plugin install looks incomplete")
 	except json.JSONDecodeError as exc:
-		sys.exit(f"leos-agent: {manifest} is not valid JSON ({exc})")
+		raise PayloadError(f"leos-agent: {manifest} is not valid JSON ({exc})")
 	except KeyError:
-		sys.exit(f"leos-agent: {manifest} has no version field")
+		raise PayloadError(f"leos-agent: {manifest} has no version field")
 
 
 def render_routing(body, harness, config):
@@ -64,7 +68,7 @@ def render_routing(body, harness, config):
 	start = body.find(ROUTING_OPEN)
 	end = body.find(ROUTING_CLOSE)
 	if start < 0 or end < start:
-		sys.exit(f"leos-agent: rules/preferences.md is missing its {ROUTING_OPEN} region")
+		raise PayloadError(f"leos-agent: rules/preferences.md is missing its {ROUTING_OPEN} region")
 	return body[:start] + routing.stanza(harness, config) + body[end + len(ROUTING_CLOSE):]
 
 
@@ -77,9 +81,9 @@ def payload_body(root, harness=None, config=None):
 	text = (root / "rules" / "preferences.md").read_text(encoding="utf-8")
 	body = re.sub(r"(?s)\A---\n.*?\n---\n", "", text, count=1).strip()
 	if not body:
-		sys.exit("leos-agent: rules/preferences.md has no body below its frontmatter")
+		raise PayloadError("leos-agent: rules/preferences.md has no body below its frontmatter")
 	if OPEN_RE.search(body) or CLOSE_RE.search(body):
-		sys.exit("leos-agent: rules/preferences.md contains a <leos-agent> marker; it must not")
+		raise PayloadError("leos-agent: rules/preferences.md contains a <leos-agent> marker; it must not")
 	if harness:
 		body = render_routing(body, harness, config if config is not None else routing.load())
 	return body

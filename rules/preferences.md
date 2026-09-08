@@ -1,101 +1,38 @@
 ---
-description: Leo's global agent operating preferences — orchestrator main thread, subagent-first execution, cost-tiered model routing.
+description: Cost-aware delegation: keep small work local and select the cheapest competent worker.
 alwaysApply: true
 ---
-# Leo's agent operating preferences
+# Cost-aware delegation
 
-## The main thread is an orchestrator
+Decide whether to delegate before choosing a model. Keep small, tightly coupled
+work local. Delegate substantial bounded work when it avoids meaningful parent
+reasoning or context growth. A short brief alone does not prove a task is small.
+Do not re-investigate work you already completed just to delegate it.
 
-Keep the main thread minimal: understand the request, decide the approach,
-dispatch subagents, integrate what they return, report to Leo.
-
-Delegate work that floods your context to reach one answer: many files read,
-several attempts before it lands, open-ended search — investigation, code
-search, debugging. Only the conclusion comes back.
-
-A single command you can filter at the shell runs inline: a `grep` or `tail`
-pipe costs nothing, so noisy output is never the trigger. Test runs, linters,
-and builds are inline by default.
-
-Below that bar, delegating costs more than it saves. Your context is cached; a
-subagent starts cold and pays a full cache write on its system prompt and brief
-— roughly $3 at Opus prices, $1 at Sonnet. That write is the break-even;
-one known file or a one-line edit never clears it.
-
-Never delegate to avoid thinking. As a subagent, do not delegate at all — do
-the work yourself.
-
-## Briefing a subagent
-
-Spawn with clean context: on Codex pass `fork_turns="none"`; elsewhere request
-a fresh child. Write the brief to stand alone:
-
-- State the goal and what "done" looks like.
-- Name the files, paths, symbols, and commands to start from.
-- Include settled decisions, so it does not relitigate them.
-- Grant only the skills and tools it needs; extra schemas invite wandering.
-- Say it does the work itself and spawns nothing further; it sees only the
-  brief.
-- Say what to return: the finding, the diff, the verdict — not a transcript.
-
-Prefer several narrow subagents over one broad one, run independent ones
-concurrently, and ask for uncertainty explicitly.
-
-Cap the scope: a brief that could plausibly run past ~50 turns gets split. A
-subagent's own context grows turn over turn, so one broad brief re-creates the
-expensive-prefix problem inside the child — a single measured agent ran 231
-turns and took a third of a day's subagent spend.
-
-## Model routing
-
-- Reading, search, tests, logs, codemods, and every fan-out → **leo-runner**.
-- An approved plan or a well-specified code change → **leo-executor**.
-- Investigation, debugging, adjudication → name the inherited model outright.
-
-Floor and ceiling: a lone brief naming one file should have been inline; work
-whose every file you would not want to read should have been fanned out.
+Choose the cheapest competent tier:
+- Cheap: bounded retrieval, mechanical changes, straightforward checks.
+- Standard: ordinary investigation, debugging, implementation, and review.
+- Parent-level: difficult reasoning or ambiguity that warrants the parent model.
 
 <!-- leos-agent:routing -->
-On Claude Code pass `subagent_type: "leo-runner"` or `"leo-executor"`; on Codex
-the installed profiles carry the models. Elsewhere use the current model.
+Claude defaults: Haiku/Sonnet/current parent. Codex defaults: Luna/Terra/current
+parent. Other harnesses require configured cheap/standard tiers. Select a model
+or native tier profile only through supported fields.
 <!-- /leos-agent:routing -->
 
-A dispatch naming no model is refused, not defaulted.
-Never upgrade a cheaper session; wide inherited fan-out is the policy's
-most expensive shape.
+Never deliberately choose a child more expensive than the parent. The guard
+compares offline reference prices; unknown or ambiguous prices are allowed and
+reported, not proof of savings. Model tiers do not override this ceiling.
 
-## Caching
+Give a bounded goal, starting paths, settled decisions, tools needed, and a
+concise result contract. Prefer fresh context; where supported on Codex use
+`fork_turns="none"`. Avoid copying conversation history or repeating returned
+work. Batch independent tool calls; parallel agents need enough useful work to
+justify their combined setup and integration cost.
 
-Every request re-sends the conversation, but a cached prefix re-sends at roughly
-a tenth of input price. A *cold* prefix is what costs, so protect the cache:
-
-- Batch independent tool calls into one message. Ten small turns each re-send
-  everything; one dense turn re-sends it once.
-- Never put volatile text — timestamps, git status, token counts — into an
-  always-loaded file. It invalidates the prefix, and every later turn pays full
-  price.
-- A file read mid-session is re-read on every turn that follows. Load the
-  dispatch contract, not the whole procedure.
-- Within the cache lifetime, continue the warm session rather than starting a
-  fresh one. Past it the cache is cold anyway — that is when a handoff is free.
-
-Do not add confirmation round-trips the request did not ask for, and do not fan
-out widely unless Leo asked — each agent pays that cold write.
-
-## Tests
-
-Verification — typecheck, lint, tests — runs at deliverable boundaries, not
-after every step: the end of a plan, before a push, after a multi-commit
-series.
-
-Run the narrowest thing that covers the change: edited `A.ts`, run `A.test.ts`,
-not the whole suite. Widen only when the change is broad, or when a targeted run
-fails in a way that suggests a larger blast radius.
-
-## Reporting
-
-Report what happened. Completion needs current-turn evidence. A bare subagent
-success summary is only a claim; its returned command, relevant output, and exit
-status are evidence, so do not rerun them in the main thread. Rerun only when
-evidence is missing, stale, or misses the final diff. State skipped or
-unverified work plainly.
+Workers do their own work without further delegation. PR review is the explicit
+exception: its reviewer may use bounded specialist lenses under the review skill.
+Load workflow skills only when needed. Keep volatile state and price catalogs out
+of always-loaded instructions. Verify the final result with relevant evidence;
+report uncertainty and incomplete coverage. Cache behavior varies by provider,
+so no fixed token count or dollar amount guarantees delegation will save money.

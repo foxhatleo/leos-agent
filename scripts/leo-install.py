@@ -64,13 +64,13 @@ PLUGIN_ROOT_TOKEN = "<plugin-root>"
 # OpenCode plugins cannot register skills or commands from JS, so these are
 # copied to disk instead. check.py asserts every file they name carries
 # PROVENANCE, without which the installer would refuse to upgrade its own copy.
-OPENCODE_SKILLS = ("doctor", "review-pr", "handoff", "handon", "tune-routing")
+OPENCODE_SKILLS = ("doctor", "review-pr", "handoff", "handon", "tune-routing", "review-usage")
 OPENCODE_COMMANDS = ("review-pr", "handoff", "handon")
 
 # Codex plugins cannot package custom agent definitions directly, so these are
 # copied into ~/.codex/agents. Keep this tuple authoritative: check.py and the
 # installer tests derive the expected payload from it.
-CODEX_AGENTS = ("leo-runner", "leo-executor")
+CODEX_AGENTS = ("leo-cheap", "leo-standard", "leo-parent", "leo-reviewer", "leo-runner", "leo-executor")
 
 
 class BlockError(Exception):
@@ -109,14 +109,15 @@ class Result:
 
 def render_codex_agent(text, agent_name, config):
 	"""Substitute a Codex profile's model, leaving the shipped default when unset."""
-	entry = routing.profile(config, "codex", agent_name.split("-", 1)[1])
+	role = agent_name.split("-", 1)[1]
+	entry = routing.profile(config, "codex", "standard" if role == "reviewer" else role)
 	if not entry:
 		return text
-	text = re.sub(r'(?m)^model = ".*"$', f'model = "{entry["model"]}"', text, count=1)
-	if entry["effort"]:
+	text = re.sub(r'(?m)^model = ".*"$', lambda _: "model = " + json.dumps(entry["model"]), text, count=1)
+	if entry.get("effort"):
 		text = re.sub(
 			r'(?m)^model_reasoning_effort = ".*"$',
-			f'model_reasoning_effort = "{entry["effort"]}"',
+			lambda _: "model_reasoning_effort = " + json.dumps(entry["effort"]),
 			text,
 			count=1,
 		)
@@ -252,6 +253,12 @@ def atomic_write(path, text, crlf):
 	A plain write truncates first, so an interrupted run would leave the user's
 	instruction file empty or half-written. The rename is atomic instead.
 	"""
+	from install_transaction import ACTIVE
+	transaction = ACTIVE.get()
+	if transaction is not None:
+		data = (text.replace("\n", "\r\n") if crlf else text).encode("utf-8")
+		transaction.stage(path, data, path.stat().st_mode & 0o777 if path.is_file() else default_mode())
+		return
 	# Write through a symlink rather than over it: an instruction file symlinked
 	# into a dotfiles repo must keep pointing there, and os.replace would
 	# silently swap the link for a regular file.
@@ -316,7 +323,7 @@ def install_markdown(path, block, args, label, create=True):
 				atomic_write(path, remainder, crlf)
 			return Result(label, "removed", diff=diff)
 		if args.writes:
-			path.unlink()
+			remove_file(path)
 		return Result(label, "removed", "file held nothing else, deleted")
 
 	return write_if_changed(path, inject(current, block), current, existed, crlf, args, label)
@@ -341,7 +348,7 @@ def migrate_legacy_block(path, args, label):
 	remainder = strip_block(current)
 	if not remainder.strip():
 		if args.writes:
-			path.unlink()
+			remove_file(path)
 		return Result(label, "migrated", "file held nothing else, deleted")
 	remainder = remainder.rstrip("\n") + "\n"
 	diff = unified(path, current, remainder) if args.dry_run else ""
@@ -369,7 +376,13 @@ def opencode_config_advisory(root, home, label, configured=False):
 	if not missing:
 		return Result(label, "unchanged")
 	listed = ", ".join(f'"{p}"' for p in wanted)
-	return Result(label, "skipped", f'add "instructions": [{listed}] to ~/.config/opencode/opencode.json')
+	return Result(label, "error", f'missing instructions: [{listed}]; run leo-install.py opencode')
+
+
+def owned_copy(text):
+	return (text.startswith("# Managed by leos-agent.") or text.startswith("# Installed by leos-agent.")
+		or text.startswith("<!-- Managed by leos-agent. -->") or text.startswith("<!-- leos-agent -->")
+		or text.startswith("---\n# Managed by leos-agent.\n"))
 
 
 def install_file_copy(src, dest, args, label, owned_parent=False, payload=None):
@@ -385,7 +398,7 @@ def install_file_copy(src, dest, args, label, owned_parent=False, payload=None):
 	current = dest.read_text(encoding="utf-8") if existed else ""
 
 	# Never clobber or delete a same-named file this tool did not put there.
-	foreign = existed and current != payload and PROVENANCE not in current
+	foreign = existed and current != payload and not owned_copy(current)
 	if foreign and not args.force:
 		return Result(label, "conflict", "a file we did not write is already here; re-run with --force to replace it")
 
@@ -393,8 +406,8 @@ def install_file_copy(src, dest, args, label, owned_parent=False, payload=None):
 		if not existed:
 			return Result(label, "unchanged", "not present")
 		if args.writes:
-			dest.unlink()
-			if owned_parent and dest.parent.is_dir() and not any(dest.parent.iterdir()):
+			remove_file(dest)
+			if owned_parent and not transaction_active() and dest.parent.is_dir() and not any(dest.parent.iterdir()):
 				dest.parent.rmdir()
 		return Result(label, "removed")
 
@@ -414,23 +427,28 @@ def opencode_payload(src, root, rename_install=False):
 	text = src.read_text(encoding="utf-8").replace(PLUGIN_ROOT_TOKEN, str(root))
 	if rename_install:
 		text = re.sub(r"(?m)^name:\s*install\s*$", "name: leo-install", text, count=1)
+	if text.startswith("---\n"):
+		text = text.replace("---\n", "---\n# Managed by leos-agent.\n", 1)
+	else:
+		text = "<!-- Managed by leos-agent. -->\n" + text
 	return text
 
 
-def run(harness, root, args):
+def _run_targets(harness, root, args):
 	# Read once per run: routing.load() is used by Codex's TOML rendering and
 	# Cursor's rule, both still per-machine even though the payload is not.
 	config = routing.load()
 	home = Path.home()
+	harness_dir = config_dir(harness, home)
 	targets = []
 
 	if harness == "claude":
 		label = "~/.claude/CLAUDE.md"
-		targets.append((label, lambda: migrate_legacy_block(home / ".claude" / "CLAUDE.md", args, label)))
+		targets.append((label, lambda: migrate_legacy_block(harness_dir / "CLAUDE.md", args, label)))
 
 	elif harness == "codex":
 		label = "~/.codex/AGENTS.md"
-		targets.append((label, lambda: migrate_legacy_block(home / ".codex" / "AGENTS.md", args, label)))
+		targets.append((label, lambda: migrate_legacy_block(harness_dir / "AGENTS.md", args, label)))
 		for agent_name in CODEX_AGENTS:
 			label = f"~/.codex/agents/{agent_name}.toml"
 			targets.append(
@@ -438,7 +456,7 @@ def run(harness, root, args):
 					label,
 					lambda n=agent_name, l=label: install_file_copy(
 						root / "payload" / "codex-agents" / f"{n}.toml",
-						home / ".codex" / "agents" / f"{n}.toml",
+						harness_dir / "agents" / f"{n}.toml",
 						args,
 						l,
 						payload=render_codex_agent(
@@ -451,76 +469,44 @@ def run(harness, root, args):
 			)
 
 	elif harness == "cursor":
-		# The payload itself arrives natively through the plugin's alwaysApply
-		# rule, which is the file in the plugin directory -- so there is nothing
-		# per-machine in it. Only the routing stanza needs installing, and only
-		# as its own rule -- and only when something is actually configured: an
-		# unconfigured rule would restate the payload's default, an always-loaded
-		# no-op that costs context on every turn.
-		label = "~/.cursor/rules/leos-agent-routing.mdc"
-		dest = home / ".cursor" / "rules" / "leos-agent-routing.mdc"
-		configured = bool(
-			routing.profile(config, "cursor", "runner") or routing.profile(config, "cursor", "executor")
-		)
-
-		def cursor_rule_target(l=label):
-			if args.uninstall or configured:
-				return install_file_copy(None, dest, args, l, payload=cursor_routing_rule(harness, config))
-			# Unconfigured install: write nothing, and take back a stale rule a
-			# previous config left behind -- but only one that is provably ours.
-			if not dest.is_file():
-				return Result(l, "skipped", "no routing configured for cursor")
-			if PROVENANCE not in dest.read_text(encoding="utf-8"):
-				return Result(l, "skipped", "no routing configured; leaving the unrelated file at this path")
-			if args.writes:
-				dest.unlink()
-			return Result(l, "removed", "no routing configured; stale rule removed")
-
-		targets.append((label, cursor_rule_target))
+		# Global native agents are supported; global ~/.cursor/rules is not.
+		legacy = harness_dir / "rules" / "leos-agent-routing.mdc"
+		if legacy.is_file() and "leos-agent model routing" in legacy.read_text():
+			def remove_legacy():
+				if args.writes:
+					remove_file(legacy)
+				return Result(str(legacy), "removed", "obsolete global routing rule")
+			targets.append((str(legacy), remove_legacy))
+		for name in CODEX_AGENTS:
+			dest = harness_dir / "agents" / (name + ".md")
+			targets.append((str(dest), lambda n=name, d=dest: install_file_copy(
+				None, d, args, str(d), payload=native_agent(root, n, harness, config))))
 
 	elif harness == "hermes":
 		# Hermes writes its own starter identity file on first run and needs
 		# nothing installed into it; the only leftover job is taking back a
 		# block an earlier version wrote before it existed.
 		label = "~/.hermes/SOUL.md"
-		targets.append((label, lambda: migrate_legacy_block(home / ".hermes" / "SOUL.md", args, label)))
+		targets.append((label, lambda: migrate_legacy_block(harness_dir / "SOUL.md", args, label)))
 
 	elif harness == "pi":
 		label = "~/.pi/agent/AGENTS.md"
-		targets.append((label, lambda: migrate_legacy_block(home / ".pi" / "agent" / "AGENTS.md", args, label)))
+		targets.append((label, lambda: migrate_legacy_block(harness_dir / "AGENTS.md", args, label)))
 
 	elif harness == "opencode":
-		cfg = home / ".config" / "opencode"
+		cfg = harness_dir
 		label = "~/.config/opencode/AGENTS.md"
 		targets.append((label, lambda: migrate_legacy_block(cfg / "AGENTS.md", args, label)))
-		# The payload arrives live via `instructions` in opencode.json, which
-		# this tool cannot write itself -- opencode.json is JSONC and rewriting
-		# it would destroy the user's comments -- so the best it can do is
-		# check the wiring is there and say what to add when it is not.
 		routing_label = "~/.config/opencode/leos-agent-routing.md"
 		routing_dest = cfg / "leos-agent-routing.md"
-		opencode_configured = bool(
-			routing.profile(config, "opencode", "runner") or routing.profile(config, "opencode", "executor")
-		)
-
-		def opencode_routing_target(l=routing_label):
-			if args.uninstall or opencode_configured:
-				return install_file_copy(None, routing_dest, args, l, payload=opencode_routing_rule(harness, config))
-			# Unconfigured: an extra file would only restate the payload's own
-			# default, and `instructions` loads it on every turn.
-			if not routing_dest.is_file():
-				return Result(l, "skipped", "no routing configured for opencode")
-			if PROVENANCE not in routing_dest.read_text(encoding="utf-8"):
-				return Result(l, "skipped", "no routing configured; leaving the unrelated file at this path")
-			if args.writes:
-				routing_dest.unlink()
-			return Result(l, "removed", "no routing configured; stale rule removed")
-
-		targets.append((routing_label, opencode_routing_target))
+		targets.append((routing_label, lambda: install_file_copy(None, routing_dest, args, routing_label,
+			payload="<!-- Managed by leos-agent. -->\n" + payload_body(root, harness, config) + "\n")))
 		json_label = "~/.config/opencode/opencode.json"
-		targets.append(
-			(json_label, lambda: opencode_config_advisory(root, home, json_label, opencode_configured))
-		)
+		targets.append((json_label, lambda: manage_opencode_config(root, cfg, args, json_label)))
+		for name in CODEX_AGENTS:
+			dest = cfg / "agents" / (name + ".md")
+			targets.append((str(dest), lambda n=name, d=dest: install_file_copy(
+				None, d, args, str(d), payload=native_agent(root, n, harness, config))))
 		# OpenCode plugins cannot register skills or commands from JS, so the
 		# payload files are copied into the config dir where it reads them.
 		skill_label = "~/.config/opencode/skills/leo-install/SKILL.md"
@@ -574,7 +560,7 @@ def run(harness, root, args):
 					),
 				)
 			)
-		for command_name in OPENCODE_COMMANDS:
+		for command_name in (() if not args.uninstall else OPENCODE_COMMANDS):
 			command_label = f"~/.config/opencode/commands/{command_name}.md"
 			targets.append(
 				(
@@ -595,13 +581,127 @@ def run(harness, root, args):
 	for label, target in targets:
 		try:
 			results.append(target())
-		except BlockError as exc:
+		except (BlockError, ValueError) as exc:
 			results.append(Result(label, "error", str(exc)))
 		except UnicodeDecodeError:
 			results.append(Result(label, "error", "not valid UTF-8 text; refusing to rewrite it"))
 		except OSError as exc:
 			results.append(Result(label, "error", exc.strerror or str(exc)))
 	return results
+
+
+def config_dir(harness, home=None):
+	home = home or Path.home()
+	defaults = {"claude": home / ".claude", "codex": home / ".codex",
+		"cursor": home / ".cursor", "hermes": home / ".hermes", "pi": home / ".pi" / "agent",
+		"opencode": Path(os.environ.get("XDG_CONFIG_HOME", str(home / ".config"))) / "opencode"}
+	variables = {"claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME", "hermes": "HERMES_HOME",
+		"pi": "PI_CODING_AGENT_DIR", "opencode": "OPENCODE_CONFIG_DIR"}
+	value = os.environ.get(variables.get(harness, "LEOS_AGENT_UNUSED_CONFIG_DIR"))
+	return Path(value).expanduser() if value else defaults[harness]
+
+
+def transaction_active():
+	from install_transaction import ACTIVE
+	return ACTIVE.get() is not None
+
+
+def remove_file(path):
+	from install_transaction import ACTIVE
+	transaction = ACTIVE.get()
+	if transaction is not None:
+		transaction.stage(path, None)
+	else:
+		path.unlink()
+
+
+def native_agent(root, name, harness, config):
+	from routing_engine import tier_for
+	text = (root / "agents" / (name + ".md")).read_text()
+	_, frontmatter, body = text.split("---", 2)
+	description = re.search(r"(?m)^description: (.+)$", frontmatter).group(1)
+	tier = tier_for(name)
+	model = routing.tier_model(harness, tier, config)
+	fields = "---\n# Managed by leos-agent.\nname: " + name + "\ndescription: " + json.dumps(description) + "\n"
+	if harness == "opencode":
+		fields += "mode: subagent\n"
+		if model:
+			fields += "model: " + json.dumps(model) + "\n"
+		if name != "leo-reviewer":
+			fields += "tools:\n  task: false\n"
+	else:
+		fields += "model: " + json.dumps(model or "inherit") + "\n"
+	return fields + "---\n" + body
+
+
+def manage_opencode_config(root, cfg, args, label):
+	from jsonc_edit import update_array, properties
+	path = Path(os.environ["OPENCODE_CONFIG"]).expanduser() if os.environ.get("OPENCODE_CONFIG") else (
+		cfg / "opencode.jsonc" if (cfg / "opencode.jsonc").exists() else cfg / "opencode.json")
+	receipt = cfg / "leos-agent-paths.json"
+	previous = json.loads(receipt.read_text()) if receipt.exists() else {}
+	current = path.read_text() if path.exists() else "{}\n"
+	_, spans, _ = properties(current)
+	wanted = {"instructions": [str(cfg / "leos-agent-routing.md")], "plugin": [(root / "index.js").resolve().as_uri()]}
+	updated = current
+	for key, additions in wanted.items():
+		remove = list(previous.get(key, []))
+		values = spans.get(key, (None, None, []))[2]
+		if not isinstance(values, list):
+			raise ValueError(f"{key} must be an array")
+		for value in values:
+			if not isinstance(value, str):
+				continue
+			if key == "plugin" and (value == "leos-agent" or value.startswith("leos-agent@")):
+				remove.append(value)
+			if key == "instructions" and value == str(root / "rules" / "preferences.md"):
+				remove.append(value)
+		# Do not remove/re-add unchanged entries: idempotency includes bytes.
+		remove = [v for v in remove if args.uninstall or v not in additions]
+		updated = update_array(updated, key, [] if args.uninstall else additions, remove)
+	if args.writes:
+		if current != updated:
+			atomic_write(path, updated, False)
+		if args.uninstall:
+			if receipt.exists():
+				remove_file(receipt)
+		else:
+			atomic_write(receipt, json.dumps(wanted, indent=2) + "\n", False)
+	return Result(label, "unchanged" if current == updated else "updated" if path.exists() else "created")
+
+
+def run(harness, root, args):
+	from install_transaction import ACTIVE, Transaction
+	tx = Transaction(config_dir(harness) / "leos-agent-install-backup.json")
+	token = ACTIVE.set(tx) if args.writes else None
+	try:
+		results = _run_targets(harness, root, args)
+		if args.writes:
+			if any(result.failed for result in results):
+				for result in results:
+					if result.changed:
+						result.status = "skipped"
+						result.detail = "transaction aborted; another target needs attention"
+			else:
+				tx.commit()
+				# Remove only empty directories left by deleted owned files.
+				boundary = config_dir(harness).resolve()
+				for path, (_, after, _) in tx.changes.items():
+					if after is not None:
+						continue
+					parent = path.parent
+					while parent != boundary and boundary in parent.parents:
+						try:
+							parent.rmdir()
+						except OSError:
+							break
+						parent = parent.parent
+		return results
+	except (ValueError, OSError) as exc:
+		return [Result(harness, "error", str(exc))]
+	finally:
+		if token is not None:
+			ACTIVE.reset(token)
 
 
 def main(argv=None):
@@ -619,9 +719,18 @@ def main(argv=None):
 		"--uninstall", action="store_true", help="remove any installed payload files and legacy blocks"
 	)
 	mode.add_argument("--check", action="store_true", help="exit 1 if anything would change")
+	mode.add_argument("--rollback", action="store_true", help="restore the previous installation if files have not since changed")
 	parser.add_argument("--force", action="store_true", help="replace a conflicting file this tool did not write")
 	args = parser.parse_args(argv)
 	args.writes = not (args.dry_run or args.check)
+	if args.rollback:
+		from install_transaction import rollback
+		try:
+			print(f"restored {rollback(config_dir(args.harness) / 'leos-agent-install-backup.json')} files")
+			return 0
+		except (ValueError, OSError) as exc:
+			print(f"rollback refused: {exc}", file=sys.stderr)
+			return 1
 
 	root = plugin_root()
 	if not (root / "rules" / "preferences.md").is_file():

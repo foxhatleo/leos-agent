@@ -11,6 +11,10 @@ on:
 permissions:
   contents: read
 
+env:
+  LEOS_AGENT_PRICE_REFRESH: "off"
+  PYTHONDONTWRITEBYTECODE: "1"
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -28,6 +32,8 @@ jobs:
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
+      - name: Run JavaScript adapter tests
+        run: node --test tests/js/*.test.js
       - name: Run behavioral tests
         run: python3 -m unittest discover -s tests -v
       - name: Validate manifests, payload, and install invariants

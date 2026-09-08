@@ -1,6 +1,6 @@
 ---
-name: leo-executor
-description: Ordinary investigation, debugging, implementation, and review. Legacy alias.
+name: leo-standard
+description: Ordinary investigation, debugging, implementation, and review.
 tools: Read, Grep, Glob, Edit, Write, Bash
 model: sonnet
 disallowedTools: Agent

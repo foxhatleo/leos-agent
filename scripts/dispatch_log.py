@@ -44,7 +44,7 @@ LOG_NAME = "dispatch.jsonl"
 # no cron job and nothing to configure.
 MAX_BYTES = 1 << 20
 
-RECORD_VERSION = 1
+RECORD_VERSION = 2
 
 
 TIER_PREFIX = "leo-"
@@ -59,9 +59,8 @@ def is_tier(agent):
     message recommends. That is the worst false positive this guard can have, so
     the one place that decides it is shared rather than repeated.
     """
-    if not agent:
-        return False
-    return agent.rsplit(":", 1)[-1].rsplit("/", 1)[-1].startswith(TIER_PREFIX)
+    from routing_engine import tier_for
+    return tier_for(agent) is not None
 
 
 def path():
@@ -186,14 +185,10 @@ def summarise(entries):
         and bursts.get(e.get("burst"), 0) < 2
     ]
 
-    # Did a block actually change anything? A blocked brief whose hash comes back
-    # naming a tier is the guard working; one that never returns was abandoned.
-    blocked = {e.get("prompt") for e in entries if e.get("decision") == "block"}
-    blocked.discard(None)
-    converted = {
-        e.get("prompt") for e in entries
-        if e.get("prompt") in blocked and e.get("decision") != "block"
-    }
+    # A prompt hash is evidence of similar text, not of successful execution,
+    # lower spend, or a causal retry. Count blocks even when no hash is available.
+    blocked = [e for e in entries if e.get("decision") == "block"]
+    confirmed = [e for e in entries if e.get("decision") == "executed"]
 
     return {
         "records": len(entries),
@@ -203,7 +198,8 @@ def summarise(entries):
         "tiers": dict(tiers),
         "errors": sum(1 for e in entries if e.get("decision") == "error"),
         "blocked": len(blocked),
-        "converted": len(converted),
+        "confirmed_executions": len(confirmed),
+        "converted": None,  # legacy field: never infer savings from prompt hashes
         "trivial_lone_spawns": len(trivial),
         "agents": dict(collections.Counter(
             "%s @ %s" % (e.get("agent") or "-", e.get("model") or "inherited")
@@ -226,9 +222,8 @@ def render(summary):
     lines.append("  harnesses   " + ", ".join("%s %d" % kv for kv in sorted(summary["harnesses"].items())))
     lines.append("  tiers       " + ", ".join("%s %d" % kv for kv in sorted(summary["tiers"].items())))
     if summary["blocked"]:
-        lines.append("  blocks      %d, of which %d re-dispatched with a tier named" % (
-            summary["blocked"], summary["converted"]))
-    lines.append("  lone small spawns  %d  (fan-outs excluded)" % summary["trivial_lone_spawns"])
+        lines.append("  blocks      %d (execution/savings not inferred from retries)" % summary["blocked"])
+    lines.append("  short-brief signals  %d  (heuristic only; not evidence of wasted spend)" % summary["trivial_lone_spawns"])
     lines.append("  agent @ model:")
     for name, count in sorted(summary["agents"].items(), key=lambda kv: (-kv[1], kv[0])):
         lines.append("    %-44s %d" % (name, count))

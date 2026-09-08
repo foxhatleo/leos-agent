@@ -41,6 +41,7 @@ def _load(name):
 	if name not in _MODULES:
 		spec = importlib.util.spec_from_file_location(f"leos_{name}", PLUGIN_ROOT / "scripts" / f"{name}.py")
 		module = importlib.util.module_from_spec(spec)
+		sys.modules[spec.name] = module
 		spec.loader.exec_module(module)
 		_MODULES[name] = module
 	return _MODULES[name]
@@ -51,7 +52,7 @@ def _guard():
 	return _load("dispatch_guard")
 
 
-def _payload_section():
+def _payload_section(info=None):
 	"""The rendered policy payload, for register_system_prompt_section.
 
 	This is the cache-safe path: Hermes renders a system-prompt section once per
@@ -68,7 +69,7 @@ def _payload_section():
 		return ""
 
 
-def _on_pre_tool_call(tool_name="", args=None, **_):
+def _on_pre_tool_call(tool_name="", args=None, task_id=None, **_):
 	"""Refuse a subagent dispatch that names no model. Fails open.
 
 	In-process, so there is no spawn to prefilter against -- normalize() rejects a
@@ -78,25 +79,27 @@ def _on_pre_tool_call(tool_name="", args=None, **_):
 	"""
 	try:
 		guard = _guard()
-		action, _reason, dispatch, _trivial = guard.evaluate(
-			{"tool_name": tool_name, "tool_input": args, "cwd": str(Path.cwd())}, HARNESS
+		result = guard.process(
+			{"tool_name": tool_name, "tool_input": args, "session_id": task_id or "", "cwd": str(Path.cwd())}, HARNESS
 		)
 	except Exception:
 		return None
-	if action != guard.BLOCK or dispatch is None:
-		return None
-	return {"action": "block", "message": guard.render_block(dispatch, HARNESS)}
+	if result["action"] == "block":
+		return {"action": "block", "message": guard.render_block(None, HARNESS, result)}
+	return None
+
 
 
 def register(ctx):
-	ctx.register_skill(PLUGIN_ROOT / "skills" / "install")
+	for skill in sorted((PLUGIN_ROOT / "skills").glob("*/SKILL.md")):
+		ctx.register_skill("leo-" + skill.parent.name, skill, description="Leo's " + skill.parent.name + " workflow")
 	ctx.register_hook("pre_tool_call", _on_pre_tool_call)
 
 	# Older Hermes builds have no such API; degrade silently rather than break
 	# register() over a section the running version cannot render.
 	register_section = getattr(ctx, "register_system_prompt_section", None)
 	if register_section is not None:
-		register_section("leos-agent", _payload_section, position="after_memory")
+		register_section("leos-agent", _payload_section, position="after_memory", max_chars=4000)
 
 	def leo_install(args=""):
 		"""Run Leo's installer for Hermes (--dry-run, --uninstall)."""

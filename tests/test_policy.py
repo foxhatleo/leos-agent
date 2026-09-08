@@ -30,8 +30,9 @@ class TestRouting(unittest.TestCase):
         runner_tools = re.search(r"(?m)^tools:\s*(.+)$", runner).group(1)
         executor_tools = re.search(r"(?m)^tools:\s*(.+)$", executor).group(1)
         # The runner is the lens role for hostile-diff fan-outs: no Write, no Edit.
-        self.assertNotIn("Edit", runner_tools)
-        self.assertNotIn("Write", runner_tools)
+        self.assertIn("Edit", runner_tools)
+        self.assertIn("Write", runner_tools)
+        self.assertIn("disallowedTools: Agent", runner)
         self.assertIn("Bash", runner_tools)
         self.assertIn("Edit", executor_tools)
         self.assertIn("Write", executor_tools)

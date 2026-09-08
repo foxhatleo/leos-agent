@@ -1,44 +1,9 @@
 #!/usr/bin/env python3
-"""routing: per-machine model routing for leos-agent's economical tier.
+"""Machine-local tier mappings. Model identifiers are preserved for the harness.
 
-The tier only ever had teeth on Claude Code and Codex, because those are the two
-harnesses whose model names the payload could hardcode. Every other harness fell
-through to "use the current model", so fan-outs there ran at full price. Which
-models a harness actually offers varies by machine and by what an IT department
-allows, so the mapping cannot ship in the plugin -- it is machine-local config.
-
-CONFIG lives beside the rest of leos-agent's data, at
-${LEOS_AGENT_LOCAL_PATH:-$HOME/.leos-agent-local}/routing.json, never inside the
-plugin: an upgrade, a reinstall, or an uninstall must never take it. Only `set`
-and `unset` write it, and only when someone runs them -- the installer reads and
-never writes, so an upgrade, a reinstall, or an --uninstall cannot touch it. A
-missing file is not an error -- it means "the shipped defaults", which is
-exactly the behaviour that predates this file.
-
-  {"cursor":   {"runner": "grok-code-fast-1", "executor": "claude-sonnet-4.6"},
-   "opencode": {"runner": "anthropic/claude-haiku-4-5"},
-   "codex":    {"runner": {"model": "gpt-5.6-luna", "effort": "low"}}}
-
-Keys are harness names; each holds "runner" and/or "executor", independently. A
-bare string is shorthand for {"model": ...}. Model strings are free-form and
-never checked against a known-model list -- whatever the harness accepts goes in
-verbatim. Only the keys are validated, and an unknown one is a hard error: a
-typo that silently left a harness on the expensive model is the one failure this
-file exists to prevent.
-
-READ AT INSTALL TIME, NOT AT RUN TIME. leo-install.py renders the result into
-the payload block it already writes, so a session pays nothing to know its own
-routing -- no config read, no extra turn, no bytes beyond the dispatch line the
-payload was always going to carry.
-
-  routing.py show [--harness H]   what is configured, resolved
-  routing.py render --harness H   the exact stanza the installer would inject
-  routing.py path                 the config file's path
-  routing.py set --harness H --runner M [--runner-effort E]
-                              [--executor M] [--executor-effort E]
-  routing.py unset --harness H [--runner] [--executor]
-
-Exit codes: 0 ok, 1 on a malformed config or a refused write, 2 on bad usage.
+cheap/standard are configurable; parent means the current parent model.
+runner/executor remain accepted aliases for existing configurations and CLI use.
+Configuration never ships inside a versioned plugin cache.
 """
 import argparse
 import copy
@@ -58,7 +23,10 @@ from state import _data_root, _locked, atomic_write  # noqa: E402
 HARNESSES = ("claude", "codex", "cursor", "hermes", "pi", "opencode")
 
 CONFIG_NAME = "routing.json"
-ROLES = ("runner", "executor")
+ROLES = ("cheap", "standard", "runner", "executor")
+ALIASES = {"runner": "cheap", "executor": "standard"}
+DEFAULTS = {"claude": {"cheap": "haiku", "standard": "sonnet"},
+            "codex": {"cheap": "gpt-5.6-luna", "standard": "gpt-5.6-terra"}}
 FIELDS = ("model", "effort")
 
 # Harnesses whose economical tier ships with models already baked in: Claude
@@ -71,8 +39,12 @@ def config_path():
     return os.path.join(_data_root(), CONFIG_NAME)
 
 
+class RoutingError(ValueError):
+    pass
+
+
 def _bad(message):
-    sys.exit(f"routing: {config_path()}: {message}")
+    raise RoutingError(f"routing: {config_path()}: {message}")
 
 
 def read_raw():
@@ -132,7 +104,14 @@ def validate(data, harnesses=HARNESSES):
             effort = value.get("effort")
             if effort is not None and (not isinstance(effort, str) or not effort.strip()):
                 _bad(f"{harness}.{role}.effort: must be a non-empty string when present")
-            roles[role] = {"model": model.strip(), "effort": effort.strip() if effort else None}
+            if any(ord(char) < 32 for char in model) or len(model) > 256:
+                _bad(f"{harness}.{role}: model must be a single-line identifier of at most 256 characters")
+            if effort is not None and effort.strip() not in ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"):
+                _bad(f"{harness}.{role}: unsupported reasoning effort")
+            canonical = ALIASES.get(role, role)
+            if canonical in roles:
+                _bad(f"{harness}.{role}: duplicate tier via an alias")
+            roles[canonical] = {"model": model.strip(), "effort": effort.strip() if effort else None}
         if roles:
             out[harness] = roles
     return out
@@ -140,7 +119,10 @@ def validate(data, harnesses=HARNESSES):
 
 def profile(config, harness, role):
     """The configured {model, effort} for one role, or None."""
-    return (config.get(harness) or {}).get(role)
+    roles = config.get(harness) or {}
+    canonical = ALIASES.get(role, role)
+    legacy = next((old for old, new in ALIASES.items() if new == canonical), canonical)
+    return roles.get(canonical) or roles.get(legacy)
 
 
 def _named(entry):
@@ -151,43 +133,30 @@ def _named(entry):
 
 
 def stanza(harness, config):
-    """The dispatch lines for one harness. No trailing newline.
-
-    Kept deliberately short: this text is always-loaded on every turn of every
-    session, so it must cost less than the multi-harness prose it replaces.
-    """
-    runner = profile(config, harness, "runner")
-    executor = profile(config, harness, "executor")
-
+    """Small stable routing instructions; full price metadata stays off-prompt."""
+    assignments = []
+    for role in ("cheap", "standard"):
+        entry = profile(config, harness, role)
+        model = entry["model"] if entry else DEFAULTS.get(harness, {}).get(role)
+        assignments.append(f"{role}: `{model}`" if model else f"{role}: unconfigured")
+    line = "; ".join(assignments) + "; parent-level: current parent model."
     if harness == "claude":
-        # The Agent tool's model parameter overrides the agent definition's
-        # frontmatter, so a machine can retarget the tier without the installer
-        # ever writing into the plugin-owned agents/ directory.
-        if not runner and not executor:
-            return 'On Claude Code pass `subagent_type: "leo-runner"` or `"leo-executor"`;\nthe agent definitions carry the models.'
-        overrides = ", and ".join(
-            f'`subagent_type: "leo-{role}"` with `model: "{entry["model"]}"`'
-            for role, entry in (("runner", runner), ("executor", executor))
-            if entry
-        )
-        kept = "" if (runner and executor) else "\nThe other profile keeps the model its agent definition carries."
-        return "On Claude Code pass " + overrides + "." + kept
-
+        return line + " Use `leo-cheap` or `leo-standard`; the guard applies configured models and the price ceiling."
     if harness == "codex":
-        # Config reaches Codex through the installed profile TOMLs, so the prose
-        # is the same either way -- and stays one line.
-        return "On Codex the installed `leo-runner` and `leo-executor` profiles carry\nthe models."
+        return line + " Use the supported spawn model field; profile model settings take precedence when selecting a native profile."
+    if harness == "opencode":
+        return line + " Use installed native tier agents; task calls have no model field."
+    if harness == "hermes":
+        return line + " Native delegation uses one configured model for all children; per-task model routing is unavailable."
+    return line + " Use only model/profile selection supported by this harness; report unavailable routing."
 
-    if not runner and not executor:
-        return "No cheaper profile is configured here: use the current model, and say\nrouting could not be applied."
 
-    if runner and executor:
-        assignment = f"Dispatch leo-runner at {_named(runner)} and leo-executor at {_named(executor)}."
-    elif runner:
-        assignment = f"Dispatch leo-runner at {_named(runner)}; leo-executor inherits."
-    else:
-        assignment = f"Dispatch leo-executor at {_named(executor)}; leo-runner inherits."
-    return assignment + "\nWhere this harness cannot set a model per spawn, inherit and say so."
+def tier_model(harness, tier, config=None, parent=None):
+    tier = ALIASES.get(tier, tier)
+    if tier == "parent":
+        return parent
+    entry = profile(load() if config is None else config, harness, tier)
+    return entry["model"] if entry else DEFAULTS.get(harness, {}).get(tier)
 
 
 def _entry(model, effort):
@@ -208,7 +177,10 @@ def apply_set(data, harness, roles):
     """
     entry = dict(data.get(harness) or {})
     for role, (model, effort) in roles.items():
-        entry[role] = _entry(model, effort)
+        canonical = ALIASES.get(role, role)
+        for key in (canonical, *(old for old, new in ALIASES.items() if new == canonical)):
+            entry.pop(key, None)
+        entry[canonical] = _entry(model, effort)
     data[harness] = entry
     return data
 
@@ -225,7 +197,11 @@ def apply_unset(data, harness, roles):
         return data
     entry = dict(data[harness])
     for role in roles:
-        entry.pop(role, None)
+        canonical = ALIASES.get(role, role)
+        entry.pop(canonical, None)
+        for old, new in ALIASES.items():
+            if new == canonical:
+                entry.pop(old, None)
     # An empty harness key is a shape load() never returns, so never leave one.
     if entry:
         data[harness] = entry
@@ -275,7 +251,7 @@ def _described(entry):
 
 def _resolved(data, harness, role):
     """One role of a raw document, in the normalised shape, or None."""
-    value = (data.get(harness) or {}).get(role)
+    value = profile(data, harness, role)
     if isinstance(value, str):
         return {"model": value}
     return value
@@ -392,12 +368,17 @@ def main(argv):
     setter.add_argument("--runner-effort", metavar="E", help="needs --runner; omitting it clears any effort")
     setter.add_argument("--executor", metavar="MODEL", help="replaces the executor entry whole")
     setter.add_argument("--executor-effort", metavar="E", help="needs --executor; omitting it clears any effort")
+    for role in ("cheap", "standard"):
+        setter.add_argument(f"--{role}", metavar="MODEL")
+        setter.add_argument(f"--{role}-effort", metavar="E")
     setter.add_argument("--dry-run", action="store_true", help="show the result, write nothing")
 
     unsetter = sub.add_parser("unset", help="drop a harness's roles, back to its shipped default")
     unsetter.add_argument("--harness", choices=HARNESSES, required=True)
     unsetter.add_argument("--runner", action="store_true")
     unsetter.add_argument("--executor", action="store_true")
+    unsetter.add_argument("--cheap", action="store_true")
+    unsetter.add_argument("--standard", action="store_true")
     unsetter.add_argument("--dry-run", action="store_true", help="show the result, write nothing")
 
     args = parser.parse_args(argv)
@@ -417,4 +398,7 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except RoutingError as exc:
+        sys.exit(str(exc))

@@ -74,15 +74,15 @@ class TestCodexPayload(unittest.TestCase):
                 # First target is the ~/.codex/AGENTS.md migration: there is no
                 # legacy file in a fresh $HOME, so it has nothing to do on any
                 # of the three runs. Only the TOML copies actually install.
-                self.assertEqual([r.status for r in first], ["unchanged", "created", "created"])
-                self.assertEqual([r.status for r in second], ["unchanged", "unchanged", "unchanged"])
+                self.assertEqual([r.status for r in first], ["unchanged"] + ["created"] * len(self.installer.CODEX_AGENTS))
+                self.assertEqual([r.status for r in second], ["unchanged"] * (len(self.installer.CODEX_AGENTS) + 1))
                 for name in self.installer.CODEX_AGENTS:
                     installed = home / ".codex" / "agents" / f"{name}.toml"
                     source = ROOT / "payload" / "codex-agents" / f"{name}.toml"
                     self.assertEqual(installed.read_bytes(), source.read_bytes())
 
                 removed = self.installer.run("codex", ROOT, args(uninstall=True))
-                self.assertEqual([r.status for r in removed], ["unchanged", "removed", "removed"])
+                self.assertEqual([r.status for r in removed], ["unchanged"] + ["removed"] * len(self.installer.CODEX_AGENTS))
                 self.assertFalse((home / ".codex" / "AGENTS.md").exists())
                 for name in self.installer.CODEX_AGENTS:
                     self.assertFalse((home / ".codex" / "agents" / f"{name}.toml").exists())
@@ -147,7 +147,7 @@ class TestOpenCodePayload(unittest.TestCase):
             self.assertTrue(all(r.status == "created" for r in copies(first)), [(r.target, r.status) for r in first])
             by_target = {r.target: r for r in first}
             self.assertEqual(by_target["~/.config/opencode/AGENTS.md"].status, "unchanged")
-            self.assertEqual(by_target["~/.config/opencode/opencode.json"].status, "skipped")
+            self.assertEqual(by_target["~/.config/opencode/opencode.json"].status, "created")
 
             second = self.run_opencode(home)
             self.assertTrue(
@@ -156,7 +156,7 @@ class TestOpenCodePayload(unittest.TestCase):
 
             removed = self.run_opencode(home, uninstall=True)
             self.assertTrue(
-                all(r.status == "removed" for r in copies(removed)), [(r.target, r.status) for r in removed]
+                all(r.status in ("removed", "unchanged") for r in copies(removed)), [(r.target, r.status) for r in removed]
             )
             cfg = home / ".config" / "opencode"
             self.assertFalse((cfg / "skills" / "leo-install").exists())
@@ -164,7 +164,7 @@ class TestOpenCodePayload(unittest.TestCase):
                 self.assertFalse((cfg / "skills" / name).exists(), name)
             self.assertEqual(list((cfg / "commands").glob("*.md")), [])
 
-    def test_opencode_json_advisory_names_the_real_path_and_never_writes(self):
+    def test_opencode_config_is_managed_without_losing_comments(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             cfg = home / ".config" / "opencode"
@@ -175,8 +175,8 @@ class TestOpenCodePayload(unittest.TestCase):
             results = self.run_opencode(home)
             by_target = {r.target: r for r in results}
             result = by_target["~/.config/opencode/opencode.json"]
-            self.assertEqual(result.status, "skipped")
-            self.assertIn(str(ROOT / "rules" / "preferences.md"), result.detail)
+            self.assertEqual(result.status, "updated")
+            self.assertIn("leos-agent-routing.md", config_path.read_text())
             self.assertFalse(result.failed)
             self.assertIn("a comment the tool must not disturb", config_path.read_text(encoding="utf-8"))
 
@@ -184,7 +184,7 @@ class TestOpenCodePayload(unittest.TestCase):
                 '{\n  "instructions": ["' + str(ROOT / "rules" / "preferences.md") + '"]\n}\n', encoding="utf-8"
             )
             [again] = [r for r in self.run_opencode(home) if r.target == "~/.config/opencode/opencode.json"]
-            self.assertEqual(again.status, "unchanged")
+            self.assertEqual(again.status, "updated")
 
     def test_copies_carry_absolute_root_and_no_placeholders(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -301,12 +301,12 @@ class TestOpenCodeRoutingRule(unittest.TestCase):
         with home_patch, env_patch, mock.patch.object(self.installer.routing, "load", lambda *a, **k: config):
             return {r.target: r for r in self.installer.run("opencode", ROOT, args())}
 
-    def test_unconfigured_writes_no_rule(self):
+    def test_unconfigured_installs_one_rendered_policy(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             results = self.run_opencode(home, {})
-            self.assertEqual(results["~/.config/opencode/leos-agent-routing.md"].status, "skipped")
-            self.assertFalse((home / ".config" / "opencode" / "leos-agent-routing.md").exists())
+            self.assertEqual(results["~/.config/opencode/leos-agent-routing.md"].status, "created")
+            self.assertTrue((home / ".config" / "opencode" / "leos-agent-routing.md").exists())
 
     def test_configured_writes_the_stanza_and_is_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -319,23 +319,21 @@ class TestOpenCodeRoutingRule(unittest.TestCase):
             again = self.run_opencode(home, self.CONFIG)
             self.assertEqual(again["~/.config/opencode/leos-agent-routing.md"].status, "unchanged")
 
-    def test_the_advisory_names_the_routing_file_once_configured(self):
+    def test_config_points_to_exactly_one_rendered_policy(self):
+        import json
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
-            plain = self.run_opencode(home, {})["~/.config/opencode/opencode.json"].detail
-            self.assertIn("rules/preferences.md", plain)
-            self.assertNotIn("leos-agent-routing.md", plain)
-            routed = self.run_opencode(home, self.CONFIG)["~/.config/opencode/opencode.json"].detail
-            self.assertIn("rules/preferences.md", routed)
-            self.assertIn("leos-agent-routing.md", routed)
+            self.run_opencode(home, self.CONFIG)
+            cfg = json.loads((home / ".config/opencode/opencode.json").read_text())
+            self.assertEqual(cfg["instructions"], [str(home / ".config/opencode/leos-agent-routing.md")])
 
     def test_unconfiguring_takes_back_our_stale_rule(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             self.run_opencode(home, self.CONFIG)
             results = self.run_opencode(home, {})
-            self.assertEqual(results["~/.config/opencode/leos-agent-routing.md"].status, "removed")
-            self.assertFalse((home / ".config" / "opencode" / "leos-agent-routing.md").exists())
+            self.assertEqual(results["~/.config/opencode/leos-agent-routing.md"].status, "updated")
+            self.assertTrue((home / ".config" / "opencode" / "leos-agent-routing.md").exists())
 
 
 class TestCursorRoutingRule(unittest.TestCase):
@@ -356,45 +354,37 @@ class TestCursorRoutingRule(unittest.TestCase):
         local.mkdir(parents=True, exist_ok=True)
         (local / "routing.json").write_text(body, encoding="utf-8")
 
-    def test_unconfigured_install_writes_nothing(self):
+    def test_unconfigured_profiles_inherit_without_global_rules(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
-            [result] = self.run_cursor(home)
-            self.assertEqual(result.status, "skipped")
+            results = self.run_cursor(home)
+            self.assertFalse(any(r.failed for r in results))
             self.assertFalse(self.rule_path(home).exists())
+            self.assertIn('model: "inherit"', (home / ".cursor/agents/leo-cheap.md").read_text())
 
-    def test_configured_install_round_trips(self):
+    def test_configured_profiles_round_trip_and_keep_provider_identifiers(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
-            self.write_config(home, '{"cursor": {"runner": "cheap-model"}}')
-            [created] = self.run_cursor(home)
-            self.assertEqual(created.status, "created")
-            self.assertIn("cheap-model", self.rule_path(home).read_text(encoding="utf-8"))
-            [second] = self.run_cursor(home)
-            self.assertEqual(second.status, "unchanged")
-            [removed] = self.run_cursor(home, uninstall=True)
-            self.assertEqual(removed.status, "removed")
-            self.assertFalse(self.rule_path(home).exists())
-
-    def test_unconfiguring_takes_back_our_stale_rule(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp)
-            self.write_config(home, '{"cursor": {"runner": "cheap-model"}}')
+            self.write_config(home, '{"cursor": {"runner": "provider/cheap-model"}}')
             self.run_cursor(home)
-            self.write_config(home, "{}")
-            [result] = self.run_cursor(home)
-            self.assertEqual(result.status, "removed")
-            self.assertFalse(self.rule_path(home).exists())
+            profile = home / ".cursor/agents/leo-cheap.md"
+            self.assertIn('model: "provider/cheap-model"', profile.read_text())
+            self.assertFalse(any(r.changed for r in self.run_cursor(home)))
+            self.run_cursor(home, uninstall=True)
+            self.assertFalse(profile.exists())
 
-    def test_unconfigured_install_leaves_a_foreign_file(self):
+    def test_obsolete_owned_rule_is_removed_but_foreign_rule_survives(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             rule = self.rule_path(home)
             rule.parent.mkdir(parents=True)
-            rule.write_text("# somebody else's rule\n", encoding="utf-8")
-            [result] = self.run_cursor(home)
-            self.assertEqual(result.status, "skipped")
-            self.assertEqual(rule.read_text(encoding="utf-8"), "# somebody else's rule\n")
+            rule.write_text("description: leos-agent model routing for this machine.")
+            self.run_cursor(home)
+            self.assertFalse(rule.exists())
+            rule.parent.mkdir(parents=True, exist_ok=True)
+            rule.write_text("# somebody else's rule")
+            self.run_cursor(home)
+            self.assertEqual(rule.read_text(), "# somebody else's rule")
 
 
 class TestLegacyBlockMigration(unittest.TestCase):

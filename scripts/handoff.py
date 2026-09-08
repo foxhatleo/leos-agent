@@ -40,11 +40,18 @@ def handoff_dir():
     os.makedirs(root, mode=0o700, exist_ok=True)
     path = os.path.join(root, "handoffs")
     os.makedirs(path, mode=0o700, exist_ok=True)
+    if os.path.islink(path):
+        raise ValueError("handoff directory must not be a symlink")
     return path
 
 
 def file_for(name):
-    return os.path.join(handoff_dir(), f"{name}.md")
+    if not isinstance(name, str) or not SLUG.fullmatch(name):
+        raise ValueError("handoff name must contain only lowercase letters, digits and hyphens")
+    path = os.path.join(handoff_dir(), f"{name}.md")
+    if os.path.islink(path):
+        raise ValueError("handoff must not be a symlink")
+    return path
 
 
 def frontmatter(path):
@@ -104,7 +111,7 @@ def age_of(created):
 def entries():
     out = []
     for entry in os.scandir(handoff_dir()):
-        if entry.is_file() and entry.name.endswith(".md"):
+        if entry.is_file(follow_symlinks=False) and entry.name.endswith(".md") and SLUG.fullmatch(entry.name[:-3]):
             name = entry.name[:-3]
             meta = frontmatter(entry.path)
             out.append((name, entry.path, meta, entry.stat().st_mtime))
@@ -131,9 +138,18 @@ def cmd_new(argv):
     if not SLUG.match(slug) or not 3 <= len(slug) <= 60:
         sys.exit(f"handoff: {slug!r} is not a valid slug (lowercase, digits and hyphens, 3-60 chars)")
     name, suffix = slug, 2
-    while os.path.exists(file_for(name)):
-        name = f"{slug}-{suffix}"
-        suffix += 1
+    while True:
+        # Reserve atomically: concurrent sessions must never receive the same
+        # path. O_EXCL also refuses an existing symlink, including dangling ones.
+        path = os.path.join(handoff_dir(), f"{name}.md")
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            name = f"{slug}-{suffix}"
+            suffix += 1
+            continue
+        os.close(fd)
+        break
     print(name)
     print(file_for(name))
     # The `created:` value, ready to copy verbatim — a model asked to invent
@@ -203,4 +219,7 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    try:
+        main(sys.argv[1:])
+    except (ValueError, OSError) as exc:
+        sys.exit(f"handoff: {exc}")

@@ -1,17 +1,8 @@
 #!/usr/bin/env python3
-"""Compute and apply the next leos-agent version across every manifest.
+"""Prepare a release using 12.YYYYMMDDXX.0 (UTC, serial 00 through 99).
 
-Scheme: `11.YYYYMMDDX.0`. Major is pinned at 11; minor is the UTC calendar date
-with a single trailing digit for the Nth release that day; patch is always 0.
-The trailing digit exists so several releases in one day still sort correctly,
-and it MUST stay one digit -- a tenth release would produce `...07010`, which
-sorts above the next day's `...080`, silently inverting version order. That is
-a hard error here rather than a version nobody notices is wrong until a stale
-build outranks a fresh one.
-
-This is deliberately a thin layer over string replacement, not a JSON
-round-trip: the manifests are hand-edited and hand-read, and a `json.dump`
-would reflow key order and quoting that nobody asked to change.
+Run explicitly for a release, never from a commit hook. Validate every rewrite
+before replacing files, and restore previous contents if a replacement fails.
 """
 
 import argparse
@@ -49,24 +40,22 @@ def current_version(root):
 
 
 def next_version(current):
-	match = re.fullmatch(r"\d+\.(\d+)\.\d+", current)
+	match = re.fullmatch(r"(\d+)\.(\d+)\.\d+", current)
 	if match is None:
 		raise BumpError(f"package.json version {current!r} is not major.minor.patch")
-	minor = match.group(1)
+	major, minor = match.groups()
 	date = today().strftime("%Y%m%d")
-	# Same-day re-run: keep the date, bump the trailing serial. Anything else
-	# (a stale date, or the pre-date-scheme 10.x line) starts the day at 0.
-	if minor.startswith(date) and len(minor) == len(date) + 1:
-		serial = int(minor[len(date):]) + 1
-	else:
-		serial = 0
-	if serial > 9:
-		raise BumpError(
-			f"{date} already has release 9 (minor {minor}); a 10th release would produce minor "
-			f"{date}10, which sorts above the next day's version -- this is the ordering "
-			"inversion bump.py exists to refuse. Wait for UTC midnight, or pick a different scheme."
-		)
-	return f"11.{date}{serial}.0"
+	serial = 0
+	if major == "12" and len(minor) == 10:
+		if minor[:8] > date:
+			raise BumpError("refusing a release older than the current version's UTC date")
+		if minor[:8] == date:
+			serial = int(minor[8:]) + 1
+	if serial > 99:
+		raise BumpError(f"{date} already has 100 releases; wait for the next UTC day")
+	if int(major) > 12:
+		raise BumpError("refusing to downgrade a future major version")
+	return f"12.{date}{serial:02d}.0"
 
 
 def rewrite_json_version(text, old, new, label):
@@ -96,8 +85,7 @@ def rewrite_readme(text, old, new, label):
 	return text.replace(old, new)
 
 
-# Every file bump.py owns, in the order it touches them. .githooks/pre-commit
-# stages exactly this set after running this script.
+# Release-owned files. Commit hooks never stage these files.
 REWRITE = {
 	"package.json": rewrite_json_version,
 	".claude-plugin/plugin.json": rewrite_json_version,
@@ -113,8 +101,11 @@ def write_atomic(path, text):
 	data = text.encode("utf-8")
 	fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
 	try:
+		os.fchmod(fd, path.stat().st_mode & 0o777)
 		with os.fdopen(fd, "wb") as handle:
 			handle.write(data)
+			handle.flush()
+			os.fsync(handle.fileno())
 		os.replace(tmp_path, path)
 	except BaseException:
 		with contextlib.suppress(FileNotFoundError):
@@ -123,28 +114,31 @@ def write_atomic(path, text):
 
 
 def rewrite_all(root, old, new, dry_run=False):
-	"""Apply every REWRITE entry; return the paths (relative to root) that changed.
-
-	Skips a file whose rewritten bytes are identical to what's on disk, so a
-	re-run after a partial failure doesn't touch files it already fixed.
-	"""
-	changed = []
+	"""Validate all rewrites first, then replace with rollback on failure."""
+	prepared = []
 	for rel, rewrite in REWRITE.items():
 		path = root / rel
 		original = path.read_text(encoding="utf-8")
 		updated = rewrite(original, old, new, rel)
-		if updated == original:
-			continue
-		changed.append(rel)
+		if updated != original:
+			prepared.append((rel, original, updated))
+	applied = []
+	try:
 		if not dry_run:
-			write_atomic(path, updated)
-	return changed
+			for rel, original, updated in prepared:
+				write_atomic(root / rel, updated)
+				applied.append((rel, original))
+	except BaseException:
+		for rel, original in reversed(applied):
+			write_atomic(root / rel, original)
+		raise
+	return [rel for rel, _, _ in prepared]
 
 
 def do_check(root):
 	old = current_version(root)
 	date = today().strftime("%Y%m%d")
-	match = re.fullmatch(r"11\.(\d{8})\d\.0", old)
+	match = re.fullmatch(r"12\.(\d{8})\d{2}\.0", old)
 	if match and match.group(1) == date:
 		print(f"{old} is today's version")
 		return 0

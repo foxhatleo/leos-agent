@@ -1,6 +1,6 @@
 """Behavioral tests for the date-based version bump.
 
-The scheme is 11.YYYYMMDDX.0 -- major 11, the UTC date with a single-digit
+The scheme is 12.YYYYMMDDXX.0 -- major 12, the UTC date with a two-digit
 serial appended as the minor, patch always 0. The serial is what makes a second
 release on the same day possible, and the reason it must stay one digit is the
 ordering inversion these tests pin down.
@@ -79,28 +79,28 @@ class BumpFixture(unittest.TestCase):
 class TestNextVersion(BumpFixture):
     def test_a_fresh_day_starts_the_serial_at_zero(self):
         with pinned(self.bump, 2026, 9, 7):
-            self.assertEqual(self.bump.next_version("10.7.2"), "11.202609070.0")
+            self.assertEqual(self.bump.next_version("10.7.2"), "12.2026090700.0")
 
     def test_same_day_increments_the_serial(self):
         with pinned(self.bump, 2026, 9, 7):
-            self.assertEqual(self.bump.next_version("11.202609070.0"), "11.202609071.0")
-            self.assertEqual(self.bump.next_version("11.202609078.0"), "11.202609079.0")
+            self.assertEqual(self.bump.next_version("12.2026090700.0"), "12.2026090701.0")
+            self.assertEqual(self.bump.next_version("12.2026090798.0"), "12.2026090799.0")
 
     def test_a_new_day_resets_the_serial(self):
         with pinned(self.bump, 2026, 9, 8):
-            self.assertEqual(self.bump.next_version("11.202609075.0"), "11.202609080.0")
+            self.assertEqual(self.bump.next_version("12.2026090705.0"), "12.2026090800.0")
 
-    def test_a_tenth_release_in_one_day_is_refused(self):
+    def test_a_101st_release_in_one_day_is_refused(self):
         # minor 2026090710 would sort ABOVE the next day's 202609080, silently
         # inverting version order. Refusing is the whole reason this guard runs.
         with pinned(self.bump, 2026, 9, 7):
             with self.assertRaises(self.bump.BumpError) as caught:
-                self.bump.next_version("11.202609079.0")
-        self.assertIn("sorts above", str(caught.exception))
+                self.bump.next_version("12.2026090799.0")
+        self.assertIn("100 releases", str(caught.exception))
 
     def test_the_serial_stays_ordered_across_a_day_boundary(self):
         with pinned(self.bump, 2026, 9, 7):
-            last_today = self.bump.next_version("11.202609078.0")
+            last_today = self.bump.next_version("12.2026090798.0")
         with pinned(self.bump, 2026, 9, 8):
             first_tomorrow = self.bump.next_version(last_today)
         minor = lambda v: int(v.split(".")[1])
@@ -116,9 +116,9 @@ class TestRewrite(BumpFixture):
             old = self.bump.current_version(root)
             self.assertEqual(old, self.STALE)
             with pinned(self.bump, 2026, 9, 7):
-                changed = self.bump.rewrite_all(root, old, "11.202609070.0")
+                changed = self.bump.rewrite_all(root, old, "12.2026090700.0")
             self.assertEqual(sorted(changed), sorted(VERSIONED))
-            self.assertEqual(self.versions_in(root), {"11.202609070.0"})
+            self.assertEqual(self.versions_in(root), {"12.2026090700.0"})
 
     def test_readme_cache_paths_are_rewritten_too(self):
         # check.py fails on ANY stale version in README, and the uninstall
@@ -130,10 +130,10 @@ class TestRewrite(BumpFixture):
             old = self.bump.current_version(root)
             self.assertEqual(old, self.STALE)
             with pinned(self.bump, 2026, 9, 7):
-                self.bump.rewrite_all(root, old, "11.202609070.0")
+                self.bump.rewrite_all(root, old, "12.2026090700.0")
             readme = (root / "README.md").read_text(encoding="utf-8")
             self.assertNotIn(old, readme)
-            self.assertIn("11.202609070.0", readme)
+            self.assertIn("12.2026090700.0", readme)
 
     def test_dry_run_writes_nothing(self):
         import contextlib
@@ -144,7 +144,7 @@ class TestRewrite(BumpFixture):
             self.assertEqual(old, self.STALE)
             before = {rel: (root / rel).read_bytes() for rel in VERSIONED}
             with pinned(self.bump, 2026, 9, 7):
-                self.bump.rewrite_all(root, old, "11.202609070.0", dry_run=True)
+                self.bump.rewrite_all(root, old, "12.2026090700.0", dry_run=True)
             for rel in VERSIONED:
                 self.assertEqual((root / rel).read_bytes(), before[rel], rel)
 
@@ -174,7 +174,7 @@ class TestCheckMode(BumpFixture):
             old = self.bump.current_version(root)
             self.assertEqual(old, self.STALE)
             with pinned(self.bump, 2026, 9, 7):
-                self.bump.rewrite_all(root, old, "11.202609070.0")
+                self.bump.rewrite_all(root, old, "12.2026090700.0")
                 self.assertEqual(self.check(root), 0)
 
 

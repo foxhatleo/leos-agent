@@ -75,6 +75,15 @@ def main(argv=None):
     try:
         event = _event()
         harness = dispatch_guard.harness(event)
+        if event.get("hook_event_name") == "SessionStart":
+            try:
+                import session_models
+                session_models.remember(event, harness)
+                if os.environ.get("LEOS_AGENT_PRICE_REFRESH") != "off":
+                    import pricing
+                    pricing.refresh_background()
+            except Exception as exc:
+                _breadcrumb(f"session metadata unavailable: {exc}")
         if harness not in routing.HARNESSES:
             _breadcrumb(f"unknown harness {harness!r}; emitted nothing")
             return 0

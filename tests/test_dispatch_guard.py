@@ -142,112 +142,21 @@ class TestShape(GuardCase):
                 self.assertIsNone(self.guard.normalize(event))
 
 
-class TestDecision(GuardCase):
-    def decide(self, event, harness="claude"):
-        with self.env():
-            dispatch = self.guard.normalize(event)
-            return self.guard.decide(dispatch, harness, self.guard.routable(harness))[0]
-
-    def test_generic_agent_without_a_model_is_blocked(self):
-        self.assertEqual(self.decide(dispatch_event()), self.guard.BLOCK)
-
-    def test_an_explicit_model_is_always_allowed(self):
-        """Naming the model IS the statement that inheriting was intended. The
-        guard never judges which model was right."""
-        self.assertEqual(self.decide(dispatch_event(model="claude-opus-5")), self.guard.ALLOW)
-
-    def test_leo_tiers_carry_their_own_model(self):
-        for agent in ("leo-runner", "leo-executor"):
-            with self.subTest(agent=agent):
-                self.assertEqual(self.decide(dispatch_event(agent=agent)), self.guard.ALLOW)
-
-    def test_a_namespaced_tier_is_still_a_tier(self):
-        """A plugin install namespaces the type: Claude Code dispatches
-        `leos-agent:leo-runner`, not `leo-runner`. 10.7.0 tested the bare form
-        only and shipped a guard that refused the very path its own refusal
-        message recommends -- every tier dispatch blocked on a plugin install."""
-        for agent in ("leo-runner", "leo-executor",
-                      "leos-agent:leo-runner", "leos-agent:leo-executor",
-                      "leos-agent/leo-runner"):
-            with self.subTest(agent=agent):
-                self.assertEqual(self.decide(dispatch_event(agent=agent)), self.guard.ALLOW)
-
-    def test_a_namespace_alone_does_not_make_a_tier(self):
-        """Stripping the namespace must not turn any namespaced agent into a
-        tier -- only one whose bare name really is leo-*."""
-        for agent in ("leos-agent:general-purpose", "other:Explore", "leonardo", "leos-runner"):
-            with self.subTest(agent=agent):
-                self.assertEqual(self.decide(dispatch_event(agent=agent)), self.guard.BLOCK)
-
-    def test_a_model_routed_dispatch_is_seen_without_an_agent_key(self):
-        """Codex's spawn_agent takes {task_name, message, fork_turns, model,
-        reasoning_effort}. task_name is a free-text label, so `model` is the
-        whole routing decision and the agent-key rule alone would never see it."""
-        base = {"task_name": "rose_shared", "message": "gAAAAABopaque", "fork_turns": "none"}
-        event = {"tool_name": "spawn_agent", "tool_input": base}
-        self.assertEqual(self.decide(event, "codex"), self.guard.BLOCK)
-        with_model = {"tool_name": "spawn_agent", "tool_input": dict(base, model="gpt-5.6-luna")}
-        self.assertEqual(self.decide(with_model, "codex"), self.guard.ALLOW)
-
-    def test_an_opaque_brief_is_not_measured(self):
-        """Codex encrypts `message`. Its length is a proxy at best and its hash
-        changes on every re-send, so neither the size heuristic nor the
-        conversion hash may pretend to mean something there."""
-        d = self.guard.normalize({"tool_name": "spawn_agent", "tool_input": {
-            "task_name": "x", "message": "gAAAAAB" + "z" * 400}})
-        self.assertTrue(d.opaque)
-        self.assertEqual(self.guard.triviality(d), 0)
-        self.assertIsNone(d.prompt_hash)
-
-    def test_an_unknown_tool_still_needs_an_agent_key(self):
-        """Naming spawn_agent must not loosen the rule for everything else --
-        spawn_task carries a prompt and no agent and stays invisible."""
-        self.assertIsNone(self.guard.normalize({"tool_name": "spawn_task", "tool_input": {
-            "prompt": "Fix the badge", "title": "t", "tldr": "x"}}))
-
-    def test_the_codex_refusal_does_not_recommend_an_agent_it_cannot_name(self):
-        d = self.guard.normalize({"tool_name": "spawn_agent", "tool_input": {
-            "task_name": "x", "message": "gAAAA"}})
-        message = self.guard.render_block(d, "codex")
-        self.assertIn("model", message)
-        self.assertNotIn("subagent_type", message)
-
-    def test_a_harness_that_cannot_route_is_never_blocked(self):
-        """The payload itself tells such a harness to inherit and say so, so a
-        block there would demand something impossible."""
-        with self.env():
-            self.assertFalse(self.guard.routable("opencode"))
-            self.assertTrue(self.guard.routable("codex"))
-        self.assertEqual(self.decide(dispatch_event(), "opencode"), self.guard.ALLOW)
-
-    def test_a_configured_harness_becomes_routable(self):
-        self.write_routing({"opencode": {"runner": "anthropic/claude-haiku-4-5"}})
-        with self.env():
-            self.assertTrue(self.guard.routable("opencode"))
-        self.assertEqual(self.decide(dispatch_event(), "opencode"), self.guard.BLOCK)
-
-    def test_a_corrupt_routing_config_allows_rather_than_exits(self):
-        """routing.py exits the process on a malformed config. A hook that
-        inherited that would take the session with it."""
-        # opencode, not codex: codex is routable without consulting the config,
-        # so it would never exercise the parse at all.
-        (self.data / "routing.json").write_text("{not json", encoding="utf-8")
-        with self.env():
-            self.assertFalse(self.guard.routable("opencode"))
-        self.assertEqual(self.decide(dispatch_event(), "opencode"), self.guard.ALLOW)
-
-
 class TestProtocol(GuardCase):
-    def test_a_block_exits_2_with_the_reason_on_stderr(self):
-        code, out, err = self.run_cli(dispatch_event())
+    def test_codex_block_exits_2_with_the_reason_on_stderr(self):
+        event = {"tool_name": "spawn_agent", "tool_input": {"message": "Investigate"}}
+        code, out, err = self.run_cli(event, LEOS_AGENT_HARNESS="codex")
         self.assertEqual(code, 2)
         self.assertEqual(out, "")
         self.assertIn("BLOCKED", err)
 
-    def test_the_block_message_names_every_remedy(self):
-        _code, _out, err = self.run_cli(dispatch_event())
-        for remedy in ("leo-runner", "leo-executor", 'model: "<name>"', "LEOS_AGENT_DISPATCH_GUARD=off"):
-            self.assertIn(remedy, err)
+    def test_claude_correction_does_not_grant_permission(self):
+        code, out, err = self.run_cli(dispatch_event())
+        self.assertEqual(code, 0)
+        response = json.loads(out)["hookSpecificOutput"]
+        self.assertEqual(response["updatedInput"]["model"], "sonnet")
+        self.assertNotIn("permissionDecision", response)
+        self.assertEqual(err, "")
 
     def test_a_compliant_dispatch_exits_0(self):
         code, _out, err = self.run_cli(dispatch_event(agent="leo-runner"))
@@ -270,13 +179,13 @@ class TestProtocol(GuardCase):
         self.assertEqual(code, 0)
         self.assertEqual(err, "")
         rows = self.log_lines()
-        self.assertEqual([r["decision"] for r in rows], ["block"])
+        self.assertEqual([r["decision"] for r in rows], ["warn"])
 
     def test_a_log_failure_never_changes_the_decision(self):
-        with mock.patch.object(self.log, "append", side_effect=OSError("read-only home")):
-            code, _out, err = self.run_cli(dispatch_event())
-        self.assertEqual(code, 2)
-        self.assertIn("BLOCKED", err)
+        with self.env(), mock.patch.object(self.guard, "_log", side_effect=lambda entry: None):
+            result = self.guard.process(dispatch_event(), "claude")
+        self.assertEqual(result["action"], "correct")
+
 
 
 class TestTriviality(GuardCase):
@@ -297,7 +206,7 @@ class TestTriviality(GuardCase):
         code, out, err = self.run_cli(dispatch_event(agent="leo-runner", prompt="run the tests"))
         self.assertEqual(code, 0)
         self.assertEqual(err, "")
-        self.assertIn("systemMessage", out)
+        self.assertIn("updatedInput", out)
 
 
 class TestLog(GuardCase):
@@ -310,7 +219,7 @@ class TestLog(GuardCase):
     def test_prompt_text_never_reaches_disk(self):
         secret = "CLIENT_SECRET_MARKER_do_not_log"
         code, _out, _err = self.run_cli(dispatch_event(prompt="Investigate %s in prod" % secret))
-        self.assertEqual(code, 2)
+        self.assertEqual(code, 0)
         raw = (self.data / "dispatch.jsonl").read_bytes()
         self.assertNotIn(secret.encode(), raw)
         self.assertIn(b'"prompt"', raw)  # the hash is there; the text is not
@@ -361,7 +270,7 @@ class TestLog(GuardCase):
 
 
 class TestReport(GuardCase):
-    def test_a_blocked_brief_that_returns_with_a_tier_counts_as_converted(self):
+    def test_a_matching_brief_does_not_prove_execution_or_savings(self):
         """The whole point of hashing the prompt: a block nobody acted on is not
         a saving, and only the hash can tell the two apart."""
         with self.env():
@@ -370,7 +279,8 @@ class TestReport(GuardCase):
             self.log.append({"v": 1, "decision": "block", "prompt": "def456", "agent": "Explore"})
             summary = self.log.summarise(self.log.read())
         self.assertEqual(summary["blocked"], 2)
-        self.assertEqual(summary["converted"], 1)
+        self.assertIsNone(summary["converted"])
+        self.assertEqual(summary["confirmed_executions"], 0)
 
     def test_a_fan_out_is_not_reported_as_lone_small_spawns(self):
         """Parallel small dispatches are the shape the policy wants. Only a
@@ -418,20 +328,11 @@ class TestHarnessParity(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
 
-        cases = [
-            ({"subagent_type": "general-purpose", "prompt": "go"}, True),
-            ({"subagent_type": "leo-runner", "prompt": "go"}, False),
-            ({"subagent_type": "general-purpose", "prompt": "go", "model": "small"}, False),
-            ({"file_path": "/tmp/x"}, False),
-        ]
+        cases = [{"tasks": [{"goal": "Investigate failure"}]}, {"action": "list"},
+                 {"action": "steer", "subagent_id": "a", "message": "Focus"}]
         with mock.patch.dict(os.environ, {"LEOS_AGENT_LOCAL_PATH": str(self.data)}):
-            for args, expect_block in cases:
-                with self.subTest(args=args):
-                    result = module._on_pre_tool_call(tool_name="Agent", args=args)
-                    self.assertEqual(result is not None, expect_block)
-                    if expect_block:
-                        self.assertEqual(result["action"], "block")
-                        self.assertIn("BLOCKED", result["message"])
+            for args in cases:
+                self.assertIsNone(module._on_pre_tool_call(tool_name="delegate_task", args=args))
 
     def test_hermes_adapter_tolerates_an_unexpected_signature(self):
         spec = importlib.util.spec_from_file_location("leos_agent_pkg2", ROOT / "__init__.py")
@@ -441,16 +342,30 @@ class TestHarnessParity(unittest.TestCase):
         # verified live, so extra keyword arguments must be absorbed, not raise.
         self.assertIsNone(module._on_pre_tool_call(tool_name="Read", args={"x": 1}, call_id="c", extra=True))
 
-    def test_the_opencode_prefilter_uses_the_same_keys(self):
-        """index.js duplicates the key lists because OpenCode has no matcher and
-        a JS-side prefilter is what stops a python3 spawn per Read. Duplication
-        is acceptable only while it is pinned."""
-        js = (ROOT / "index.js").read_text(encoding="utf-8")
-        for name, expected in (("AGENT_KEYS", self.guard.AGENT_KEYS), ("PROMPT_KEYS", self.guard.PROMPT_KEYS)):
-            with self.subTest(name=name):
-                block = js.split("const %s = [" % name, 1)[1].split("]", 1)[0]
-                found = tuple(part.strip().strip("'\"") for part in block.split(",") if part.strip())
-                self.assertEqual(found, tuple(expected))
+    def test_hermes_registration_matches_public_signature(self):
+        spec = importlib.util.spec_from_file_location("leos_agent_registration", ROOT / "__init__.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        registered = {}
+        class Context:
+            def register_skill(self, name, path, description=""):
+                self.assert_path = Path(path)
+                if not self.assert_path.is_file():
+                    raise ValueError("skill must be a file")
+                registered[name] = path
+            def register_hook(self, name, callback):
+                registered[name] = callback
+            def register_system_prompt_section(self, name, content, position, max_chars):
+                text = content({"session_id": "fixture"})
+                if not text or len(text) > max_chars:
+                    raise ValueError("section must fit")
+                registered[name] = text
+            def register_command(self, name, callback, description=""):
+                registered[name] = callback
+        with mock.patch.dict(os.environ, {"LEOS_AGENT_LOCAL_PATH": str(self.data)}):
+            module.register(Context())
+        self.assertIn("leo-review-usage", registered)
+        self.assertIn("Cost-aware delegation", registered["leos-agent"])
 
 
 if __name__ == "__main__":

@@ -64,40 +64,40 @@ class TestConfigLocation(RoutingCase):
 class TestValidation(RoutingCase):
     def assert_rejects(self, payload, needle):
         self.write_config(payload)
-        with self.assertRaises(SystemExit) as caught:
+        with self.assertRaises((SystemExit, self.routing.RoutingError)) as caught:
             self.load_config()
         self.assertIn(needle, str(caught.exception))
 
     def test_unknown_harness_is_rejected(self):
         # Silently ignoring it would leave that harness on the expensive model,
         # which is the failure this config exists to remove.
-        self.assert_rejects({"clod": {"runner": "x"}}, "not a harness")
+        self.assert_rejects({"clod": {"cheap": "x"}}, "not a harness")
 
     def test_unknown_role_and_field_are_rejected(self):
         self.assert_rejects({"cursor": {"runnr": "x"}}, "unknown key")
-        self.assert_rejects({"cursor": {"runner": {"model": "x", "temperature": 1}}}, "unknown field")
+        self.assert_rejects({"cursor": {"cheap": {"model": "x", "temperature": 1}}}, "unknown field")
 
     def test_empty_or_missing_model_is_rejected(self):
-        self.assert_rejects({"cursor": {"runner": {"effort": "low"}}}, "non-empty 'model'")
-        self.assert_rejects({"cursor": {"runner": "  "}}, "non-empty 'model'")
+        self.assert_rejects({"cursor": {"cheap": {"effort": "low"}}}, "non-empty 'model'")
+        self.assert_rejects({"cursor": {"cheap": "  "}}, "non-empty 'model'")
 
     def test_malformed_json_names_the_file(self):
         (self.data / "routing.json").write_text("{nope", encoding="utf-8")
-        with self.assertRaises(SystemExit) as caught:
+        with self.assertRaises((SystemExit, self.routing.RoutingError)) as caught:
             self.load_config()
         self.assertIn(str(self.data / "routing.json"), str(caught.exception))
 
     def test_model_strings_are_free_form(self):
         # Whatever the harness accepts, or whatever IT allowlisted, goes in
         # verbatim -- there is deliberately no known-model list to fall foul of.
-        self.write_config({"opencode": {"runner": "some-vendor/an_odd.model:v3"}})
+        self.write_config({"opencode": {"cheap": "some-vendor/an_odd.model:v3"}})
         self.assertEqual(
-            self.load_config()["opencode"]["runner"]["model"], "some-vendor/an_odd.model:v3"
+            self.load_config()["opencode"]["cheap"]["model"], "some-vendor/an_odd.model:v3"
         )
 
     def test_bare_string_is_shorthand_for_a_model(self):
-        self.write_config({"cursor": {"runner": "fast-1"}})
-        self.assertEqual(self.load_config()["cursor"]["runner"], {"model": "fast-1", "effort": None})
+        self.write_config({"cursor": {"cheap": "fast-1"}})
+        self.assertEqual(self.load_config()["cursor"]["cheap"], {"model": "fast-1", "effort": None})
 
 
 class TestRendering(RoutingCase):
@@ -106,7 +106,7 @@ class TestRendering(RoutingCase):
             with self.subTest(harness=harness):
                 body = self.installer.payload_body(ROOT, harness, {})
                 self.assertNotIn(self.installer.ROUTING_OPEN, body)
-                self.assertIn("Never upgrade a cheaper session", body)
+                self.assertIn("Never deliberately choose a child more expensive", body)
 
     def test_rendering_is_smaller_than_the_unrendered_file(self):
         # Each machine stops carrying the other harnesses' model names. If this
@@ -117,25 +117,25 @@ class TestRendering(RoutingCase):
                 self.assertLess(len(self.installer.payload_body(ROOT, harness, {}).encode("utf-8")), raw)
 
     def test_configured_models_reach_the_stanza(self):
-        config = {"cursor": {"runner": {"model": "grok-code-fast-1", "effort": None}}}
+        config = {"cursor": {"cheap": {"model": "grok-code-fast-1", "effort": None}}}
         stanza = self.routing.stanza("cursor", config)
         self.assertIn("grok-code-fast-1", stanza)
-        self.assertIn("leo-executor inherits", stanza)
+        self.assertIn("standard: unconfigured", stanza)
 
     def test_roles_are_independent(self):
-        config = {"pi": {"executor": {"model": "m", "effort": None}}}
-        self.assertIn("leo-runner inherits", self.routing.stanza("pi", config))
+        config = {"pi": {"standard": {"model": "m", "effort": None}}}
+        self.assertIn("cheap: unconfigured", self.routing.stanza("pi", config))
 
     def test_claude_uses_a_model_override_not_a_new_agent_file(self):
-        config = {"claude": {"runner": {"model": "haiku-x", "effort": None}}}
+        config = {"claude": {"cheap": {"model": "haiku-x", "effort": None}}}
         stanza = self.routing.stanza("claude", config)
-        self.assertIn('subagent_type: "leo-runner"', stanza)
-        self.assertIn('model: "haiku-x"', stanza)
+        self.assertIn('`leo-cheap`', stanza)
+        self.assertIn('cheap: `haiku-x`', stanza)
 
     def test_codex_toml_takes_the_configured_model_and_keeps_shipped_defaults(self):
         shipped = (ROOT / "payload" / "codex-agents" / "leo-runner.toml").read_text(encoding="utf-8")
         rendered = self.installer.render_codex_agent(
-            shipped, "leo-runner", {"codex": {"runner": {"model": "gpt-x", "effort": None}}}
+            shipped, "leo-runner", {"codex": {"cheap": {"model": "gpt-x", "effort": None}}}
         )
         self.assertIn('model = "gpt-x"', rendered)
         # effort was not configured, so the profile keeps the one it ships with
@@ -143,7 +143,7 @@ class TestRendering(RoutingCase):
         self.assertEqual(self.installer.render_codex_agent(shipped, "leo-runner", {}), shipped)
 
     def test_rendering_is_deterministic(self):
-        config = {"cursor": {"runner": {"model": "a", "effort": None}, "executor": {"model": "b", "effort": None}}}
+        config = {"cursor": {"cheap": {"model": "a", "effort": None}, "standard": {"model": "b", "effort": None}}}
         self.assertEqual(self.routing.stanza("cursor", config), self.routing.stanza("cursor", config))
 
 
@@ -156,7 +156,7 @@ class TestInstallIdempotency(RoutingCase):
     def test_second_install_writes_nothing_and_config_survives(self):
         home = Path(self.tmp.name) / "home"
         home.mkdir()
-        self.write_config({"codex": {"runner": {"model": "gpt-x", "effort": "minimal"}}})
+        self.write_config({"codex": {"cheap": {"model": "gpt-x", "effort": "minimal"}}})
         before = (self.data / "routing.json").read_bytes()
 
         first = self.install("codex", home)
@@ -171,10 +171,10 @@ class TestInstallIdempotency(RoutingCase):
     def test_uninstall_leaves_the_config_alone(self):
         home = Path(self.tmp.name) / "home2"
         home.mkdir()
-        self.write_config({"cursor": {"runner": "fast-1"}})
+        self.write_config({"cursor": {"cheap": "fast-1"}})
         before = (self.data / "routing.json").read_bytes()
         self.install("cursor", home)
-        rule = home / ".cursor" / "rules" / "leos-agent-routing.mdc"
+        rule = home / ".cursor" / "agents" / "leo-cheap.md"
         self.assertIn("fast-1", rule.read_text())
 
         with mock.patch.dict(os.environ, {"LEOS_AGENT_LOCAL_PATH": str(self.data)}), \
@@ -187,7 +187,7 @@ class TestInstallIdempotency(RoutingCase):
         home = Path(self.tmp.name) / "home3"
         home.mkdir()
         self.install("codex", home)
-        self.write_config({"codex": {"runner": {"model": "gpt-changed", "effort": None}}})
+        self.write_config({"codex": {"cheap": {"model": "gpt-changed", "effort": None}}})
         with mock.patch.dict(os.environ, {"LEOS_AGENT_LOCAL_PATH": str(self.data)}), \
              mock.patch.object(Path, "home", staticmethod(lambda: home)):
             results = self.installer.run("codex", ROOT, args(check=True, writes=False))
@@ -204,7 +204,7 @@ class WriteCase(RoutingCase):
         return buffer.getvalue()
 
     def expect_refusal(self, *argv):
-        with self.assertRaises(SystemExit) as caught:
+        with self.assertRaises((SystemExit, self.routing.RoutingError)) as caught:
             self.run_cli(*argv)
         return str(caught.exception)
 
@@ -224,31 +224,31 @@ class TestWriting(WriteCase):
         self.assertEqual(sorted(p.name for p in self.data.iterdir()), [])
 
         self.run_cli("set", "--harness", "pi", "--runner", "m")
-        self.assertEqual(self.raw(), {"pi": {"runner": {"model": "m"}}})
+        self.assertEqual(self.raw(), {"pi": {"cheap": {"model": "m"}}})
 
     def test_set_preserves_other_harnesses_and_their_shorthand(self):
         # Writing load()'s output back would normalise every other harness's
         # entry as a side effect of touching one. Leo's file is his.
-        self.write_config({"cursor": {"runner": "fast-1"}, "opencode": {"executor": {"model": "m"}}})
+        self.write_config({"cursor": {"cheap": "fast-1"}, "opencode": {"standard": {"model": "m"}}})
         self.run_cli("set", "--harness", "codex", "--runner", "gpt-x")
         after = self.raw()
-        self.assertEqual(after["cursor"], {"runner": "fast-1"})
-        self.assertEqual(after["opencode"], {"executor": {"model": "m"}})
-        self.assertEqual(after["codex"], {"runner": {"model": "gpt-x"}})
+        self.assertEqual(after["cursor"], {"cheap": "fast-1"})
+        self.assertEqual(after["opencode"], {"standard": {"model": "m"}})
+        self.assertEqual(after["codex"], {"cheap": {"model": "gpt-x"}})
 
     def test_set_replaces_a_role_wholesale_including_its_effort(self):
         # Merging within a role would leave a stale effort silently attached to
         # a model that was never chosen with it.
         self.run_cli("set", "--harness", "codex", "--runner", "gpt-x", "--runner-effort", "low")
         out = self.run_cli("set", "--harness", "codex", "--runner", "gpt-y")
-        self.assertEqual(self.raw()["codex"]["runner"], {"model": "gpt-y"})
+        self.assertEqual(self.raw()["codex"]["cheap"], {"model": "gpt-y"})
         self.assertIn("(was gpt-x effort=low)", out)
 
     def test_roles_are_written_independently(self):
         self.run_cli("set", "--harness", "cursor", "--runner", "a")
         self.run_cli("set", "--harness", "cursor", "--executor", "b")
         self.assertEqual(
-            self.raw()["cursor"], {"runner": {"model": "a"}, "executor": {"model": "b"}}
+            self.raw()["cursor"], {"cheap": {"model": "a"}, "standard": {"model": "b"}}
         )
 
     def test_effort_needs_its_model_and_a_role_is_required(self):
@@ -261,7 +261,7 @@ class TestWriting(WriteCase):
     def test_an_unknown_harness_never_reaches_the_file(self):
         # argparse rejects it before anything is opened, so a typo cannot leave
         # a harness silently on the expensive model.
-        with self.assertRaises(SystemExit) as caught:
+        with self.assertRaises((SystemExit, self.routing.RoutingError)) as caught:
             self.run_cli("set", "--harness", "clod", "--runner", "x")
         self.assertEqual(caught.exception.code, 2)
         self.assertFalse((self.data / "routing.json").exists())
@@ -295,7 +295,7 @@ class TestWriting(WriteCase):
     def test_an_existing_bad_key_blocks_the_write_rather_than_being_edited_around(self):
         # Writing anyway would leave the typo -- and the harness it silently
         # stranded on the expensive model -- in place.
-        self.write_config({"clod": {"runner": "x"}})
+        self.write_config({"clod": {"cheap": "x"}})
         before = (self.data / "routing.json").read_bytes()
         self.assertIn("not a harness", self.expect_refusal(
             "set", "--harness", "codex", "--runner", "gpt-x"))
@@ -304,7 +304,7 @@ class TestWriting(WriteCase):
     def test_unset_drops_a_role_then_the_harness_key(self):
         self.run_cli("set", "--harness", "cursor", "--runner", "a", "--executor", "b")
         self.run_cli("unset", "--harness", "cursor", "--runner")
-        self.assertEqual(self.raw(), {"cursor": {"executor": {"model": "b"}}})
+        self.assertEqual(self.raw(), {"cursor": {"standard": {"model": "b"}}})
         self.run_cli("unset", "--harness", "cursor", "--executor")
         # An empty harness key is a shape load() never produces, so never leave one.
         self.assertEqual(self.raw(), {})
@@ -313,7 +313,7 @@ class TestWriting(WriteCase):
         self.run_cli("set", "--harness", "pi", "--runner", "a", "--executor", "b")
         self.run_cli("set", "--harness", "cursor", "--runner", "keep-me")
         self.run_cli("unset", "--harness", "pi")
-        self.assertEqual(self.raw(), {"cursor": {"runner": {"model": "keep-me"}}})
+        self.assertEqual(self.raw(), {"cursor": {"cheap": {"model": "keep-me"}}})
 
     def test_unset_with_no_config_writes_no_config(self):
         # The write path takes state.py's flock, so it leaves that lock
@@ -335,7 +335,7 @@ class TestWriting(WriteCase):
             with self.subTest(harness=harness):
                 self.run_cli("set", "--harness", harness, "--runner", f"{harness}-m",
                              "--runner-effort", "low")
-                entry = self.load_config()[harness]["runner"]
+                entry = self.load_config()[harness]["cheap"]
                 self.assertEqual(entry, {"model": f"{harness}-m", "effort": "low"})
 
     def test_a_written_config_reaches_the_installed_payload(self):
@@ -348,7 +348,7 @@ class TestWriting(WriteCase):
              mock.patch.object(Path, "home", staticmethod(lambda: home)):
             self.installer.run("cursor", ROOT, args())
             second = self.installer.run("cursor", ROOT, args())
-        rule = home / ".cursor" / "rules" / "leos-agent-routing.mdc"
+        rule = home / ".cursor" / "agents" / "leo-cheap.md"
         self.assertIn("fast-9", rule.read_text())
         self.assertFalse([r.target for r in second if r.changed])
 

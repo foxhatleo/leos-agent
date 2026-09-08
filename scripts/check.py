@@ -260,7 +260,7 @@ def main():
 	# names no model, and a model that does not know that wastes a turn finding
 	# out. Prose elsewhere may be trimmed; this line pays for itself.
 	payload_text = (ROOT / "rules" / "preferences.md").read_text(encoding="utf-8")
-	check("refused, not defaulted" in payload_text, "rules/preferences.md: lost the line telling the model a modelless dispatch is refused")
+	check(all(tier in payload_text for tier in ("Cheap:", "Standard:", "Parent-level:")), "rules/preferences.md: missing three-tier guidance")
 
 	# Payload files copied by the installer must carry the provenance string, or
 	# it will mistake its own installed copy for a stranger's file and refuse to
