@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -102,6 +103,15 @@ class TestRegistryState(unittest.TestCase):
 
 
 class TestTagAgreement(unittest.TestCase):
+    def test_accepted_upload_without_public_version_is_not_success(self):
+        with mock.patch.object(publish_npm, "pack_inventory", return_value=publish_npm.REQUIRED_FILES), \
+             mock.patch.object(publish_npm, "registry_state", side_effect=["absent", "absent"]), \
+             mock.patch.object(publish_npm, "publish") as upload, \
+             contextlib.redirect_stderr(io.StringIO()) as err, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(publish_npm.main([]), 1)
+        upload.assert_called_once()
+        self.assertIn("staged packages", err.getvalue())
+
     def test_declared_version_matches_package_json(self):
         expected = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["version"]
         self.assertEqual(publish_npm.declared_version(), expected)

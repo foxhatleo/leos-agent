@@ -135,7 +135,11 @@ def main(argv=None):
 			return 0
 
 		publish(args.npm)
-		print(f"published {PACKAGE}@{version}")
+		# npm can accept an upload into staging without making it public.
+		# A zero exit code proves upload acceptance, not registry availability.
+		if registry_state(version, args.npm) != "present":
+			raise ReleaseError("upload accepted but the version is not publicly available; inspect npm staged packages for approval or registry propagation before retrying")
+		print(f"published and verified {PACKAGE}@{version}")
 		return 0
 	except ReleaseError as exc:
 		print(f"error: {exc}", file=sys.stderr)
