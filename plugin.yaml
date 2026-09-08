@@ -3,8 +3,7 @@ api_version: 1
 name: leos-agent
 version: 11.202609070.0
 description: >-
-  Leo's portable agent operating policy: orchestrator main thread,
-  subagent-first execution, cost-tiered model routing.
+  Adaptive delegation, cost-aware model routing, and deferred workflows across coding harnesses.
 author: Leo Liang
 homepage: https://github.com/foxhatleo/leos-agent
 license: MIT

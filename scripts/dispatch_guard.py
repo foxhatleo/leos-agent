@@ -96,8 +96,7 @@ def harness(event):
 def normalize(event, _harness=None):
     """event -> Dispatch, or None when this is not a subagent dispatch.
 
-    Never raises. Five harnesses' envelopes are unverified, and a KeyError here
-    would turn a routing guard into an outage.
+    Tolerate missing optional fields across native event versions.
     """
     if not isinstance(event, dict):
         return None
@@ -140,13 +139,8 @@ def normalize(event, _harness=None):
 def triviality(dispatch):
     """0..3. A features-only score; it never changes the exit code.
 
-    Say plainly what this can and cannot see: a trivial spawn has small *work*,
-    and tool input only shows the *brief*. The two failure modes happen to
-    collapse -- a short brief is either work too small to deserve a cold context
-    or work that is under-briefed, and the policy forbids both -- but roughly one
-    in six legitimate runner dispatches will still score here. That rate is fine
-    for a log line and disqualifying for a block, which is why this is only ever
-    a log line.
+    A short brief can describe either small or substantial work. This signal
+    only helps inspect dispatch patterns; it never establishes wasted spend.
     """
     if dispatch is None or dispatch.opaque:
         return 0

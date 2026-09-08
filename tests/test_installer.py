@@ -159,7 +159,7 @@ class TestOpenCodePayload(unittest.TestCase):
             }
 
             def copies(results):
-                return [r for r in results if r.target not in advisory_labels]
+                return [r for r in results if r.target not in advisory_labels and "/commands/" not in r.target]
 
             first = self.run_opencode(home)
             self.assertTrue(all(r.status == "created" for r in copies(first)), [(r.target, r.status) for r in first])
@@ -513,3 +513,18 @@ class TestLegacyBlockMigration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLegacyMigration(unittest.TestCase):
+    def test_unchanged_old_commands_are_removed_but_edits_preserved(self):
+        installer = load_installer()
+        original = "---\ndescription: Stage a pending (unsubmitted) GitHub review on a pull request of this repository.\nargument-hint: \"[pr-number]\"\n---\n\nUse the leos-agent `review-pr` skill on `$ARGUMENTS`.\n\nWith no argument, review the pull request for the current branch. Comments are\nstaged as a PENDING review — never submitted, never made public.\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "review-pr.md"
+            dest.write_text(original)
+            self.assertTrue(installer.legacy_copy(original))
+            installer.remove_legacy_command(dest, args(), "legacy")
+            self.assertFalse(dest.exists())
+            dest.write_text(original + "My change\n")
+            installer.remove_legacy_command(dest, args(), "legacy")
+            self.assertTrue(dest.exists())

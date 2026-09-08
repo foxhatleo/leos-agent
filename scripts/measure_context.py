@@ -19,22 +19,18 @@ ROOT = Path(__file__).resolve().parent.parent
 # Deliberately tight ceilings. Raise one only with a concrete reason and record
 # the before/after output in the change that raises it.
 LIMITS = {
-	"global_policy_bytes": 4_500,
-	# What a session actually loads at start, per harness -- nothing is installed
-	# any more, and this is measured live off the plugin directory. Rendering the
-	# routing region per harness dropped this below the old whole-file figure of
-	# 4497, and it must stay there: the model config exists to save money, so it
-	# may not cost always-loaded bytes to have. A configured harness exceeds this
-	# only by the length of the model names chosen, which is bounded and deliberate.
-	"rendered_policy_bytes": 4_497,
+	"global_policy_bytes": 2_200,
+	# Default policy body, with native Cursor loading accounted separately.
+	"rendered_policy_bytes": 2_200,
 	"codex_implicit_skill_metadata_bytes": 600,
+	"codex_discoverable_skill_metadata_bytes": 2_000,
 	"claude_implicit_skill_metadata_bytes": 800,
 	"codex_agent_description_bytes": 550,
 	"claude_agent_description_bytes": 550,
 	# Command descriptions are listed alongside skills in Claude Code and Cursor,
 	# so they are always-loaded context on the same terms as skill metadata.
-	"command_description_bytes": 400,
-	"review_dispatch_bytes": 3_500,
+	"command_description_bytes": 0,
+	"review_dispatch_bytes": 1_800,
 }
 
 
@@ -82,18 +78,16 @@ def agent_description(path):
 
 
 def rendered_policy():
-	"""The payload body a session-start hook would emit per harness, with no
-	routing config present.
-
-	This is what a session actually loads -- rules/preferences.md on disk keeps a
-	harness-neutral default in its routing region, and emit_payload.py narrows it
-	to one harness live, at session start. Measured with the config forced empty
-	so the number is a property of the repository, not of whoever runs it.
+	"""Default rendered bodies; Cursor instead loads the native rule body.
+	Harness wrappers and listing formats are outside this byte measurement.
 	"""
 	spec = importlib.util.spec_from_file_location("leo_install_measure", ROOT / "scripts" / "leo-install.py")
 	installer = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(installer)
-	return {h: byte_len(installer.payload_body(ROOT, h, {})) for h in installer.HARNESSES}
+	sizes = {h: byte_len(installer.payload_body(ROOT, h, {})) for h in installer.HARNESSES}
+	_, raw = frontmatter(ROOT / "rules/preferences.md")
+	sizes["cursor"] = byte_len(raw.strip())  # Cursor reads the native rule directly
+	return sizes
 
 
 def measurements():
@@ -120,6 +114,7 @@ def measurements():
 		"global_policy_bytes": byte_len(policy_body.strip()),
 		"rendered_policy_bytes": max(rendered_policy().values()),
 		"codex_implicit_skill_metadata_bytes": skill_metadata_bytes(portable, codex_implicit),
+		"codex_discoverable_skill_metadata_bytes": skill_metadata_bytes(portable, lambda *_: True),
 		"claude_implicit_skill_metadata_bytes": skill_metadata_bytes(portable + claude_only, claude_implicit),
 		"codex_agent_description_bytes": sum(byte_len(agent_description(path)) for path in agent_paths),
 		"claude_agent_description_bytes": claude_agent_bytes,
@@ -138,13 +133,14 @@ def main(argv=None):
 	if args.json:
 		print(json.dumps({"measurements": values, "limits": LIMITS}, indent=2, sort_keys=True))
 	else:
-		print("Static prompt footprint (bytes; tokens are roughly bytes / 4 for this prose)")
+		print("Static prompt text (UTF-8 bytes; byte/4 is only a rough prose-token proxy)")
 		for name, value in values.items():
 			print(f"  {name:38} {value:5}  limit {LIMITS[name]:5}")
-		print("  rendered_policy_bytes is the worst case across harnesses; each one loads:")
+		print("  default policy body by harness (Cursor uses its native rule):")
 		for harness, value in sorted(rendered_policy().items()):
 			print(f"    {harness:38} {value:5}")
-		print("This excludes conversation history, tool output, cache effects, and subagent work.")
+		print("Codex implicit-invocation policy does not establish hidden metadata: both eligible and all discoverable names/descriptions are counted.")
+		print("Excludes harness wrappers, file-path metadata, conversation, tools, cache effects, and child work; these are component budgets, not total injected tokens.")
 
 	over = {name: (value, LIMITS[name]) for name, value in values.items() if value > LIMITS[name]}
 	if args.check and over:

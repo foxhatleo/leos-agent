@@ -386,13 +386,15 @@ class TestSkillMatchesCLI(RoutingCase):
             "render": {"--harness"},
             "path": set(),
             "set": {"--harness", "--runner", "--runner-effort", "--executor",
-                    "--executor-effort", "--dry-run"},
-            "unset": {"--harness", "--runner", "--executor", "--dry-run"},
+                    "--executor-effort", "--cheap", "--cheap-effort",
+                    "--standard", "--standard-effort", "--dry-run"},
+            "unset": {"--harness", "--runner", "--executor", "--cheap",
+                      "--standard", "--dry-run"},
         }
         seen = set()
         for path in sources:
             text = path.read_text(encoding="utf-8")
-            for match in re.finditer(r"routing\.py (\w[\w-]*)((?:[^\n`]|\\\n)*)", text):
+            for match in re.finditer(r"routing\.py[\"']? (\w[\w-]*)((?:\\\n|[^\n`])*)", text):
                 mode, tail = match.group(1), match.group(2)
                 with self.subTest(source=path.name, mode=mode):
                     self.assertIn(mode, parser_modes)

@@ -26,6 +26,15 @@ PACKAGE = "leos-agent"
 FORBIDDEN_PARTS = ("__pycache__",)
 FORBIDDEN_SUFFIXES = (".pyc", ".log")
 FORBIDDEN_NAMES = (".DS_Store",)
+REQUIRED_FILES = {
+	"LICENSE", "package.json", "index.js", "pi-extension.js", "rules/preferences.md",
+	"payload/model-prices.json", "payload/legacy-copy-hashes.json",
+	"scripts/leo-install.py", "scripts/install_transaction.py", "scripts/jsonc_edit.py",
+	"scripts/routing.py", "scripts/routing_engine.py", "scripts/pricing.py",
+	"scripts/harness_bridge.js", "scripts/dispatch_guard.py", "scripts/dispatch_log.py",
+	"scripts/session_models.py", "scripts/payload.py", "scripts/state.py",
+	"scripts/doctor.py", "skills/install/SKILL.md",
+} | {f"agents/leo-{name}.md" for name in ("cheap", "standard", "parent", "reviewer", "runner", "executor")}
 
 
 class ReleaseError(Exception):
@@ -67,10 +76,9 @@ def forbidden_paths(inventory):
 
 
 def check_inventory(inventory):
-	if "LICENSE" not in inventory:
-		raise ReleaseError("publish tree has no LICENSE")
-	if "package.json" not in inventory:
-		raise ReleaseError("publish tree has no package.json")
+	missing = REQUIRED_FILES - set(inventory)
+	if missing:
+		raise ReleaseError("publish tree is missing required runtime files: " + ", ".join(sorted(missing)))
 	found = forbidden_paths(inventory)
 	if found:
 		raise ReleaseError("publish tree contains transient files: " + ", ".join(found))

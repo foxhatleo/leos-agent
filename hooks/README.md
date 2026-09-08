@@ -1,93 +1,45 @@
-# Hooks
+# Native hook adapters
 
-Both files carry exactly one hook: the dispatch guard, which refuses a subagent
-dispatch that names no model. See [the README](../README.md#the-dispatch-guard).
-
-**v10 shipped these empty on purpose** — policy was enforced through the payload
-and the skills, not by intercepting tool calls. 10.7.0 reversed that for one
-narrow rule, and the reason is worth keeping: the always-loaded budget in
-`scripts/measure_context.py` had 56 bytes of headroom, so the prose could not be
-strengthened, while a hook costs nothing per turn. Moving the mechanical half of
-the routing rule into code let the prose that restated it come *out* of the
-payload. The doctrine still holds for anything a machine cannot check: judgment
-stays in `rules/preferences.md`, where a model can read it.
-
-**Hook scripts live in `scripts/`, not here.** `hooks/` was absent from
-`package.json`'s `files` until 10.7.0, so a script placed here reached nobody who
-installed from npm — and it would have failed silently, since the guard fails
-open. `scripts/check.py` now asserts every hook `command` resolves to a file
-inside a shipped directory. These JSON files are pointers.
-
-**There are two files because the harnesses disagree on the format.** Claude
-Code and Codex use PascalCase event names and no version key; Cursor uses
-camelCase names wrapped in `{"version": 1, ...}`. A single file cannot satisfy
-both, so each manifest points at its own.
-
-| File | Read by | Wired via |
+| File | Harness | Loading |
 |---|---|---|
-| `hooks.json` | Claude Code, Codex | auto-discovery — **neither manifest may name it** |
-| `hooks-cursor.json` | Cursor | `.cursor-plugin/plugin.json`, which overrides Cursor's own auto-discovery |
+| hooks.json | Claude Code | Auto-discovered; do not also declare the default file in its manifest. |
+| hooks-codex.json | Codex | Explicit manifest override replaces default discovery. |
+| hooks-cursor.json | Cursor | Explicit manifest override with Cursor event names. |
 
-Both Claude Code and Codex load `hooks/hooks.json` on their own. Declaring it in
-the manifest as well is a duplicate: Codex's validator rejects the key outright,
-and Claude Code fails the entire plugin at load time with `Duplicate hooks file
-detected` — which `claude plugin validate` does **not** catch, so only a real
-install reveals it. `scripts/check.py` guards both cases.
+Claude/Codex commands set LEOS_AGENT_HARNESS explicitly. Their SessionStart
+hooks emit the compact deterministic policy; Claude also covers fork starts.
+Cursor loads its native rule directly, so its lifecycle hook emits no policy.
 
-Cursor is the exception, and only because its file has a different name: naming
-it explicitly overrides Cursor's auto-discovery, which is what keeps Cursor from
-trying to read the PascalCase `hooks.json` it cannot parse.
+Claude PreToolUse can supply updatedInput without granting tool permission.
+Codex's documented rewrite format requires an allow decision; this cost guard
+uses rejection with a precise retry instead of granting permission. Native
+profile precedence must also be respected. These are cost guardrails, not a
+sandbox or proof that every specialized tool path is intercepted.
 
-Hermes and OpenCode already carry the guard through their own mechanisms, and
-both call into `scripts/dispatch_guard.py` so that one policy has one
-implementation. Hermes hooks are Python callbacks registered from
-`register(ctx)` in `__init__.py` (`pre_tool_call`, `post_tool_call`,
-`on_session_start`, and so on), not JSON. OpenCode's are JavaScript hooks
-returned from the plugin factory in `index.js`. Pi's are extension event
-handlers. All three would be written in code rather than added here.
+Cursor checks the resolved subagent_model at subagentStart and returns a native
+deny only when needed. Missing prices are allowed with a log diagnostic. It
+never invents a model argument for Task. SubagentStop records lifecycle
+completion separately from actual model observation.
 
-## Adding one
+Claude/Codex SubagentStop reads only a bounded tail of the child's transcript
+to observe its latest response model. Transcript formats can change; missing
+observations remain unknown. The observer emits empty JSON and never asks a
+child to continue. Claude PostModelSwitch refreshes its parent-model cache.
+Codex supplies its active model directly in tool-hook events.
 
-Claude Code and Codex (`hooks.json`):
+Scripts live in scripts/ and are included in the npm package. Hook input is
+bounded; errors fail open with local diagnostics. No ordinary dispatch makes a
+network or model call. Price refresh is a separate bounded background process.
+Codex hook changes require the user's native /hooks trust review; installation
+does not silently approve them.
 
-```json
-{
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/my-check.py\"",
-            "timeout": 10
-          }
-        ]
-      }
-    ]
-  }
-}
-```
+Hermes uses Python callbacks in __init__.py. OpenCode and Pi use their native
+JavaScript plugin/extension APIs. All decisions share routing_engine.py;
+adapters only supply observations and translate supported actions.
 
-Codex exposes the same directory as `${PLUGIN_ROOT}` and accepts
-`${CLAUDE_PLUGIN_ROOT}` as an alias, so one command string serves both. A hook
-script reads the event JSON on stdin and writes its decision to stdout; exit
-code 2 blocks the call, with stderr as the reason.
+References:
 
-Cursor (`hooks-cursor.json`) uses the same idea with its own names:
-
-```json
-{
-  "version": 1,
-  "hooks": {
-    "preToolUse": [
-      { "command": "python3 ./scripts/my-check.py", "timeout": 10 }
-    ]
-  }
-}
-```
-
-After editing either file, re-run `python3 scripts/check.py` — it validates
-that both still parse and that Cursor's keeps `version: 1`. Codex additionally
-hash-pins hooks for trust, so a changed hook must be re-approved through
-`/hooks` there.
+- [Claude hooks](https://code.claude.com/docs/en/hooks)
+- [Codex hooks and plugin overrides](https://learn.chatgpt.com/docs/hooks)
+- [Cursor hooks](https://cursor.com/docs/hooks)
+- [Cursor plugin format](https://cursor.com/docs/reference/plugins)

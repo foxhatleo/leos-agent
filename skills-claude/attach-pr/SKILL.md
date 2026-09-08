@@ -3,7 +3,6 @@ name: attach-pr
 disable-model-invocation: true
 description: Attach the current Claude Code Desktop session to an existing pull request so the app shows its PR card. Creates no pull request and pushes nothing. Not for reviewing one — that is review-pr.
 argument-hint: "[pr-number|branch|TICKET-123]"
-model: sonnet[1m]
 allowed-tools:
   - Bash(python3 */scripts/resolve_attach_target.py *)
   - Bash(gh pr view *)
@@ -29,7 +28,8 @@ worktree on the right branch.
 This skill closes that gap: it resolves an identifier to a real PR, then runs a command
 that satisfies the detector without touching GitHub.
 
-Announce "Using attach-pr" and create a todo per numbered step.
+Run in the current model; this short workflow must not switch a cheap parent
+to a more expensive skill model. Announce "Using attach-pr".
 
 ## How the attach works (and why it's safe)
 

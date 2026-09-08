@@ -153,6 +153,15 @@ class TestClaude(ScanCase):
 
 
 class TestCodex(ScanCase):
+    def test_archived_session_usage_is_included_without_active_directory(self):
+        row = {"timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+               "type": "event_msg", "payload": {"type": "token_count", "info": {
+                   "total_token_usage": {"input_tokens": 25},
+                   "last_token_usage": {"input_tokens": 25}}}}
+        self.write_jsonl(self.root / "archived_sessions" / "rollout-archived.jsonl", [row])
+        result = self.scan.scan_codex(self.since, str(self.root / "sessions"))
+        self.assertEqual(result["buckets"]["main"].input, 25)
+
     def test_cumulative_totals_are_never_summed(self):
         """total_token_usage is a running total for the session; last_token_usage
         is the delta. Summing totals turns three requests of 100 into 600."""

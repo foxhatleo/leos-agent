@@ -385,6 +385,37 @@ def owned_copy(text):
 		or text.startswith("---\n# Managed by leos-agent.\n"))
 
 
+
+def legacy_copy(text):
+	"""Recognize unchanged pre-v12 copies by full content, not a loose marker."""
+	import hashlib
+	try:
+		manifest = json.loads((Path(__file__).resolve().parents[1] / "payload/legacy-copy-hashes.json").read_text())
+		expected = set(manifest["sha256"])
+	except (OSError, ValueError, KeyError):
+		return False
+	variants = {text}
+	# Older OpenCode installs replaced <plugin-root> with an absolute source
+	# path. Normalize only candidate roots and require the entire known hash.
+	roots = re.findall(r'"([^"\n]+)/scripts/[\w-]+\.py', text)
+	roots += re.findall(r'(?m)^\s*python3 (/[^\n]+?)/scripts/[\w-]+\.py', text)
+	for root in roots:
+		if root.startswith("/"):
+			variants.add(text.replace(root, "<plugin-root>"))
+	return any(hashlib.sha256(value.encode()).hexdigest() in expected for value in variants)
+
+
+def remove_legacy_command(dest, args, label):
+	if not dest.is_file():
+		return Result(label, "unchanged")
+	text = dest.read_text()
+	if not owned_copy(text) and not legacy_copy(text):
+		return Result(label, "unchanged", "preserved unrelated or edited command")
+	if args.writes:
+		remove_file(dest)
+	return Result(label, "removed", "native skill replaces duplicate command")
+
+
 def install_file_copy(src, dest, args, label, owned_parent=False, payload=None):
 	"""Install a payload file the harness's plugin system cannot deliver itself.
 
@@ -398,7 +429,7 @@ def install_file_copy(src, dest, args, label, owned_parent=False, payload=None):
 	current = dest.read_text(encoding="utf-8") if existed else ""
 
 	# Never clobber or delete a same-named file this tool did not put there.
-	foreign = existed and current != payload and not owned_copy(current)
+	foreign = existed and current != payload and not owned_copy(current) and not legacy_copy(current)
 	if foreign and not args.force:
 		return Result(label, "conflict", "a file we did not write is already here; re-run with --force to replace it")
 
@@ -560,20 +591,10 @@ def _run_targets(harness, root, args):
 					),
 				)
 			)
-		for command_name in (() if not args.uninstall else OPENCODE_COMMANDS):
-			command_label = f"~/.config/opencode/commands/{command_name}.md"
-			targets.append(
-				(
-					command_label,
-					lambda n=command_name, l=command_label: install_file_copy(
-						root / "commands" / f"{n}.md",
-						cfg / "commands" / f"{n}.md",
-						args,
-						l,
-						payload=opencode_payload(root / "commands" / f"{n}.md", root),
-					),
-				)
-			)
+		for command_name in OPENCODE_COMMANDS:
+			command_label = f"{cfg}/commands/{command_name}.md"
+			targets.append((command_label, lambda n=command_name, l=command_label:
+				remove_legacy_command(cfg / "commands" / f"{n}.md", args, l)))
 
 	# Each target reports on its own. One failure must not discard the report
 	# for the others, or hide what already landed.

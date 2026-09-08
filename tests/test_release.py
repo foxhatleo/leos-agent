@@ -35,7 +35,11 @@ class TestPackGuard(unittest.TestCase):
             publish_npm.check_inventory(inventory)
 
     def test_a_clean_tree_passes(self):
-        publish_npm.check_inventory(["LICENSE", "package.json", "index.js", "rules/preferences.md"])
+        publish_npm.check_inventory(sorted(publish_npm.REQUIRED_FILES))
+
+    def test_missing_native_profile_breaks_install_and_is_refused(self):
+        with self.assertRaisesRegex(publish_npm.ReleaseError, "agents/leo-standard.md"):
+            publish_npm.check_inventory(publish_npm.REQUIRED_FILES - {"agents/leo-standard.md"})
 
     def test_missing_license_is_refused(self):
         with self.assertRaises(publish_npm.ReleaseError):

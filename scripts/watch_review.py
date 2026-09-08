@@ -331,6 +331,8 @@ def main(argv):
 			result = json.load(handle)
 		if result.get("commit") != args.head or result.get("complete") is not True:
 			raise ValueError("result must confirm successful completion at the supplied head")
+		if result.get("repo") != repo or result.get("pr") != args.numbers[0]:
+			raise ValueError("completion report belongs to another repository or pull request")
 		if result.get("review_id"):
 			review = json.loads(gh(["api", f"repos/{repo}/pulls/{args.numbers[0]}/reviews/{result['review_id']}"], args.directory))
 			if review.get("commit_id") != args.head:

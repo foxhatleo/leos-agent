@@ -11,7 +11,8 @@ re-approval.
 NEVER PROMPT TEXT. This file sits in a home directory forever and would otherwise
 accumulate briefs about whatever Leo works on. Prompts and working directories
 are stored as truncated SHA-256, which is enough to notice the same brief
-re-dispatched after a block and useless to anyone reading the file. Raw text only
+re-dispatched after a block. Hashes reduce exposure but guessable text can still
+be identified by hashing candidate values. Raw text only
 under LEOS_AGENT_DISPATCH_LOG_PROMPTS=1, truncated, and documented as debug-only.
 
 The file is ${LEOS_AGENT_LOCAL_PATH:-$HOME/.leos-agent-local}/dispatch.jsonl,
@@ -68,7 +69,7 @@ def path():
 
 
 def digest(text):
-    """A short, irreversible stand-in for text we refuse to store."""
+    """A short hash for correlation; not encryption or an anonymity guarantee."""
     if not text:
         return None
     return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:12]
@@ -155,15 +156,16 @@ def read(limit=None, target=None):
 
 def summarise(entries):
     """The read-time judgment: burst collapse, tiers, and block conversion."""
-    # Only dispatches that actually ran count toward a burst. A block and the
+    dispatches = [e for e in entries if e.get("decision") not in ("executed", "completed")]
+    # Allowed attempts count toward a burst; execution is not established. A block and the
     # re-dispatch it forced land in the same two-second bucket, and counting
     # both would let every blocked retry pose as a fan-out of two.
     bursts = collections.Counter(
-        e.get("burst") for e in entries if e.get("decision") not in ("block", "error")
+        e.get("burst") for e in dispatches if e.get("burst") and e.get("decision") not in ("block", "error")
     )
 
     tiers = collections.Counter()
-    for entry in entries:
+    for entry in dispatches:
         agent = entry.get("agent") or ""
         if is_tier(agent):
             tiers[agent] += 1
@@ -172,14 +174,14 @@ def summarise(entries):
         elif entry.get("decision") == "block":
             tiers["blocked"] += 1
         else:
-            tiers["inherited"] += 1
+            tiers["model unspecified"] += 1
 
     # A trivial-looking brief that was one of several in the same burst is a
     # fan-out, which the policy wants. Only a lone small spawn is a finding --
     # and only one that actually ran: a blocked dispatch spent nothing, so it
     # cannot also be an over-delegation.
     trivial = [
-        e for e in entries
+        e for e in dispatches
         if e.get("trivial", 0) >= 2
         and e.get("decision") not in ("block", "error")
         and bursts.get(e.get("burst"), 0) < 2
@@ -192,6 +194,7 @@ def summarise(entries):
 
     return {
         "records": len(entries),
+        "dispatch_attempts": len([e for e in dispatches if e.get("decision") != "error"]),
         "window": [entries[0].get("ts"), entries[-1].get("ts")] if entries else [],
         "harnesses": dict(collections.Counter(e.get("harness") for e in entries)),
         "decisions": dict(collections.Counter(e.get("decision") for e in entries)),
@@ -202,7 +205,7 @@ def summarise(entries):
         "converted": None,  # legacy field: never infer savings from prompt hashes
         "trivial_lone_spawns": len(trivial),
         "agents": dict(collections.Counter(
-            "%s @ %s" % (e.get("agent") or "-", e.get("model") or "inherited")
+            "%s @ %s" % (e.get("agent") or "-", e.get("effective_model") or e.get("requested_model") or e.get("model") or "unknown")
             for e in entries
         )),
     }
@@ -218,7 +221,8 @@ def render(summary):
         lines.append("no dispatches recorded yet (%s)" % path())
         return "\n".join(lines)
 
-    lines.append("%d dispatch(es)  %s .. %s" % (summary["records"], summary["window"][0], summary["window"][1]))
+    lines.append("%d lifecycle record(s)  %s .. %s" % (summary["records"], summary["window"][0], summary["window"][1]))
+    lines.append("  dispatch attempts  %d; child model observations  %d" % (summary["dispatch_attempts"], summary["confirmed_executions"]))
     lines.append("  harnesses   " + ", ".join("%s %d" % kv for kv in sorted(summary["harnesses"].items())))
     lines.append("  tiers       " + ", ".join("%s %d" % kv for kv in sorted(summary["tiers"].items())))
     if summary["blocked"]:

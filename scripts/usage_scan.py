@@ -215,12 +215,17 @@ def _agent_type(path):
 
 def scan_codex(since, root=None):
     root = root or SOURCES["codex"]
-    if not os.path.isdir(root):
+    roots = [root]
+    if os.path.basename(os.path.normpath(root)) == "sessions":
+        roots.append(os.path.join(os.path.dirname(os.path.normpath(root)), "archived_sessions"))
+    if not any(os.path.isdir(directory) for directory in roots):
         return None
     out = new_scan()
     out["subagent_events"] = 0
     keys = ("input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens")
-    for path in sorted(set(glob.glob(os.path.join(root, "**", "rollout-*.jsonl"), recursive=True))):
+    paths = {path for directory in roots for path in glob.glob(os.path.join(directory, "**", "rollout-*.jsonl"), recursive=True)}
+    out["coverage"] = "Local rollout JSONL files in sessions and archived_sessions; other history formats are not measured."
+    for path in sorted(paths):
         previous, model, bucket = None, None, "main"
         for rec in records(path, out):
             payload = rec.get("payload")
@@ -452,6 +457,8 @@ def render(report):
             lines.append("  %d compactions; %d pre-compaction context tokens (not tokens discarded)" % (data["compactions"], data["precompact_tokens"]))
         if data.get("diagnostics"):
             lines.append("  gaps: " + json.dumps(data["diagnostics"], sort_keys=True))
+        if data.get("coverage"):
+            lines.append("  coverage: " + data["coverage"])
     routing = report["routing"]
     lines += ["", "Claude dispatch requests: " + json.dumps(routing["tiers"], sort_keys=True),
               "Unspecified model does not prove inheritance; native profiles and overrides may choose it."]

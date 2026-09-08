@@ -270,6 +270,16 @@ class TestLog(GuardCase):
 
 
 class TestReport(GuardCase):
+    def test_lifecycle_records_do_not_inflate_attempts_or_invent_inheritance(self):
+        summary = self.log.summarise([
+            {"decision": "allow", "agent": "general"},
+            {"decision": "executed", "agent": "general", "effective_model": "haiku"},
+        ])
+        self.assertEqual(summary["dispatch_attempts"], 1)
+        self.assertEqual(summary["confirmed_executions"], 1)
+        self.assertNotIn("inherited", summary["tiers"])
+        self.assertIn("general @ haiku", summary["agents"])
+
     def test_a_matching_brief_does_not_prove_execution_or_savings(self):
         """The whole point of hashing the prompt: a block nobody acted on is not
         a saving, and only the hash can tell the two apart."""

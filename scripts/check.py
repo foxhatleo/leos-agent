@@ -119,7 +119,7 @@ def main():
 		check(re.search(r"^name:", fm, re.MULTILINE) is not None, f"{skill.relative_to(ROOT)}: needs name")
 		check(re.search(r"^description:", fm, re.MULTILINE) is not None, f"{skill.relative_to(ROOT)}: needs description")
 	commands = sorted((ROOT / "commands").glob("*.md"))
-	check(len(commands) >= 1, "commands/: no command files found")
+	check(not commands, "commands/: duplicate native skill wrappers must not be reintroduced")
 
 	# 6. Every path a manifest points at must exist, and hook files must parse in
 	# their own harness's format. A manifest referencing a missing file ships a
@@ -127,7 +127,7 @@ def main():
 	for rel, keys in (
 		(".claude-plugin/plugin.json", ("skills", "commands", "hooks")),
 		(".cursor-plugin/plugin.json", ("rules", "skills", "commands", "hooks")),
-		(".codex-plugin/plugin.json", ("skills",)),
+		(".codex-plugin/plugin.json", ("skills", "hooks")),
 	):
 		data = json.loads((ROOT / rel).read_text(encoding="utf-8"))
 		for key in keys:
@@ -136,7 +136,7 @@ def main():
 				check((ROOT / declared).exists(), f"{rel}: {key} points at {declared}, which does not exist")
 
 	shared_hooks = ROOT / "hooks" / "hooks.json"
-	check(shared_hooks.is_file(), "hooks/hooks.json is missing (Claude Code and Codex read it)")
+	check(shared_hooks.is_file(), "hooks/hooks.json is missing (Claude Code reads it)")
 	if shared_hooks.is_file():
 		data = json.loads(shared_hooks.read_text(encoding="utf-8"))
 		check(isinstance(data.get("hooks"), dict), "hooks/hooks.json: needs a top-level `hooks` object")
@@ -163,11 +163,7 @@ def main():
 	for entry in pre:
 		check(bool(entry.get("matcher")), "hooks/hooks.json: PreToolUse needs a matcher, or it spawns on every tool call")
 
-	# 6c. The payload emitter must be wired the same way, but only where it is
-	# wanted. Claude Code and Codex both load hooks/hooks.json's SessionStart, so
-	# a live payload only reaches them if this fires. Cursor reads
-	# rules/preferences.md directly through its always-apply rule and must NOT
-	# get a SessionStart hook here, or the payload would land twice.
+	# Claude injects its policy at session start; Cursor reads the native rule.
 	session_start = (shared_data.get("hooks") or {}).get("SessionStart") or []
 	check(bool(session_start), "hooks/hooks.json: no SessionStart entry (the payload emitter is not wired)")
 	for entry in session_start:
@@ -183,15 +179,26 @@ def main():
 		"Cursor must observe lifecycle without injecting a duplicate policy",
 	)
 
-	commands = [h.get("command", "") for entry in pre for h in entry.get("hooks") or []]
-	commands += [entry.get("command", "") for entry in cursor_pre]
-	commands += session_start_commands
-	for timeout in (
-		[h.get("timeout") for entry in pre for h in entry.get("hooks") or []]
-		+ [e.get("timeout") for e in cursor_pre]
-		+ [h.get("timeout") for entry in session_start for h in entry.get("hooks") or []]
-	):
-		check(timeout is not None and timeout <= 10, f"hook timeout {timeout!r} exceeds the 10s a harness will wait")
+	# Validate every command in each native manifest, including lifecycle observers.
+	commands = []
+	for filename, harness_name in (("hooks.json", "claude"), ("hooks-codex.json", "codex")):
+		manifest = json.loads((ROOT / "hooks" / filename).read_text())
+		hooks = manifest.get("hooks", {})
+		for required in ("SessionStart", "PreToolUse", "SubagentStop"):
+			check(bool(hooks.get(required)), f"{filename}: missing {required}")
+		for entries in hooks.values():
+			for entry in entries:
+				for hook in entry.get("hooks", []):
+					command = hook.get("command", "")
+					commands.append(command)
+					check(f"LEOS_AGENT_HARNESS={harness_name}" in command, f"{filename}: hook must explicitly select {harness_name}")
+					check(isinstance(hook.get("timeout"), (int, float)) and 0 < hook["timeout"] <= 10, f"{filename}: invalid timeout")
+	for required in ("sessionStart", "subagentStart", "subagentStop"):
+		check(bool(cursor_hook_keys.get(required)), f"Cursor: missing {required}")
+	for entries in cursor_hook_keys.values():
+		for hook in entries:
+			commands.append(hook.get("command", ""))
+			check(isinstance(hook.get("timeout"), (int, float)) and 0 < hook["timeout"] <= 10, "Cursor: invalid timeout")
 	for command in commands:
 		match = re.search(r"(?:\$\{[A-Z_]+\}|\./)?/?((?:scripts|hooks)/[\w./-]+\.py)", command)
 		check(match is not None, f"hooks: cannot find a script path in command {command!r}")
@@ -268,7 +275,6 @@ def main():
 	for name in installer.OPENCODE_SKILLS:
 		copied.append(f"skills/{name}/SKILL.md")
 		copied.extend(str(p.relative_to(ROOT)) for p in sorted((ROOT / "skills" / name / "reference").glob("*.md")))
-	copied.extend(f"commands/{name}.md" for name in installer.OPENCODE_COMMANDS)
 	for rel in sorted(set(copied)):
 		path = ROOT / rel
 		check(path.is_file(), f"{rel}: the installer copies this file, but it does not exist")

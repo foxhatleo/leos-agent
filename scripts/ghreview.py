@@ -551,7 +551,7 @@ def cmd_stage(a):
             if refusal:
                 print(json.dumps(refusal, indent=1))
                 sys.exit(3)
-        print(json.dumps({"commit": a.commit, "complete": not a.dry_run, "staged": 0, "note": "no findings; nothing created"}))
+        print(json.dumps({"repo": a.repo, "pr": a.pr, "commit": a.commit, "complete": not a.dry_run, "staged": 0, "note": "no findings; nothing created"}))
         return
     if len(comments) > MAX_STAGE_COMMENTS:
         print(
@@ -563,7 +563,7 @@ def cmd_stage(a):
 
     files = pinned_files(a.repo, a.pr, a.commit)
     staged, snapped, dropped = validate_comments(comments, build_maps(files))
-    report = {"commit": a.commit, "complete": False, "staged": len(staged), "snapped": snapped, "dropped": dropped}
+    report = {"repo": a.repo, "pr": a.pr, "commit": a.commit, "complete": False, "staged": len(staged), "snapped": snapped, "dropped": dropped}
     for d in dropped:
         print(f"unstageable: {d.get('path')}:{d.get('line')} — {d['reason']}", file=sys.stderr)
 

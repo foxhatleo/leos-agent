@@ -16,11 +16,11 @@ test.after(() => rmSync(storage, { recursive: true, force: true }));
 
 test('OpenCode corrects native profile selection without adding a model field', async () => {
   const hooks = await LeosAgent({ directory: storage, client: { app: { agents: async () => ({ data: [
-    { name: 'leo-standard', model: { providerID: 'openai', modelID: 'gpt-5.6-terra' } },
+    { name: 'leo-standard', model: { providerID: 'openai', id: 'gpt-5.6-terra' } },
     { name: 'leo-parent' },
   ] }) } } });
   await hooks.event({ event: { type: 'message.updated', properties: { info: {
-    sessionID: 's', providerID: 'openai', modelID: 'gpt-5.6-sol',
+    sessionID: 's', model: { providerID: 'openai', id: 'gpt-5.6-sol' },
   } } } });
   const output = { args: { subagent_type: 'general', prompt: 'Investigate the regression', description: 'Investigate' } };
   await hooks['tool.execute.before']({ tool: 'task', sessionID: 's', callID: 'c' }, output);

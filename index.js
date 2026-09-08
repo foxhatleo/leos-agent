@@ -2,8 +2,8 @@
 import { fileURLToPath } from 'node:url';
 import { guard, bounded, runPython } from './scripts/harness_bridge.js';
 
-const modelName = (model) => model?.providerID && model?.modelID
-  ? `${model.providerID}/${model.modelID}` : null;
+const modelName = (model) => model?.providerID && (model?.modelID || model?.id)
+  ? `${model.providerID}/${model.modelID || model.id}` : null;
 
 export const LeosAgent = async (ctx) => {
   const root = process.env.LEOS_AGENT_ROOT || process.env.PLUGIN_ROOT || fileURLToPath(new URL('.', import.meta.url));
@@ -14,7 +14,11 @@ export const LeosAgent = async (ctx) => {
       const info = event?.properties?.info;
       if (event?.type === 'message.updated' && info?.sessionID) {
         const model = modelName(info.model) || modelName(info);
-        if (model) parents.set(info.sessionID, model);
+        if (model) {
+          parents.delete(info.sessionID);
+          parents.set(info.sessionID, model);
+          if (parents.size > 1024) parents.delete(parents.keys().next().value);
+        }
       }
       if (event?.type === 'session.deleted' && info?.id) parents.delete(info.id);
       if (event?.type === 'session.created' && process.env.LEOS_AGENT_PRICE_REFRESH !== 'off') {

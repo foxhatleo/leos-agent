@@ -256,6 +256,19 @@ class TestClaimsAndPagination(unittest.TestCase):
                 self.w.main(["record", "1", "--head", "a" * 40, "--result", str(report)])
         self.assertEqual(self.w.reviewed_heads("o/r"), {})
 
+    def test_record_binds_clean_report_to_repository_and_pr(self):
+        report = Path(self.tmp.name) / "result.json"
+        with mock.patch.object(self.w, "identity", return_value=("o/r", "leo")):
+            for repo, number in (("other/repo", 1), ("o/r", 2)):
+                report.write_text(json.dumps({"repo": repo, "pr": number,
+                                              "commit": "a" * 40, "complete": True}))
+                with self.assertRaisesRegex(ValueError, "another repository"):
+                    self.w.main(["record", "1", "--head", "a" * 40, "--result", str(report)])
+            report.write_text(json.dumps({"repo": "o/r", "pr": 1,
+                                          "commit": "a" * 40, "complete": True}))
+            self.w.main(["record", "1", "--head", "a" * 40, "--result", str(report)])
+        self.assertEqual(self.w.reviewed_heads("o/r"), {1: "a" * 40})
+
 
 if __name__ == "__main__":
     unittest.main()

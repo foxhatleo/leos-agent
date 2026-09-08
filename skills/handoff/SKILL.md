@@ -32,15 +32,13 @@ That path is fixed and needs no plugin root.
    python3 "<plugin-root>/scripts/handoff.py" new <slug>
    ```
 
-   It prints the de-collided name on the first line, the path to write on the
+   It atomically reserves a private empty file, then prints the de-collided name on the first line, the path to write on the
    second, and the `created:` timestamp on the third. Use the name it printed,
    not the slug you asked for — it may have appended a suffix — and copy the
    timestamp verbatim rather than composing one.
 
-   No plugin root to run it from? Do the same by hand rather than searching for
-   the script: list `${LEOS_AGENT_LOCAL_PATH:-$HOME/.leos-agent-local}/handoffs/`,
-   if `<slug>.md` is taken append `-2`, `-3` until it is not, and take the
-   timestamp from `date -u +%Y-%m-%dT%H:%M:%SZ`.
+   If the helper is unavailable, report the missing root/script. Do not use a
+   check-then-create fallback that can overwrite another session's handoff.
 
 2. **Gather the frontmatter facts** in one batch:
 

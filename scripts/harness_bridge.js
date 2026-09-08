@@ -37,9 +37,13 @@ export function runPython(root, harness, script, args = [], event = {}, timeout 
 
 export async function guard(root, harness, event) {
   const result = await runPython(root, harness, 'dispatch_guard.py', ['--json'], event);
-  if (!result || result.code !== 0) return { action: 'allow', reason: 'bridge-error' };
+  const failed = () => {
+    console.error(`[leos-agent] ${harness} routing bridge failed; dispatch allowed without a price check`);
+    return { action: 'allow', reason: 'bridge-error' };
+  };
+  if (!result || result.code !== 0) return failed();
   try { return JSON.parse(result.stdout); }
-  catch { return { action: 'allow', reason: 'bridge-error' }; }
+  catch { return failed(); }
 }
 
 export async function bounded(promise, timeout = 2000) {

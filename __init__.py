@@ -1,113 +1,119 @@
-"""Hermes plugin entry point for leos-agent.
-
-Registers the bundled install skill and a /leo-install command. Everything else in
-this repo is consumed by other harnesses through their own manifests; Hermes
-only needs the skill and a way to run the installer.
-"""
-
-import importlib.util
+"""Hermes plugin: deferred skills, one policy section, and native cost checks."""
+import collections
+import json
+import logging
+import os
+from pathlib import Path
 import subprocess
 import sys
-from pathlib import Path
+import threading
+import time
 
 PLUGIN_ROOT = Path(__file__).resolve().parent
 HARNESS = "hermes"
-_MODULES = {}
+_PARENTS = collections.OrderedDict()
+_PARENT_LOCK = threading.Lock()
+logger = logging.getLogger(__name__)
+
+
+def _python(script, args=(), event=None, timeout=10):
+    # Isolate common module names such as state/routing from Hermes's Python
+    # process. The same CLI contract is used by the JavaScript adapters.
+    return subprocess.run([sys.executable, str(PLUGIN_ROOT / "scripts" / script), *args],
+                          input=json.dumps(event or {}), capture_output=True, text=True,
+                          timeout=timeout, env={**os.environ, "LEOS_AGENT_HARNESS": HARNESS,
+                                                "LEOS_AGENT_ROOT": str(PLUGIN_ROOT)})
 
 
 def _run_install(*args):
-	"""Run the installer for Hermes only and return its combined output."""
-	script = PLUGIN_ROOT / "scripts" / "leo-install.py"
-	result = subprocess.run(
-		[sys.executable, str(script), HARNESS, *args],
-		capture_output=True,
-		text=True,
-		timeout=60,
-	)
-	output = result.stdout + (f"\n{result.stderr}" if result.stderr.strip() else "")
-	return output.strip()
-
-
-def _load(name):
-	"""Import scripts/<name>.py by path, memoized per process.
-
-	scripts/ is not an importable package from here, and Hermes runs in-process,
-	so this is the one way to share exactly the logic the command hooks and the
-	system-prompt section below run. Memoised: the guard runs before every tool
-	call and the payload loader runs once per session, and re-executing a module
-	from disk on either path would put a file read on the hot path of an
-	in-process harness.
-	"""
-	if name not in _MODULES:
-		spec = importlib.util.spec_from_file_location(f"leos_{name}", PLUGIN_ROOT / "scripts" / f"{name}.py")
-		module = importlib.util.module_from_spec(spec)
-		sys.modules[spec.name] = module
-		spec.loader.exec_module(module)
-		_MODULES[name] = module
-	return _MODULES[name]
-
-
-def _guard():
-	"""The shared dispatch guard, loaded by path. See _load() for why."""
-	return _load("dispatch_guard")
+    result = _python("leo-install.py", (HARNESS, *args), timeout=60)
+    return (result.stdout + ("\n" + result.stderr if result.stderr.strip() else "")).strip()
 
 
 def _payload_section(info=None):
-	"""The rendered policy payload, for register_system_prompt_section.
-
-	This is the cache-safe path: Hermes renders a system-prompt section once per
-	session and freezes it, unlike pre_llm_call, which re-renders on every turn
-	and would repeatedly invalidate the prompt prefix it sits in. Must fail open
-	-- an exception raised from here, rather than an empty string returned,
-	would take the section (and possibly the session) down with it.
-	"""
-	try:
-		payload = _load("payload")
-		routing = _load("routing")
-		return payload.payload_body(PLUGIN_ROOT, HARNESS, routing.load())
-	except Exception:
-		return ""
+    """Hermes freezes this section per session; no dynamic per-turn injection."""
+    try:
+        result = _python("emit_payload.py")
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    logger.warning("leos-agent policy bridge failed; inspect plugin diagnostics")
+    return ""
 
 
-def _on_pre_tool_call(tool_name="", args=None, task_id=None, **_):
-	"""Refuse a subagent dispatch that names no model. Fails open.
+def _on_request_model(model=None, response_model=None, task_id=None, session_id=None, **_):
+    """Observe identifiers only; do not retain provider payloads or secrets."""
+    key, model = task_id or session_id, response_model or model
+    if not isinstance(key, str) or not isinstance(model, str):
+        return
+    with _PARENT_LOCK:
+        _PARENTS[key] = (model, time.time())
+        _PARENTS.move_to_end(key)
+        while len(_PARENTS) > 1024:
+            _PARENTS.popitem(last=False)
 
-	In-process, so there is no spawn to prefilter against -- normalize() rejects a
-	non-dispatch in microseconds. **_ absorbs whatever else Hermes passes: the
-	signature is the one piece of this adapter no version of the repo has verified
-	against a live session, and a TypeError here would break every tool call.
-	"""
-	try:
-		guard = _guard()
-		result = guard.process(
-			{"tool_name": tool_name, "tool_input": args, "session_id": task_id or "", "cwd": str(Path.cwd())}, HARNESS
-		)
-	except Exception:
-		return None
-	if result["action"] == "block":
-		return {"action": "block", "message": guard.render_block(None, HARNESS, result)}
-	return None
 
+def _on_session_start(**_):
+    if os.environ.get("LEOS_AGENT_PRICE_REFRESH") == "off":
+        return
+    try:
+        subprocess.Popen([sys.executable, str(PLUGIN_ROOT / "scripts/pricing.py"), "refresh"],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
+    except OSError:
+        logger.warning("leos-agent price refresh could not start")
+
+
+def _native_delegation_model():
+    # Hermes's own profile-aware loader; never resolve credentials or contact
+    # providers to inspect a model identifier.
+    from tools.delegate_tool_config import _load_config
+    config = _load_config()
+    return config.get("model") if isinstance(config.get("model"), str) else None
+
+
+def _on_pre_tool_call(tool_name="", args=None, task_id=None, session_id=None, tool_call_id=None, **_):
+    if tool_name != "delegate_task":
+        return None
+    try:
+        with _PARENT_LOCK:
+            observed = _PARENTS.get(task_id or session_id)
+        parent = observed[0] if observed and time.time() - observed[1] < 86400 else None
+        try:
+            effective = _native_delegation_model()
+        except (ImportError, AttributeError):
+            logger.warning("leos-agent cannot inspect Hermes delegation configuration")
+            effective = None
+        response = _python("dispatch_guard.py", ("--json",), {
+            "tool_name": tool_name, "tool_input": args, "session_id": session_id or task_id or "",
+            "call_id": tool_call_id, "parent_model": parent, "effective_model": effective,
+            "cwd": str(Path.cwd()),
+        })
+        if response.returncode:
+            raise ValueError("guard bridge exited unsuccessfully")
+        result = json.loads(response.stdout)
+        if result["action"] == "block":
+            return {"action": "block", "message": "[leo routing] " + result["reason"] + ". " + result.get("retry", "")}
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        logger.warning("leos-agent dispatch bridge failed open")
+    return None
 
 
 def register(ctx):
-	for skill in sorted((PLUGIN_ROOT / "skills").glob("*/SKILL.md")):
-		ctx.register_skill("leo-" + skill.parent.name, skill, description="Leo's " + skill.parent.name + " workflow")
-	ctx.register_hook("pre_tool_call", _on_pre_tool_call)
+    for skill in sorted((PLUGIN_ROOT / "skills").glob("*/SKILL.md")):
+        ctx.register_skill("leo-" + skill.parent.name, skill, description="Leo's " + skill.parent.name + " workflow")
+    ctx.register_hook("pre_tool_call", _on_pre_tool_call)
+    ctx.register_hook("pre_api_request", _on_request_model)
+    ctx.register_hook("post_api_request", _on_request_model)
+    ctx.register_hook("on_session_start", _on_session_start)
+    section = getattr(ctx, "register_system_prompt_section", None)
+    if section is not None:
+        section("leos-agent", _payload_section, position="after_memory", max_chars=4000)
+    else:
+        logger.warning("leos-agent requires a Hermes version supporting system prompt sections")
 
-	# Older Hermes builds have no such API; degrade silently rather than break
-	# register() over a section the running version cannot render.
-	register_section = getattr(ctx, "register_system_prompt_section", None)
-	if register_section is not None:
-		register_section("leos-agent", _payload_section, position="after_memory", max_chars=4000)
-
-	def leo_install(args=""):
-		"""Run Leo's installer for Hermes (--dry-run, --uninstall)."""
-		flags = [flag for flag in args.split() if flag.startswith("--")]
-		return _run_install(*flags)
-
-	ctx.register_command(
-		"leo-install",
-		leo_install,
-		description="Run Leo's installer for Hermes (--dry-run, --uninstall).",
-	)
+    def leo_install(args=""):
+        flags = [flag for flag in args.split() if flag.startswith("--")]
+        return _run_install(*flags)
+    ctx.register_command("leo-install", leo_install, description="Install, check, or remove Leo's Hermes integration.")
