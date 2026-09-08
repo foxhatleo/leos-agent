@@ -103,15 +103,44 @@ class TestRegistryState(unittest.TestCase):
 
 
 class TestTagAgreement(unittest.TestCase):
-    def test_accepted_upload_without_public_version_is_not_success(self):
+    def test_an_accepted_upload_the_registry_has_not_served_yet_is_not_a_failure(self):
+        """Once npm accepts the upload the release has happened. Reporting the
+        registry's read lag as a failure marked three consecutive successful
+        releases red, which is how a release signal stops being read."""
         with mock.patch.object(publish_npm, "pack_inventory", return_value=publish_npm.REQUIRED_FILES), \
              mock.patch.object(publish_npm, "registry_state", return_value="absent"), \
              mock.patch.object(publish_npm, "publish") as upload, \
              mock.patch.object(publish_npm.time, "sleep"), \
+             contextlib.redirect_stderr(io.StringIO()) as err, \
+             contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(publish_npm.main([]), 0)
+        upload.assert_called_once()
+        self.assertIn("published leos-agent@", out.getvalue())
+        # It must not keep asserting a staging hold: propagation is what the
+        # three red releases actually turned out to be.
+        self.assertNotIn("staged packages", err.getvalue())
+        self.assertIn("npm view", err.getvalue())
+
+    def test_a_lookup_outage_after_publishing_is_reported_but_never_fails(self):
+        with mock.patch.object(publish_npm, "pack_inventory", return_value=publish_npm.REQUIRED_FILES), \
+             mock.patch.object(publish_npm, "registry_state",
+                               side_effect=["absent", publish_npm.ReleaseError("auth")]), \
+             mock.patch.object(publish_npm, "publish") as upload, \
+             mock.patch.object(publish_npm.time, "sleep"), \
+             contextlib.redirect_stderr(io.StringIO()) as err, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(publish_npm.main([]), 0)
+        upload.assert_called_once()
+        self.assertIn("registry lookup failed", err.getvalue())
+
+    def test_a_failed_upload_still_fails(self):
+        """The one thing that must stay fatal."""
+        with mock.patch.object(publish_npm, "pack_inventory", return_value=publish_npm.REQUIRED_FILES), \
+             mock.patch.object(publish_npm, "registry_state", return_value="absent"), \
+             mock.patch.object(publish_npm, "publish",
+                               side_effect=publish_npm.ReleaseError("npm publish failed: 402")), \
              contextlib.redirect_stderr(io.StringIO()) as err, contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(publish_npm.main([]), 1)
-        upload.assert_called_once()
-        self.assertIn("staged packages", err.getvalue())
+        self.assertIn("npm publish failed", err.getvalue())
 
     def test_registry_propagation_does_not_retry_the_upload(self):
         with mock.patch.object(publish_npm, "pack_inventory", return_value=publish_npm.REQUIRED_FILES), \

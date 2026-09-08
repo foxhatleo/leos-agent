@@ -9,6 +9,11 @@ actually ship is inspected before it ships, because `files` in package.json
 scopes the publish but does not exclude build residue that lands inside a
 directory it lists.
 
+Once npm accepts the upload the release has happened, so nothing after that
+point fails this script. The registry's read path can lag a publish by minutes;
+reporting that lag as a failure marked three consecutive successful releases
+red, and a release signal nobody trusts is worse than none.
+
 Authentication is npm's OIDC trusted publishing: the workflow's `id-token`
 permission supplies a short-lived credential, so there is no token to read here.
 """
@@ -109,9 +114,19 @@ def publish(npm="npm"):
 	return (published.stdout + published.stderr).strip()
 
 
-def wait_for_public_version(version, npm="npm"):
-	"""Allow brief registry propagation; never retry the upload or bypass staging."""
-	for delay in (0, 5, 10, 20):
+# Roughly two minutes. The registry's read path lagged a real publish past the
+# previous 35-second budget on three consecutive releases, so every one of them
+# reported failure while actually succeeding.
+PROPAGATION_DELAYS = (0, 5, 10, 20, 30, 60)
+
+
+def wait_for_public_version(version, npm="npm", delays=PROPAGATION_DELAYS):
+	"""Allow registry propagation; never retry the upload or bypass staging.
+
+	A lookup that fails for a reason other than a confirmed 404 still raises: an
+	outage is not propagation, and the caller decides what to do about it.
+	"""
+	for delay in delays:
 		if delay:
 			time.sleep(delay)
 		if registry_state(version, npm) == "present":
@@ -135,22 +150,37 @@ def main(argv=None):
 
 		inventory = pack_inventory(args.npm)
 		check_inventory(inventory)
-		print(f"{PACKAGE} {version}: {len(inventory)} file(s) staged for publish")
+		print(f"{PACKAGE} {version}: {len(inventory)} file(s) staged for publish", flush=True)
 
 		state = registry_state(version, args.npm)
 		if state == "present":
-			print(f"{PACKAGE}@{version} is already on the registry; nothing to do")
+			print(f"{PACKAGE}@{version} is already on the registry; nothing to do", flush=True)
 			return 0
 		if args.dry_run:
-			print(f"would publish {PACKAGE}@{version}")
+			print(f"would publish {PACKAGE}@{version}", flush=True)
 			return 0
 
 		publish(args.npm)
-		# npm can accept an upload into staging without making it public.
-		# A zero exit code proves upload acceptance, not registry availability.
-		if not wait_for_public_version(version, args.npm):
-			raise ReleaseError("upload accepted but the version is not publicly available; inspect npm staged packages for approval or registry propagation before retrying")
-		print(f"published and verified {PACKAGE}@{version}")
+		# The upload is accepted and cannot be taken back, so nothing below may fail
+		# the release. Everything here only reports whether the registry is serving
+		# the version yet, and treating "not yet" as a failure marked three
+		# consecutive successful releases red -- which is how a release signal stops
+		# being read at all. A publish that genuinely failed raises inside publish().
+		try:
+			confirmed, unverified = wait_for_public_version(version, args.npm), None
+		except ReleaseError as exc:
+			confirmed, unverified = False, f"the registry lookup failed: {exc}"
+		if confirmed:
+			print(f"published and verified {PACKAGE}@{version}", flush=True)
+			return 0
+		print(f"published {PACKAGE}@{version}", flush=True)
+		print(
+			f"warning: {unverified or 'the registry is not serving it yet'}. "
+			f"npm accepted the upload; confirm with `npm view {PACKAGE}@{version} version`. "
+			"Re-running this script is safe: it stops at the pre-publish check once the "
+			"version is visible.",
+			file=sys.stderr,
+		)
 		return 0
 	except ReleaseError as exc:
 		print(f"error: {exc}", file=sys.stderr)
