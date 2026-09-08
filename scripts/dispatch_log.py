@@ -40,9 +40,12 @@ from state import _data_root, _locked  # noqa: E402
 
 LOG_NAME = "dispatch.jsonl"
 
-# One megabyte, one generation. ~230 bytes per record is roughly 4,500 dispatches
-# per file and 9,000 retained -- months of history, bounded at 2 MiB forever, with
-# no cron job and nothing to configure.
+# One megabyte, one generation. A record now carries the full price comparison,
+# so it measures ~790 bytes rather than the ~230 this comment used to claim:
+# roughly 1,300 dispatches per file and 2,600 retained. Still months of history
+# for one person, still bounded at 2 MiB forever, with nothing to configure --
+# but a third of the retention the old number promised, which is worth knowing
+# before reading a report and assuming it covers the whole period.
 MAX_BYTES = 1 << 20
 
 RECORD_VERSION = 2

@@ -71,7 +71,9 @@ def diagnose(harness, root=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--harness", choices=routing.HARNESSES, required=True)
-    parser.add_argument("--json", action="store_true")
+    # Output is always JSON; the flag stays accepted so a skill copy from an
+    # earlier release keeps working rather than failing on an unknown argument.
+    parser.add_argument("--json", action="store_true", help="accepted for compatibility; output is always JSON")
     args = parser.parse_args()
     report = diagnose(args.harness)
     print(json.dumps(report, indent=2))

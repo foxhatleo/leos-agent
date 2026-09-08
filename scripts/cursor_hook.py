@@ -27,7 +27,7 @@ def handle(event):
             "session_id": session, "call_id": event.get("tool_call_id"),
         }, "cursor")
         if result["action"] == "block":
-            return {"permission": "deny", "user_message": dispatch_guard.render_block(None, "cursor", result)}
+            return {"permission": "deny", "user_message": dispatch_guard.render_block(result)}
     elif kind == "subagentStop":
         # This event proves lifecycle completion, not which model was billed.
         dispatch_log.append({"v": dispatch_log.RECORD_VERSION,

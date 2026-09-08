@@ -107,37 +107,9 @@ class Result:
 		return f"  {status:9} {self.target}{suffix}"
 
 
-def render_codex_agent(text, agent_name, config):
+def render_codex_agent(text):
 	"""Profiles carry instructions; the dispatch guard enforces model selection."""
 	return re.sub(r'(?m)^model(?:_reasoning_effort)? = .*\n', "", text)
-
-
-def cursor_routing_rule(harness, config):
-	"""Cursor reads its rules straight out of the plugin, so the per-machine half
-	has to arrive as its own always-applied rule file."""
-	return (
-		"---\n"
-		"description: leos-agent model routing for this machine.\n"
-		"alwaysApply: true\n"
-		"---\n"
-		"This supersedes the model-routing dispatch line in Leo's agent operating\n"
-		"preferences:\n\n"
-		f"{routing.stanza(harness, config)}\n"
-	)
-
-
-def opencode_routing_rule(harness, config):
-	"""OpenCode reads rules/preferences.md straight off disk through `instructions`,
-	which means it reads it UN-rendered -- the routing region keeps its shipped
-	default and this machine's config never reaches the model. Cursor has the
-	same shape and the same answer: ship the per-machine half as its own file.
-	"""
-	return (
-		"<!-- leos-agent -->\n"
-		"This supersedes the model-routing dispatch line in Leo's agent operating\n"
-		"preferences:\n\n"
-		f"{routing.stanza(harness, config)}\n"
-	)
 
 
 def scan_markers(text):
@@ -345,28 +317,6 @@ def migrate_legacy_block(path, args, label):
 	return Result(label, "migrated", diff=diff)
 
 
-def opencode_config_advisory(root, home, label, configured=False):
-	"""OpenCode reads its config as JSONC, comments and all -- rewriting it here
-	would blow those away, so the most this tool can do is check whether the
-	files are already wired into `instructions` and, when they are not, tell the
-	user the line to add rather than adding it for them.
-
-	Two paths, not one, once routing is configured: `instructions` reads
-	preferences.md un-rendered, so the routing file beside it is the only way
-	this machine's model choice reaches OpenCode at all.
-	"""
-	path = home / ".config" / "opencode" / "opencode.json"
-	wanted = [str(root / "rules" / "preferences.md")]
-	if configured:
-		wanted.append(str(home / ".config" / "opencode" / "leos-agent-routing.md"))
-	text = path.read_text(encoding="utf-8") if path.is_file() else ""
-	missing = [p for p in wanted if p not in text]
-	if not missing:
-		return Result(label, "unchanged")
-	listed = ", ".join(f'"{p}"' for p in wanted)
-	return Result(label, "error", f'missing instructions: [{listed}]; run leo-install.py opencode')
-
-
 def owned_copy(text):
 	return (text.startswith("# Managed by leos-agent.") or text.startswith("# Installed by leos-agent.")
 		or text.startswith("<!-- Managed by leos-agent. -->") or text.startswith("<!-- leos-agent -->")
@@ -512,8 +462,6 @@ def _run_targets(harness, root, args):
 						l,
 						payload=render_codex_agent(
 							(root / "payload" / "codex-agents" / f"{n}.toml").read_text(encoding="utf-8"),
-							n,
-							config,
 						),
 					),
 				)

@@ -370,13 +370,6 @@ def main():
 			len(rendered.encode("utf-8")) < len(prefs_body.encode("utf-8")),
 			f"routing: {harness}'s rendered payload is not smaller than the unrendered file",
 		)
-	# The rule is only ever installed when cursor routing is configured, so the
-	# provenance requirement is checked on a configured render.
-	configured_cursor = {"cursor": {"runner": {"model": "example-model", "effort": None}}}
-	check(
-		installer.PROVENANCE in installer.cursor_routing_rule("cursor", configured_cursor),
-		f"routing: the Cursor rule must contain {installer.PROVENANCE!r} so the installer recognises its own copy",
-	)
 
 	# 5c. Plugin-root references. Skill and command text points at plugin files
 	# through the <plugin-root> placeholder, and the OpenCode installer bakes the

@@ -139,8 +139,9 @@ def normalize(event, _harness=None):
 def triviality(dispatch):
     """0..3. A features-only score; it never changes the exit code.
 
-    A short brief can describe either small or substantial work. This signal
-    only helps inspect dispatch patterns; it never establishes wasted spend.
+    A short brief can describe either small or substantial work, so this is a
+    log field and nothing else: no caller changes a decision on it, and it
+    establishes neither triviality nor wasted spend.
     """
     if dispatch is None or dispatch.opaque:
         return 0
@@ -156,26 +157,9 @@ def triviality(dispatch):
     return min(score, 3)
 
 
-def routable(name):
-    from routing_engine import CAPABILITIES
-    return bool(CAPABILITIES.get(name, {}).get("model_field"))
-
-
-def _is_tier(agent):
-    from routing_engine import tier_for
-    return tier_for(agent) is not None
-
-
-def render_block(dispatch, name=None, result=None):
+def render_block(result=None):
     retry = (result or {}).get("retry", "Retry with an explicit model within the parent price ceiling.")
     return "[leo routing] BLOCKED: " + (result or {}).get("reason", "model choice required") + ". " + retry
-
-
-def render_notice(dispatch):
-    return (
-        "[leo routing] %d-byte brief to %s: delegation has setup overhead and "
-        "costs more than an inline read. Inline it when one file answers it."
-    ) % (dispatch.prompt_bytes, dispatch.agent)
 
 
 def _log(entry):
@@ -232,12 +216,6 @@ def process(event, name=None):
         return {"action": "allow", "reason": "guard-error", "updated_input": None}
 
 
-def evaluate(event, name=None):
-    result = process(event, name)
-    dispatch = normalize(event, name)
-    return result["action"], result["reason"], dispatch, triviality(dispatch)
-
-
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     try:
@@ -257,7 +235,7 @@ def main(argv=None):
         print(json.dumps(result))
         return 0
     if result["action"] == BLOCK:
-        sys.stderr.write(render_block(None, name, result) + "\n")
+        sys.stderr.write(render_block(result) + "\n")
         return 2
     if result["action"] == "correct" and name == "claude":
         # Do not grant tool permission: update only arguments and leave the
