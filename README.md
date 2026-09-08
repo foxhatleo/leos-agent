@@ -1,7 +1,7 @@
 # leos-agent
 
 Cost-aware delegation and portable workflows for Claude Code, Codex, Cursor,
-OpenCode, Hermes, and Pi. Version **12.2026090801.0**.
+OpenCode, Hermes, and Pi. Version **12.2026090802.0**.
 
 The main agent handles small work directly and delegates substantial, bounded
 work to the cheapest competent tier. The policy separates **whether to delegate**

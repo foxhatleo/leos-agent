@@ -2,7 +2,7 @@
   "name": "leos-agent",
   "displayName": "Leo's Agent",
   "description": "Adaptive delegation, cost-aware model routing, and deferred workflows across coding harnesses.",
-  "version": "12.2026090801.0",
+  "version": "12.2026090802.0",
   "author": {
     "name": "Leo Liang"
   },
