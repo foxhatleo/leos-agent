@@ -22,6 +22,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 import dispatch_log  # noqa: E402
+import pricing  # noqa: E402
 import routing  # noqa: E402
 import usage_scan  # noqa: E402
 from state import _data_root  # noqa: E402
@@ -31,8 +32,7 @@ from state import _data_root  # noqa: E402
 # rendered guard summary goes in instead.
 SNAPSHOT_SOURCES = ("usage_scan.py", "dispatch_log.py", "pricing.py", "routing_engine.py", "routing.py")
 COPIED_FILES = ((".claude-plugin/plugin.json", "plugin.json"),
-                ("skills/review-usage/reference/sources.md", "sources.md"),
-                ("payload/model-prices.json", "model-prices.json"))
+                ("skills/review-usage/reference/sources.md", "sources.md"))
 CLI_VERSIONS = (("claude", ["claude", "--version"]), ("codex", ["codex", "--version"]),
                 ("gh", ["gh", "--version"]), ("node", ["node", "--version"]))
 
@@ -61,7 +61,7 @@ window ends at collection time, not at the end of a calendar day.
 | `plugin.json` | Installed plugin manifest |
 | `sources.md` | How to read the scan schema and what it cannot show |
 | `scanner/*.py` | The exact scanner source that produced the numbers |
-| `model-prices.json` | The bundled reference price catalog |
+| `model-prices.json` | The exact price catalog collection used: the local refreshed cache when one was valid, else the bundled snapshot |
 
 ## Headline
 
@@ -98,9 +98,10 @@ def _json_object(text):
         return False
 
 
-def scan(since_text, only):
-    """One collect per window: the JSON and the text come from the same report."""
-    report = usage_scan.collect(usage_scan.parse_since(since_text), only)
+def scan(since_text, only, catalog):
+    """One collect per window, one catalog for every window: the JSON, the text,
+    and the archived prices all describe the same report."""
+    report = usage_scan.collect(usage_scan.parse_since(since_text), only, catalog)
     return report, json.dumps(report, indent=1, sort_keys=True), usage_scan.render(report)
 
 
@@ -142,6 +143,8 @@ def environment(args, generated):
 
 def headline(report):
     """A few lines the reader can check the JSON against."""
+    if not report:
+        return "- the primary scan failed; see its .error.txt"
     out = []
     for name, data in sorted(report.get("harnesses", {}).items()):
         if data.get("status") not in ("ok", "partial"):
@@ -165,13 +168,24 @@ def build(args):
     """{archive name: text or bytes}, plus the names of components that failed."""
     generated = time.time()
     members, failures = {}, []
-    report, as_json, as_text = scan(args.since, args.harness)
-    members["usage-%s.json" % args.since] = as_json + "\n"
-    members["usage-%s.txt" % args.since] = as_text + "\n"
+    # Load the catalog once and archive that object: pricing.load() prefers a
+    # refreshed local cache over the bundled snapshot, and a bundle that ships
+    # the snapshot while the report was priced from the cache cannot explain
+    # its own numbers.
+    catalog = pricing.load()
+    members["model-prices.json"] = json.dumps(catalog, indent=1, sort_keys=True) + "\n"
+    report = None
+    try:
+        report, as_json, as_text = scan(args.since, args.harness, catalog)
+        members["usage-%s.json" % args.since] = as_json + "\n"
+        members["usage-%s.txt" % args.since] = as_text + "\n"
+    except Exception as exc:  # the primary scan failing must not cost the rest of the archive
+        members["usage-%s.error.txt" % args.since] = "%s: %s\n" % (type(exc).__name__, exc)
+        failures.append("usage-%s" % args.since)
     trend_row = ""
     if args.since != "7d":
         try:
-            _, trend_json, _ = scan("7d", args.harness)
+            _, trend_json, _ = scan("7d", args.harness, catalog)
             members["usage-7d.json"] = trend_json + "\n"
             trend_row = "| `usage-7d.json` | Seven-day scan, for trend context |\n"
         except Exception as exc:  # the primary window already succeeded; file this one

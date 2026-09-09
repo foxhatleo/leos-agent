@@ -139,6 +139,62 @@ class TestContents(BundleCase):
                 self.assertIn("- %s: %s" % (name, data["status"]), readme)
 
 
+class TestFidelity(BundleCase):
+    def transcript(self, model, input_tokens):
+        projects = self.root / "projects" / "-p"
+        projects.mkdir(parents=True, exist_ok=True)
+        (projects / "sess.jsonl").write_text(json.dumps({
+            "type": "assistant", "requestId": "r1", "sessionId": "s1",
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "message": {"id": "m1", "model": model,
+                        "usage": {"input_tokens": input_tokens, "cache_read_input_tokens": 0,
+                                  "cache_creation_input_tokens": 0, "output_tokens": 0},
+                        "content": []}}) + "\n")
+        return str(self.root / "projects")
+
+    def test_the_archived_catalog_is_the_one_that_priced_the_report(self):
+        """pricing.load() prefers a refreshed local cache over the bundled snapshot.
+        Archiving the snapshot regardless meant a bundle could not reproduce its
+        own costs. Plant a cache with a sentinel rate; the archive must carry it
+        and recompute to the number the report shows."""
+        bundled = json.loads((ROOT / "payload" / "model-prices.json").read_text(encoding="utf-8"))
+        cache = json.loads(json.dumps(bundled))
+        entry = next(m for m in cache["models"] if m["id"] == "anthropic/claude-sonnet-5")
+        entry["pricing"]["prompt"] = "0.0000001"
+        entry["pricing"].pop("overrides", None)
+        cache_path = self.bundle.pricing.cache_path()
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(cache), encoding="utf-8")
+        with mock.patch.dict(self.bundle.usage_scan.SOURCES, {"claude": self.transcript("claude-sonnet-5", 1000)}):
+            archive = self.build("--since", "7d")
+        archived = json.loads(archive.read("model-prices.json"))
+        report = json.loads(archive.read("usage-7d.json"))
+        archived_entry = next(m for m in archived["models"] if m["id"] == "anthropic/claude-sonnet-5")
+        bundled_entry = next(m for m in bundled["models"] if m["id"] == "anthropic/claude-sonnet-5")
+        self.assertEqual(archived_entry["pricing"]["prompt"], "0.0000001")
+        self.assertNotEqual(archived_entry["pricing"]["prompt"], bundled_entry["pricing"]["prompt"])
+        cost = report["harnesses"]["claude"]["reference_cost"]["claude-sonnet-5"]
+        usage = report["harnesses"]["claude"]["model_usage"]["claude-sonnet-5"]
+        recomputed = self.bundle.usage_scan.reference_cost("claude-sonnet-5", usage, archived)
+        self.assertAlmostEqual(cost["minimum_usd"], recomputed["minimum_usd"])
+        self.assertAlmostEqual(cost["minimum_usd"], 1000 * 0.0000001)
+
+    def test_an_unreadable_guard_log_still_yields_an_archive(self):
+        """dispatch_log.read() used to sys.exit on I/O trouble, which no Exception
+        handler sees: a guard-log path that is a directory produced no archive at
+        all. The scan now reports it, the bundle files it, and the rest is written."""
+        os.makedirs(dispatch_log.path())
+        archive = self.build("--since", "7d")
+        names = archive.namelist()
+        self.assertIn("usage-7d.json", names)
+        self.assertIn("guard-report.error.txt", names)
+        report = json.loads(archive.read("usage-7d.json"))
+        self.assertIn("error", report["guard"])
+        readme = archive.read("README.md").decode("utf-8")
+        self.assertIn("Components that failed", readme)
+        self.assertIn("guard-report", readme)
+
+
 class TestPrivacy(BundleCase):
     def test_no_prompt_text_reaches_the_archive(self):
         """The bundle is for someone else's eyes. A brief, a transcript line, or a

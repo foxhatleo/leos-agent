@@ -312,6 +312,14 @@ class TestAccountingRegressions(ScanCase):
         result = self.scan.reference_cost("<synthetic>", empty, {"models": []})
         self.assertEqual((result["status"], result["unpriced_tokens"], result["minimum_usd"]), ("internal", 0, 0.0))
 
+    def test_an_unreadable_guard_log_is_a_reported_error_not_an_exit(self):
+        import dispatch_log
+        with mock.patch.dict(os.environ, {"LEOS_AGENT_LOCAL_PATH": str(self.root)}):
+            os.makedirs(dispatch_log.path())
+            result = self.scan.scan_guard(0)
+        self.assertIn("error", result)
+        self.assertIn("dispatch.jsonl", result["error"])
+
     def test_guard_window_and_harness_filter(self):
         import dispatch_log
         rows = [{"ts": "2026-01-01T00:00:00Z", "harness": "claude"},

@@ -295,6 +295,21 @@ class TestReport(GuardCase):
         self.assertEqual(summary["agents"], {"leo-cheap @ haiku": 1, "leo-cheap @ unknown": 1})
         self.assertIn("counted once", self.log.render(summary))
 
+    def test_an_unreadable_log_is_an_error_to_callers_and_an_exit_only_in_the_cli(self):
+        """read() serves hooks and scanners, which must file the failure and carry
+        on; only the CLI should exit. A SystemExit from read() skipped a Codex
+        lifecycle hook's mandatory JSON reply and killed the diagnosis bundle."""
+        import contextlib
+        import io
+        import os
+        with self.env():
+            os.makedirs(self.log.path())
+            with self.assertRaises(OSError):
+                self.log.read()
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    self.log.main(["report"])
+
     def test_rows_without_a_session_or_id_are_never_collapsed(self):
         """Dedupe needs both keys; a bare pair of rows is two observations."""
         summary = self.log.summarise([

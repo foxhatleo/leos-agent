@@ -153,7 +153,11 @@ def read(limit=None, target=None):
         except FileNotFoundError:
             continue
         except OSError as exc:
-            sys.exit("dispatch_log: %s: %s" % (candidate, exc.strerror or exc))
+            # Raise, don't exit: read() serves hooks and scanners that must file
+            # an unreadable log as a finding and carry on. A SystemExit here
+            # skipped a Codex lifecycle hook's mandatory JSON reply and took the
+            # diagnosis bundle down before it wrote anything. The CLI exits in main().
+            raise OSError("%s: %s" % (candidate, exc.strerror or exc)) from exc
     return out[-limit:] if limit else out
 
 
@@ -266,7 +270,11 @@ def main(argv=None):
         print(path())
         return 0
 
-    summary = summarise(read(limit=args.limit))
+    try:
+        rows = read(limit=args.limit)
+    except OSError as exc:
+        sys.exit("dispatch_log: %s" % exc)
+    summary = summarise(rows)
     print(json.dumps(summary, indent=1, sort_keys=True) if args.json else render(summary))
     return 0
 

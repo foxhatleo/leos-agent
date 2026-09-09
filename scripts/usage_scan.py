@@ -417,9 +417,11 @@ def reference_cost(model, buckets, catalog):
     return result
 
 
-def collect(since, only=None):
+def collect(since, only=None, catalog=None):
     import pricing
-    catalog = pricing.load()
+    # A caller that archives the catalog passes the one it loaded, so the
+    # archive holds the exact rates that priced this report.
+    catalog = pricing.load() if catalog is None else catalog
     report = {"since": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(since)), "harnesses": {},
               "pricing": {"source": catalog.get("source"), "fetched_at": catalog.get("fetched_at"),
                           "basis": "Current reference text-token rates; conditional rates shown as ranges. Not historical bills. Excludes non-token fees and negotiated/subscription pricing."},
