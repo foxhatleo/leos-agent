@@ -305,6 +305,13 @@ class TestAccountingRegressions(ScanCase):
         self.assertAlmostEqual(result["minimum_usd"], 0.0045)
         self.assertEqual(result["unpriced_tokens"], 2000)
 
+    def test_synthetic_rows_are_internal_not_an_unknown_model(self):
+        """Claude Code writes `<synthetic>` assistant rows for its own bookkeeping.
+        Reporting them as an unknown model reads as a pricing hole that is not one."""
+        empty = {"main": {"input": 0, "cache_read": 0, "cache_write": 0, "output": 0}}
+        result = self.scan.reference_cost("<synthetic>", empty, {"models": []})
+        self.assertEqual((result["status"], result["unpriced_tokens"], result["minimum_usd"]), ("internal", 0, 0.0))
+
     def test_guard_window_and_harness_filter(self):
         import dispatch_log
         rows = [{"ts": "2026-01-01T00:00:00Z", "harness": "claude"},
