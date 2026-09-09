@@ -112,10 +112,21 @@ def plugin_version():
         return "unknown"
 
 
+def _os_description():
+    # platform.platform() shells out to `file` on macOS and can fail in a
+    # constrained environment; a diagnostics bundle must not die on the line
+    # that describes the machine. Fall back to the fields that need no child.
+    try:
+        return platform.platform()
+    except Exception as exc:
+        return "%s %s %s (platform.platform failed: %s)" % (
+            platform.system(), platform.release(), platform.machine(), type(exc).__name__)
+
+
 def environment(args, generated):
     lines = ["generated_at_utc=" + time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(generated)),
              "generated_at_local=" + time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime(generated)),
-             "os=" + platform.platform(),
+             "os=" + _os_description(),
              "python=" + platform.python_version(),
              "plugin_version=" + plugin_version(),
              "plugin_root=" + ROOT,

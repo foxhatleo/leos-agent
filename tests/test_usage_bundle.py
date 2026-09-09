@@ -47,17 +47,18 @@ class BundleCase(unittest.TestCase):
 
     @staticmethod
     def fake_run(results):
-        """A subprocess stand-in keyed by script basename or CLI name; unknown keys succeed."""
-        def run(argv, **_kwargs):
+        """A stand-in for the bundler's own run() seam, keyed by script basename or
+        CLI name; unknown keys succeed. Stubbing the stdlib instead leaked into
+        platform.platform(), which shells out via subprocess on macOS."""
+        def run(argv, timeout=60):
             key = os.path.basename(str(argv[1])) if len(argv) > 1 and str(argv[1]).endswith(".py") else argv[0]
             default = (0, '{"ok": true}\n', "") if key.endswith(".py") else (0, "ok\n", "")
-            code, out, err = results.get(key, default)
-            return subprocess.CompletedProcess(argv, code, out, err)
+            return results.get(key, default)
         return run
 
     def build(self, *args, results=None):
         out = self.root / "bundle.zip"
-        with mock.patch.object(self.bundle.subprocess, "run", self.fake_run(results or {})), \
+        with mock.patch.object(self.bundle, "run", self.fake_run(results or {})), \
                 mock.patch("sys.stdout", new=io.StringIO()) as printed, \
                 mock.patch("sys.stderr", new=io.StringIO()):
             self.assertEqual(self.bundle.main(list(args) + ["--out", str(out)]), 0)
@@ -118,6 +119,16 @@ class TestContents(BundleCase):
         self.assertIn("claude_cli=claude: not found on PATH", env)
         self.assertIn("plugin_version=", env)
         self.assertIn("scan_window=--since 7d", env)
+
+    def test_environment_survives_a_platform_module_failure(self):
+        """The line that describes the machine must not be the line that kills the
+        bundle. macOS's platform.platform() shells out and can fail."""
+        with mock.patch.object(self.bundle.platform, "platform", side_effect=AttributeError("decode")):
+            archive = self.build("--since", "7d")
+        env = archive.read("environment.txt").decode("utf-8")
+        self.assertIn("os=", env)
+        self.assertIn("platform.platform failed: AttributeError", env)
+        self.assertIn("generated_at_utc=", env)
 
     def test_the_readme_headline_matches_the_json(self):
         archive = self.build("--since", "7d")
