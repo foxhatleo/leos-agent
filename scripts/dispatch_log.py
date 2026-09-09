@@ -159,6 +159,19 @@ def read(limit=None, target=None):
 
 def summarise(entries):
     """The read-time judgment: burst collapse, tiers, and block conversion."""
+    # A child whose model arrived late has two rows: the SubagentStop
+    # "completed" and the SessionEnd "executed" that supersedes it. Count each
+    # child once, in its final state, so decisions and agents describe agents
+    # rather than rows. records stays the raw retained count.
+    executed_children = {
+        (e.get("session"), e.get("agent_id")) for e in entries
+        if e.get("decision") == "executed" and e.get("session") and e.get("agent_id")
+    }
+    superseded = {
+        id(e) for e in entries
+        if e.get("decision") == "completed" and (e.get("session"), e.get("agent_id")) in executed_children
+    }
+    current = [e for e in entries if id(e) not in superseded]
     dispatches = [e for e in entries if e.get("decision") not in ("executed", "completed")]
     # Allowed attempts count toward a burst; execution is not established. A block and the
     # re-dispatch it forced land in the same two-second bucket, and counting
@@ -200,7 +213,8 @@ def summarise(entries):
         "dispatch_attempts": len([e for e in dispatches if e.get("decision") != "error"]),
         "window": [entries[0].get("ts"), entries[-1].get("ts")] if entries else [],
         "harnesses": dict(collections.Counter(e.get("harness") for e in entries)),
-        "decisions": dict(collections.Counter(e.get("decision") for e in entries)),
+        "decisions": dict(collections.Counter(e.get("decision") for e in current)),
+        "superseded": len(superseded),
         "tiers": dict(tiers),
         "errors": sum(1 for e in entries if e.get("decision") == "error"),
         "blocked": len(blocked),
@@ -209,7 +223,7 @@ def summarise(entries):
         "trivial_lone_spawns": len(trivial),
         "agents": dict(collections.Counter(
             "%s @ %s" % (e.get("agent") or "-", e.get("effective_model") or e.get("requested_model") or e.get("model") or "unknown")
-            for e in entries
+            for e in current
         )),
     }
 
@@ -226,6 +240,8 @@ def render(summary):
 
     lines.append("%d lifecycle record(s)  %s .. %s" % (summary["records"], summary["window"][0], summary["window"][1]))
     lines.append("  dispatch attempts  %d; child model observations  %d" % (summary["dispatch_attempts"], summary["confirmed_executions"]))
+    if summary.get("superseded"):
+        lines.append("  reconciled  %d child(ren) counted once, in their final state" % summary["superseded"])
     lines.append("  harnesses   " + ", ".join("%s %d" % kv for kv in sorted(summary["harnesses"].items())))
     lines.append("  tiers       " + ", ".join("%s %d" % kv for kv in sorted(summary["tiers"].items())))
     if summary["blocked"]:

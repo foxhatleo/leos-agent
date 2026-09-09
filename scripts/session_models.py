@@ -50,23 +50,39 @@ def transcript_model(path):
     return None
 
 
+_AGENT_ID_RE = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def child_transcript(event):
+    """The child's own transcript path: named by the event, or derived from agent_id.
+
+    Claude names it as agent_transcript_path on most lifecycle events, but not
+    all of them; when it is absent, the parent transcript's sibling directory
+    holds subagents/agent-<id>.jsonl. None when neither is available or the id
+    is not a safe path component.
+    """
+    path = event.get("agent_transcript_path") or event.get("agentTranscriptPath")
+    if isinstance(path, str) and path:
+        return path
+    agent = event.get("agent_id") or event.get("agentId")
+    transcript = event.get("transcript_path") or event.get("transcriptPath")
+    if not (isinstance(agent, str) and _AGENT_ID_RE.fullmatch(agent) and isinstance(transcript, str) and transcript):
+        return None
+    filename = agent if agent.startswith("agent-") else "agent-" + agent
+    return str(Path(transcript).with_suffix("") / "subagents" / (filename + ".jsonl"))
+
+
 def parent_model(event, harness):
     explicit = event.get("parent_model")
     if isinstance(explicit, str) and explicit:
         return explicit
     if harness == "codex" and isinstance(event.get("model"), str) and event["model"]:
         return event["model"]  # documented active-model field, newer than transcript
-    if harness == "claude" and event.get("agent_id"):
+    if harness == "claude" and (event.get("agent_id") or event.get("agentId")):
         # Nested review dispatches must be capped to their immediate caller,
         # never the more expensive root conversation. Claude exposes agent_id
         # in subagent hooks, while transcript_path can still name the root.
-        path = event.get("agent_transcript_path")
-        agent = event["agent_id"]
-        transcript = event.get("transcript_path")
-        if not path and isinstance(agent, str) and re.fullmatch(r"[A-Za-z0-9_-]+", agent) and isinstance(transcript, str):
-            filename = agent if agent.startswith("agent-") else "agent-" + agent
-            path = str(Path(transcript).with_suffix("") / "subagents" / (filename + ".jsonl"))
-        return transcript_model(path)  # unknown is safer than using the root price
+        return transcript_model(child_transcript(event))  # unknown is safer than using the root price
     # PreToolUse follows an assistant response: its transcript model is newer
     # than SessionStart and reflects per-turn provider fallback as well.
     model = transcript_model(event.get("agent_transcript_path") or event.get("transcript_path"))
