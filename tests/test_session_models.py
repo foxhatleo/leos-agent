@@ -59,6 +59,35 @@ class ModelObservations(unittest.TestCase):
         self.assertEqual(rows[-1]["decision"], "executed")
         self.assertNotIn("PRIVATE_PROMPT", json.dumps(rows))
 
+    def test_lifecycle_reads_every_spelling_the_guard_does(self):
+        """Claude spells the child's fields differently across hook versions.
+        The guard already tolerates all of them; when the observer read one
+        spelling, 70 of 84 rows in a day landed as `- @ unknown`."""
+        observe_agent.observe({"hook_event_name": "SubagentStop", "subagentType": "leos-agent:leo-cheap",
+                               "agentId": "c1", "sessionId": "s", "toolCallId": "t1",
+                               "agentTranscriptPath": self.transcript("haiku")}, "claude")
+        row = dispatch_log.read()[-1]
+        self.assertEqual((row["agent"], row["agent_id"], row["call_id"], row["effective_model"], row["decision"]),
+                         ("leos-agent:leo-cheap", "c1", "t1", "haiku", "executed"))
+        self.assertEqual(row["session"], dispatch_log.digest("s"))
+
+    def test_a_stop_without_a_child_path_derives_it_from_agent_id(self):
+        root = self.transcript("opus")
+        child = self.root / "opus" / "subagents" / "agent-kid.jsonl"
+        child.parent.mkdir(parents=True)
+        child.write_text(json.dumps({"type": "assistant", "message": {"model": "sonnet"}}))
+        observe_agent.observe({"hook_event_name": "SubagentStop", "agent_type": "leo-standard",
+                               "agent_id": "kid", "transcript_path": root}, "claude")
+        row = dispatch_log.read()[-1]
+        self.assertEqual((row["agent"], row["effective_model"], row["decision"]), ("leo-standard", "sonnet", "executed"))
+
+    def test_child_transcript_refuses_unsafe_ids(self):
+        self.assertIsNone(session_models.child_transcript({"agent_id": "../etc", "transcript_path": "/t.jsonl"}))
+        self.assertIsNone(session_models.child_transcript({"agent_id": "ok"}))
+        self.assertEqual(session_models.child_transcript({"agentId": "ok", "transcriptPath": "/t.jsonl"}),
+                         str(Path("/t") / "subagents" / "agent-ok.jsonl"))
+        self.assertEqual(session_models.child_transcript({"agentTranscriptPath": "/c.jsonl", "agent_id": "x"}), "/c.jsonl")
+
     def test_session_end_recovers_delayed_child_model_once(self):
         parent = self.root / "session.jsonl"
         child = self.root / "session/subagents/agent-delayed.jsonl"

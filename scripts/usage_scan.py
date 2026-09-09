@@ -19,6 +19,10 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 TOKEN_KEYS = ("input", "cache_read", "cache_write", "output")
+# Rows a harness writes for its own bookkeeping, not a model anyone is billed
+# for. Claude Code's "<synthetic>" assistant rows carry no usage; report them
+# as internal rather than as an unknown model with an unpriced subtotal.
+INTERNAL_MODELS = frozenset(("<synthetic>",))
 
 # Claude Code's dispatch tool is `Agent` in current builds and `Task` in older
 # transcripts. Both appear in one history, so both are counted.
@@ -392,9 +396,12 @@ def routing_compliance(dispatches):
 def reference_cost(model, buckets, catalog):
     import pricing
     from decimal import Decimal
+    amounts = {key: sum(role[key] for role in buckets.values()) for key in TOKEN_KEYS}
+    if model in INTERNAL_MODELS:
+        return {"requested": model, "status": "internal", "reference_model": None,
+                "minimum_usd": 0.0, "maximum_usd": 0.0, "unpriced_tokens": sum(amounts.values())}
     match = pricing.resolve(model, catalog)
     result = {**match.report(), "minimum_usd": 0.0, "maximum_usd": 0.0, "unpriced_tokens": 0}
-    amounts = {key: sum(role[key] for role in buckets.values()) for key in TOKEN_KEYS}
     low, high = Decimal(0), Decimal(0)
     for key, rate_key in zip(TOKEN_KEYS, ("prompt", "input_cache_read", "input_cache_write", "completion")):
         if not amounts[key]:
@@ -410,9 +417,11 @@ def reference_cost(model, buckets, catalog):
     return result
 
 
-def collect(since, only=None):
+def collect(since, only=None, catalog=None):
     import pricing
-    catalog = pricing.load()
+    # A caller that archives the catalog passes the one it loaded, so the
+    # archive holds the exact rates that priced this report.
+    catalog = pricing.load() if catalog is None else catalog
     report = {"since": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(since)), "harnesses": {},
               "pricing": {"source": catalog.get("source"), "fetched_at": catalog.get("fetched_at"),
                           "basis": "Current reference text-token rates; conditional rates shown as ranges. Not historical bills. Excludes non-token fees and negotiated/subscription pricing."},
@@ -448,7 +457,9 @@ def collect(since, only=None):
 def render(report):
     lines = ["leos-agent observed usage since " + report["since"],
              "Reference costs are not bills. Savings require a comparable task baseline.", ""]
-    for name, data in report["harnesses"].items():
+    # Sorted, so the text is the same whether rendered from the live report or
+    # from its sort_keys JSON; a bundle's .txt and .json must agree to the byte.
+    for name, data in sorted(report["harnesses"].items()):
         if data.get("status") not in ("ok", "partial"):
             lines.append(name + ": " + data["status"] + " — " + str(data.get("error") or data.get("reason") or data.get("looked_in", "")))
             continue

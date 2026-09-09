@@ -35,6 +35,23 @@ Report the useful conclusions concisely:
   substantial work; a busy main thread can be appropriate. Neither a high
   delegation share nor fewer tokens proves lower cost or preserved quality.
 
+## Diagnosis artifact
+
+When the user asks for a diagnosis artifact, bundle, or package, or for
+something to send to the maintainer, run the bundler and hand back the path
+it prints:
+
+```
+python3 "<plugin-root>/scripts/usage_bundle.py" --since 7d --out <path.zip>
+```
+
+Use the same window as the report. The zip is self-contained for a reader
+who does not have this codebase: the scan as JSON and text from one run, a
+7d scan for trend, doctor output per harness, routing configuration,
+environment and tool versions, the scanner source, and the schema reference.
+It never includes transcripts, prompt text, or the raw dispatch log. Do not
+assemble one by hand or add transcript excerpts to it.
+
 Recommend a change only when evidence supports it. To demonstrate savings,
 compare equivalent representative tasks with and without the policy, including
 parent planning, child work, cache rates, verification, retries, and outcome

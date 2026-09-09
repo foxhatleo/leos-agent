@@ -8,6 +8,9 @@ Decide whether to delegate before choosing a model. Keep small, tightly coupled
 work local. Delegate substantial bounded work when it avoids meaningful parent
 reasoning or context growth. A short brief alone does not prove a task is small.
 Do not re-investigate work you already completed just to delegate it.
+Delegation pays on fan-out: independent pieces, parallel review lenses, bulk
+reading. A dependent chain is cheaper in the parent; if it needs more depth,
+raise effort before spawning.
 
 Choose the cheapest competent tier:
 - Cheap: bounded retrieval, mechanical changes, straightforward checks.

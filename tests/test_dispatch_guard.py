@@ -280,6 +280,45 @@ class TestReport(GuardCase):
         self.assertNotIn("inherited", summary["tiers"])
         self.assertIn("general @ haiku", summary["agents"])
 
+    def test_a_reconciled_child_is_counted_once_in_its_final_state(self):
+        """SessionEnd appends an `executed` row for a child whose model arrived
+        late. Its earlier `completed` row is superseded, not a second agent,
+        or every late child inflates the unattributed count by one."""
+        summary = self.log.summarise([
+            {"decision": "completed", "session": "s", "agent_id": "a", "agent": "leo-cheap"},
+            {"decision": "executed", "session": "s", "agent_id": "a", "agent": "leo-cheap", "effective_model": "haiku"},
+            {"decision": "completed", "session": "s", "agent_id": "b", "agent": "leo-cheap"},
+        ])
+        self.assertEqual(summary["records"], 3)
+        self.assertEqual(summary["superseded"], 1)
+        self.assertEqual(summary["decisions"], {"completed": 1, "executed": 1})
+        self.assertEqual(summary["agents"], {"leo-cheap @ haiku": 1, "leo-cheap @ unknown": 1})
+        self.assertIn("counted once", self.log.render(summary))
+
+    def test_an_unreadable_log_is_an_error_to_callers_and_an_exit_only_in_the_cli(self):
+        """read() serves hooks and scanners, which must file the failure and carry
+        on; only the CLI should exit. A SystemExit from read() skipped a Codex
+        lifecycle hook's mandatory JSON reply and killed the diagnosis bundle."""
+        import contextlib
+        import io
+        import os
+        with self.env():
+            os.makedirs(self.log.path())
+            with self.assertRaises(OSError):
+                self.log.read()
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    self.log.main(["report"])
+
+    def test_rows_without_a_session_or_id_are_never_collapsed(self):
+        """Dedupe needs both keys; a bare pair of rows is two observations."""
+        summary = self.log.summarise([
+            {"decision": "completed", "agent": "x"},
+            {"decision": "executed", "agent": "x", "effective_model": "haiku"},
+        ])
+        self.assertEqual(summary["superseded"], 0)
+        self.assertEqual(summary["decisions"], {"completed": 1, "executed": 1})
+
     def test_a_matching_brief_does_not_prove_execution_or_savings(self):
         """The whole point of hashing the prompt: a block nobody acted on is not
         a saving, and only the hash can tell the two apart."""
