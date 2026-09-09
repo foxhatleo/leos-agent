@@ -54,7 +54,7 @@ window ends at collection time, not at the end of a calendar day.
 |---|---|
 | `usage-{since}.json` | Primary artifact: `usage_scan.py --since {since} --json` |
 | `usage-{since}.txt` | The same report rendered as text, from the same run |
-{trend_row}| `doctor-<harness>.json` | `doctor.py --harness <h>`; an `.error.txt` sibling means that run failed |
+{trend_row}| `doctor-<harness>.json` | `doctor.py --harness <h>`; an `.exit.txt` sibling carries a non-zero exit (usually: not installed here); an `.error.txt` sibling means the run produced no report |
 | `routing-show.txt` | Configured cheap/standard tiers per harness |
 | `guard-report.txt` | Rendered dispatch-guard summary over the whole retained log |
 | `environment.txt` | OS, Python, plugin version, harness CLI versions, timestamps |
@@ -89,6 +89,13 @@ def run(argv, timeout=60):
         return 124, "", "%s: timed out after %ss" % (argv[0], timeout)
     except OSError as exc:
         return 1, "", "%s: %s" % (argv[0], exc)
+
+
+def _json_object(text):
+    try:
+        return isinstance(json.loads(text), dict)
+    except ValueError:
+        return False
 
 
 def scan(since_text, only):
@@ -162,8 +169,13 @@ def build(args):
     python = sys.executable or "python3"
     for name in ([args.harness] if args.harness in routing.HARNESSES else list(routing.HARNESSES)):
         code, out, err = run([python, os.path.join(HERE, "doctor.py"), "--harness", name, "--json"])
-        if code == 0 and out.strip():
+        # doctor exits non-zero for an installation that is not current. That is
+        # a finding, and its JSON is the diagnostic; only a run that produced no
+        # report at all is a failure of the bundle's own.
+        if _json_object(out):
             members["doctor-%s.json" % name] = out
+            if code != 0:
+                members["doctor-%s.exit.txt" % name] = "exit %d\n%s" % (code, err)
         else:
             members["doctor-%s.error.txt" % name] = "exit %d\n%s%s" % (code, out, err)
             failures.append("doctor-" + name)

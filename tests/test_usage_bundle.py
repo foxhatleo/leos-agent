@@ -50,7 +50,8 @@ class BundleCase(unittest.TestCase):
         """A subprocess stand-in keyed by script basename or CLI name; unknown keys succeed."""
         def run(argv, **_kwargs):
             key = os.path.basename(str(argv[1])) if len(argv) > 1 and str(argv[1]).endswith(".py") else argv[0]
-            code, out, err = results.get(key, (0, "ok\n", ""))
+            default = (0, '{"ok": true}\n', "") if key.endswith(".py") else (0, "ok\n", "")
+            code, out, err = results.get(key, default)
             return subprocess.CompletedProcess(argv, code, out, err)
         return run
 
@@ -98,6 +99,18 @@ class TestContents(BundleCase):
         self.assertNotIn("doctor-claude.json", names)
         self.assertIn("doctor exploded", archive.read("doctor-claude.error.txt").decode("utf-8"))
         self.assertIn("Components that failed", archive.read("README.md").decode("utf-8"))
+
+    def test_a_not_current_installation_is_a_finding_not_a_failure(self):
+        """doctor exits 1 when an installation is not current and still prints its
+        report. Filing that as an error hid exactly the harnesses worth reading."""
+        report = json.dumps({"harness": "x", "installation_current": False})
+        archive = self.build("--since", "7d", results={"doctor.py": (1, report, "6 target(s) out of date\n")})
+        names = archive.namelist()
+        self.assertEqual(archive.read("doctor-claude.json").decode("utf-8"), report)
+        self.assertIn("exit 1", archive.read("doctor-claude.exit.txt").decode("utf-8"))
+        self.assertIn("out of date", archive.read("doctor-claude.exit.txt").decode("utf-8"))
+        self.assertNotIn("doctor-claude.error.txt", names)
+        self.assertNotIn("Components that failed", archive.read("README.md").decode("utf-8"))
 
     def test_environment_records_missing_clis_instead_of_failing(self):
         archive = self.build("--since", "7d", results={"claude": (127, "", "claude: not found on PATH")})
