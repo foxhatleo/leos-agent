@@ -10,6 +10,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import subprocess
 import types
 import tempfile
 import unittest
@@ -174,19 +175,22 @@ class TestTickResilience(unittest.TestCase):
         watcher.time = types.SimpleNamespace(
             time=lambda: 0.0, sleep=mock.Mock(side_effect=self.StopLoop)
         )
-        args = types.SimpleNamespace(directory=".", settle=0, interval=300)
-        with contextlib.redirect_stderr(io.StringIO()) as err:
+        args = types.SimpleNamespace(directory=".", settle=0, interval=60)
+        with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()) as err:
             with self.assertRaises(self.StopLoop):
                 watcher.monitor(args)
-        return err.getvalue()
+        return out.getvalue(), err.getvalue()
 
-    def test_malformed_gh_output_is_survived(self):
-        err = self.run_one_tick(json.JSONDecodeError("bad", "doc", 0))
+    def test_malformed_gh_output_is_survived_and_reported(self):
+        out, err = self.run_one_tick(json.JSONDecodeError("bad", "doc", 0))
         self.assertIn("retrying next interval", err)
+        # stdout is what the Monitor reader sees; a silent failure is the bug.
+        self.assertIn("tick failed", out)
 
-    def test_a_missing_field_is_survived(self):
-        err = self.run_one_tick(KeyError("number"))
+    def test_a_missing_field_is_survived_and_reported(self):
+        out, err = self.run_one_tick(KeyError("number"))
         self.assertIn("retrying next interval", err)
+        self.assertIn("tick failed", out)
 
     def test_a_keyboard_interrupt_still_ends_the_watch(self):
         watcher = load_watcher()
@@ -195,6 +199,95 @@ class TestTickResilience(unittest.TestCase):
         args = types.SimpleNamespace(directory=".", settle=0, interval=300)
         with self.assertRaises(KeyboardInterrupt):
             watcher.monitor(args)
+
+
+class TestFailureReporting(unittest.TestCase):
+    """A broken watch says so where the reader can see it, without a line a minute.
+
+    Before this, every failed tick went to stderr only, which the Monitor tool
+    does not surface: an expired gh token looked exactly like a quiet repo.
+    """
+
+    class StopLoop(Exception):
+        pass
+
+    def run_ticks(self, outcomes, watcher=None):
+        """outcomes: an exception per failed tick, or None for a clean, empty tick."""
+        watcher = watcher or load_watcher()
+        queue = list(outcomes)
+
+        def discover(cwd):
+            item = queue.pop(0)
+            if item is not None:
+                raise item
+            return "o/r", "leo", []
+
+        def sleep(_seconds):
+            if not queue:
+                raise self.StopLoop
+
+        watcher.discover = discover
+        watcher.time = types.SimpleNamespace(time=lambda: 0.0, sleep=sleep)
+        args = types.SimpleNamespace(directory=".", settle=0, interval=60)
+        with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()) as err:
+            with self.assertRaises(self.StopLoop):
+                watcher.monitor(args)
+        return out.getvalue().splitlines(), err.getvalue().splitlines()
+
+    def test_the_first_failure_is_announced_and_repeats_stay_quiet(self):
+        out, err = self.run_ticks([KeyError("x")] * 3)
+        self.assertEqual(sum("tick failed" in line for line in out), 1)
+        self.assertEqual(sum("tick failed" in line for line in err), 3)
+        self.assertIn("retrying every 60s", out[0])
+
+    def test_a_changed_reason_is_announced_again(self):
+        out, _ = self.run_ticks([KeyError("x"), KeyError("x"), ValueError("y")])
+        self.assertEqual(sum("tick failed" in line for line in out), 2)
+
+    def test_recovery_is_announced_with_the_count(self):
+        out, _ = self.run_ticks([KeyError("x"), KeyError("x"), None])
+        self.assertTrue(any("recovered after 2 failed tick(s)" in line for line in out), out)
+
+    def test_a_long_outage_reminds_every_ten_ticks(self):
+        out, _ = self.run_ticks([KeyError("x")] * 20)
+        self.assertEqual(sum("still failing after" in line for line in out), 2)
+        self.assertEqual(sum("tick failed" in line for line in out), 1)
+
+    def test_clean_ticks_say_nothing(self):
+        out, _ = self.run_ticks([None, None])
+        self.assertEqual(out, [])
+
+    def test_a_gh_failure_carries_its_own_message(self):
+        """`gh exited 1` tells the reader nothing; the 401 does."""
+        watcher = load_watcher()
+        out, _ = self.run_ticks([watcher.GhError("HTTP 401: Bad credentials")], watcher)
+        self.assertTrue(any("HTTP 401: Bad credentials" in line for line in out), out)
+
+    def test_gh_raises_rather_than_exiting_so_monitor_can_report(self):
+        watcher = load_watcher()
+        with mock.patch.object(watcher.subprocess, "run",
+                               return_value=subprocess.CompletedProcess([], 1, "", "gh: not logged in")):
+            with self.assertRaisesRegex(watcher.GhError, "not logged in"):
+                watcher.gh(["api", "user"], ".")
+        with mock.patch.object(watcher.subprocess, "run", side_effect=FileNotFoundError):
+            with self.assertRaisesRegex(watcher.GhError, "not installed"):
+                watcher.gh(["api", "user"], ".")
+
+
+class TestDefaults(unittest.TestCase):
+    def test_monitor_polls_every_minute_by_default(self):
+        watcher = load_watcher()
+        seen = {}
+        watcher.monitor = lambda args: seen.update(vars(args))
+        watcher.main(["monitor"])
+        self.assertEqual(seen["interval"], 60)
+        self.assertEqual(seen["settle"], 120)
+
+    def test_the_thirty_second_floor_still_holds(self):
+        watcher = load_watcher()
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                watcher.main(["monitor", "--interval", "10"])
 
 
 class TestClaimsAndPagination(unittest.TestCase):
@@ -226,10 +319,11 @@ class TestClaimsAndPagination(unittest.TestCase):
         self.w.renew_claim("o/r", 1, token, 1801, release=True)
         self.assertIsNotNone(self.w.claim_review("o/r", 1, head, 1802))
         self.assertIsNotNone(self.w.claim_review("o/r", 1, head, 4000))
-        with contextlib.redirect_stderr(io.StringIO()) as err:
+        # Exhaustion goes to stdout: it is something the reader must act on.
+        with contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertIsNone(self.w.claim_review("o/r", 1, head, 6000))
             self.assertIsNone(self.w.claim_review("o/r", 1, head, 6001))
-        self.assertEqual(err.getvalue().count("exhausted"), 1)
+        self.assertEqual(out.getvalue().count("exhausted"), 1)
 
     def test_monitor_emits_and_claims_successful_tick(self):
         self.w.discover = mock.Mock(return_value=("o/r", "leo", [pr()]))

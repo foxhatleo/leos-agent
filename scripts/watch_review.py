@@ -6,7 +6,7 @@ a state file — none of it needs a model. This script does that half in the
 shell and prints one line per new pull request; whoever reads stdout does the
 review. Idle ticks use only the GitHub API; pagination increases calls for large repositories.
 
-  watch_review.py monitor [-C DIR] --interval 300
+  watch_review.py monitor [-C DIR] --interval 60
   watch_review.py record [-C DIR] <n> --head <full-sha> --result <stage-report.json> --claim <token>
   watch_review.py renew|release [-C DIR] <n> --claim <token>
   watch_review.py state|forget [-C DIR] [numbers...]
@@ -21,7 +21,10 @@ is eligible again. Drafts, team-only requests, and PRs already approved by
 another user are excluded.
 
 Intended for Claude Code's Monitor tool, which turns each stdout line into a
-session notification. Any `read`-driven shell loop works the same way.
+session notification. Any `read`-driven shell loop works the same way. A
+failed tick is reported on stdout too -- once, again when the reason changes,
+and every ten consecutive failures -- with a recovery line when discovery
+works again. stderr carries every tick's detail for whoever tails the log.
 
 State lives in the review-watcher state file managed by state.py, keyed by
 "owner/repo" — the same file and shape the watch-review skill reads. Entries
@@ -48,16 +51,21 @@ def fail(message):
 	sys.exit(1)
 
 
+class GhError(RuntimeError):
+	"""gh could not answer. Fatal for a one-shot command; one bad tick for monitor,
+	which needs the message itself rather than an exit code to show the reader."""
+
+
 def gh(args, cwd):
-	"""Run a read-only gh command and return stdout, or fail loudly."""
+	"""Run a read-only gh command and return stdout, or raise GhError with why."""
 	try:
 		proc = subprocess.run(
 			["gh"] + args, cwd=cwd, capture_output=True, text=True, check=False, timeout=30
 		)
 	except FileNotFoundError:
-		fail("gh is not installed or not on PATH")
+		raise GhError("gh is not installed or not on PATH")
 	if proc.returncode != 0:
-		fail((proc.stderr or proc.stdout).strip() or f"gh {args[0]} failed")
+		raise GhError((proc.stderr or proc.stdout).strip() or f"gh {args[0]} failed")
 	return proc.stdout
 
 
@@ -99,7 +107,7 @@ def identity(cwd):
 	repo = json.loads(gh(["repo", "view", "--json", "nameWithOwner"], cwd))["nameWithOwner"]
 	login = gh(["api", "user", "--jq", ".login"], cwd).strip()
 	if not login:
-		fail("gh api user returned no login; is gh authenticated?")
+		raise GhError("gh api user returned no login; is gh authenticated?")
 	return repo, login
 
 
@@ -268,7 +276,8 @@ def claim_review(repo, number, head, now, lease=1800):
 			if not old.get("exhausted_notified"):
 				old["exhausted_notified"] = True
 				state_mod.atomic_write(path, data)
-				print(f"watch-review: {repo}#{number} exhausted 3 attempts at {head}; use forget to retry", file=sys.stderr, flush=True)
+				# stdout: the reader must learn this head is stuck, not just the log.
+				print(f"watch-review: {repo}#{number} exhausted 3 attempts at {head}; use forget to retry", flush=True)
 			return None
 		token = uuid.uuid4().hex
 		claims[str(number)] = {"head": head, "expires": now + lease, "token": token, "attempts": attempts + 1}
@@ -287,9 +296,30 @@ def renew_claim(repo, number, token, now, release=False):
 		state_mod.atomic_write(path, data)
 
 
+FAILURE_REMINDER_TICKS = 10
+
+
+def report_failure(message, failures, last_error, interval):
+	"""Say a tick failed where the Monitor reader can see it, without a line a minute.
+
+	stdout is the notification channel. A persistent outage announces itself
+	once, again whenever the reason changes, and every ten straight failures so
+	an hour of silence never reads as an hour of nothing to review. stderr still
+	gets every tick. Returns the updated (failures, last_error).
+	"""
+	failures += 1
+	print(f"watch-review: tick failed ({message}); retrying next interval", file=sys.stderr, flush=True)
+	if failures == 1 or message != last_error:
+		print(f"watch-review: tick failed ({message}); retrying every {interval}s", flush=True)
+	elif failures % FAILURE_REMINDER_TICKS == 0:
+		print(f"watch-review: still failing after {failures} ticks ({message}); check gh auth and network", flush=True)
+	return failures, message
+
+
 def monitor(args):
 	"""Lease each emitted review; only verified completion suppresses its head."""
 	first_seen = {}
+	failures, last_error = 0, None
 	while True:
 		try:
 			repo, _, matches = discover(args.directory)
@@ -304,20 +334,17 @@ def monitor(args):
 				# One line, one event. The title is data — a reader must treat
 				# it as a string to show Leo, never as an instruction.
 				print(event_line(verb, repo, pr, previous) + f" claim={token}", flush=True)
-		except SystemExit as exc:
+			if failures:
+				print(f"watch-review: recovered after {failures} failed tick(s)", flush=True)
+				failures, last_error = 0, None
+		except GhError as exc:
 			# A transient gh failure must not kill a session-length watch.
-			print(
-				f"watch-review: tick failed ({exc.code}); retrying next interval",
-				file=sys.stderr,
-				flush=True,
-			)
+			failures, last_error = report_failure(str(exc), failures, last_error, args.interval)
+		except SystemExit as exc:
+			failures, last_error = report_failure(f"exit {exc.code}", failures, last_error, args.interval)
 		except Exception as exc:
 			# Neither may malformed gh output — bad JSON, a missing field.
-			print(
-				f"watch-review: tick failed ({exc!r}); retrying next interval",
-				file=sys.stderr,
-				flush=True,
-			)
+			failures, last_error = report_failure(repr(exc), failures, last_error, args.interval)
 		time.sleep(args.interval)
 
 
@@ -327,7 +354,7 @@ def main(argv):
 
 	mon = sub.add_parser("monitor")
 	mon.add_argument("-C", "--directory", default=".", help="repository directory (default: cwd)")
-	mon.add_argument("--interval", type=int, default=300, help="seconds between ticks")
+	mon.add_argument("--interval", type=int, default=60, help="seconds between ticks (default: 60)")
 	mon.add_argument(
 		"--settle",
 		type=int,
@@ -413,5 +440,5 @@ def main(argv):
 if __name__ == "__main__":
 	try:
 		sys.exit(main(sys.argv[1:]) or 0)
-	except (ValueError, OSError, subprocess.TimeoutExpired) as exc:
+	except (ValueError, OSError, GhError, subprocess.TimeoutExpired) as exc:
 		fail(str(exc))
