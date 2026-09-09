@@ -3,20 +3,88 @@ name: release
 # The path of this file is load-bearing: npm's trusted publishing configuration
 # for `leos-agent` names `.github/workflows/release.yml`, and OIDC publishes are
 # rejected from any other workflow. Renaming it requires updating npm first.
+#
+# Both entry points therefore live here. A ref pushed with GITHUB_TOKEN starts
+# no workflow run, so a separate tagging workflow could never hand a tag off to
+# this one; instead the main-push path tags and publishes within a single run,
+# and the tag-push path stays exactly as it was for releases cut by hand.
 on:
   push:
+    branches: [main]
     tags:
       - "v*"
 
 permissions:
   contents: read
 
+# One release at a time across the repository. Two runs preparing a release
+# concurrently would derive the same version from the same package.json; the
+# atomic push in tag-release.py is what makes that safe, and this is the cheap
+# way to avoid relying on it. Queued runs are never cancelled in flight: a run
+# that has already pushed its tag still has to publish it.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 env:
   LEOS_AGENT_PRICE_REFRESH: "off"
   PYTHONDONTWRITEBYTECODE: "1"
 
 jobs:
-  release:
+  tag:
+    # Only main pushes tag, and never the release commit this job itself pushes.
+    # That commit is excluded twice over: a GITHUB_TOKEN push starts no workflow
+    # run at all, and the message guard still holds if that push ever moves to a
+    # credential that does. A `Release ` subject is therefore reserved: it also
+    # skips a release prepared by hand, whose own tag push publishes it, and it
+    # will skip any other commit that happens to start that way.
+    if: >-
+      github.ref == 'refs/heads/main'
+      && !github.event.deleted
+      && !startsWith(github.event.head_commit.message, 'Release ')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # pushes the release commit and its tag; deliberately no id-token
+    outputs:
+      tag: ${{ steps.prepare.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+      - name: Bump, verify, then push the release commit and its tag atomically
+        id: prepare
+        # --expect-sha pins this to the commit that triggered the run, so a run
+        # only ever releases the tip it was told about. If main moved on, the
+        # push is rejected whole and the script defers to the run for the newer
+        # tip rather than retrying against a tree it never verified.
+        #
+        # The checks are the same four the publish job repeats, run here against
+        # the bumped tree before the refs move: a tag pushed for a tree that
+        # cannot pass them is a tag nothing will ever publish.
+        run: |
+          python3 scripts/tag-release.py \
+            --expect-sha "$GITHUB_SHA" \
+            --verify "node --test tests/js/*.test.js" \
+            --verify "python3 -m unittest discover -s tests" \
+            --verify "python3 scripts/check.py" \
+            --verify "python3 scripts/measure_context.py --check"
+
+  publish:
+    needs: [tag]
+    # Two ways in: a tag this run just pushed, or a v* tag pushed by hand (where
+    # the tag job is skipped). !cancelled() is required for the second case --
+    # without a status function, a skipped dependency would skip this job too.
+    if: >-
+      !cancelled() && (
+        (needs.tag.result == 'success' && needs.tag.outputs.tag != '')
+        || (needs.tag.result == 'skipped' && startsWith(github.ref, 'refs/tags/v'))
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -26,6 +94,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+          ref: ${{ needs.tag.outputs.tag || github.ref_name }}
       - name: Require the release commit to be on main
         run: git merge-base --is-ancestor HEAD origin/main
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -44,7 +113,9 @@ jobs:
       - name: Enforce static prompt budgets
         run: python3 scripts/measure_context.py --check
       - name: Publish to npm when the exact version is absent
+        env:
+          RELEASE_TAG: ${{ needs.tag.outputs.tag || github.ref_name }}
         run: |
           # Trusted publishing needs npm >= 11.5.1; node 22 ships older.
           npm install --global npm@11.17.0
-          python3 scripts/publish-npm.py --tag "$GITHUB_REF_NAME"
+          python3 scripts/publish-npm.py --tag "$RELEASE_TAG"

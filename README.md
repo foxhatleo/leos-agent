@@ -277,12 +277,20 @@ observable. Total CLI-reported reference cost, including diagnostic runs, was
 about $0.223. A fresh session's first dispatch can precede parent transcript
 persistence, so that case remains an explicit unknown-parent allowance.
 
-Commits run validation only. Release versions use `12.YYYYMMDDXX.0`, with a UTC
-calendar date and a two-digit serial from 00 to 99. Run `scripts/bump.py` only
-when preparing a release, validate all manifests/package contents, commit on
-main, and publish the matching tag through the release workflow. npm publishing
-uses its existing trusted-publishing workflow. An ordinary code commit never
-automatically changes versions or stages unrelated files.
+Commits run validation only; releasing is the workflow's job. Every push to
+`main` starts the release workflow, which bumps the version, validates the
+bumped tree, and pushes the release commit and its tag in a single atomic push
+before publishing to npm. Release versions use `12.YYYYMMDDXX.0`, with a UTC
+calendar date and a two-digit serial from 00 to 99.
+
+That push is a compare-and-swap, so a run whose `main` moved underneath it
+pushes nothing and defers: the commit that beat it has a run of its own, and
+that run releases a tip already containing both. Pushing a `v*` tag by hand
+still publishes through the same workflow, so `scripts/bump.py` remains the way
+to prepare a release outside CI. npm publishing uses its existing
+trusted-publishing workflow, publishes a given version at most once, and an
+ordinary code commit never automatically changes versions or stages unrelated
+files.
 
 Native references: [Claude subagents](https://code.claude.com/docs/en/sub-agents),
 [Codex subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents),
