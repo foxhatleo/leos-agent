@@ -152,7 +152,7 @@ plugin manager. Run the registered `leo-install` command. The native plugin
 registers portable skills, one frozen policy section, and dispatch diagnostics.
 Hermes supports the policy for deciding whether to delegate, but not per-task
 model tiers. The installer preserves its native delegation-model setting;
-saved cheap/standard mappings are not applied. The guard can still check known
+saved cheap/standard/premium mappings are not applied. The guard can still check known
 child/parent prices when both models are observable.
 
 ### Pi
