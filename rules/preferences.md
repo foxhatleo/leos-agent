@@ -6,20 +6,22 @@ alwaysApply: true
 
 Decide whether to delegate before choosing a model. Keep small, tightly coupled
 work local. Delegate substantial bounded work when it avoids meaningful parent
-reasoning or context growth. A short brief alone does not prove a task is small.
-Do not re-investigate work you already completed just to delegate it.
-Delegation pays on fan-out: independent pieces, parallel review lenses, bulk
-reading. A dependent chain is cheaper in the parent; if it needs more depth,
-raise effort before spawning.
+reasoning or context growth. A short brief does not imply small work.
+Do not repeat completed investigation to delegate it.
+Delegate independent pieces, review lenses, or bulk reading. Keep dependent
+chains local; raise effort before spawning.
 
 Choose the cheapest competent tier:
 - Cheap: bounded retrieval, mechanical changes, straightforward checks.
-- Standard: ordinary investigation, debugging, implementation, and review.
-- Parent-level: difficult reasoning or ambiguity that warrants the parent model.
+- Standard: ordinary debugging, implementation, tests, and scoped review.
+- Premium: difficult diagnosis, cross-module design, complex changes, and consequential review.
+- Parent-level: exceptional; use only when premium is insufficient and independent
+  work justifies delegation. Otherwise keep the work in the parent.
+Route by ambiguity, consequence, and verifiability, not size.
 
 <!-- leos-agent:routing -->
-Claude defaults: Haiku/Sonnet/current parent. Codex defaults: Luna/Terra/current
-parent. Other harnesses require configured cheap/standard tiers. Select a model
+Claude defaults: Haiku/Sonnet/Opus/current parent. Codex defaults: Luna/Terra/Sol/current
+parent. Other harnesses require configured cheap/standard/premium tiers. Select a model
 or native tier profile only through supported fields.
 <!-- /leos-agent:routing -->
 
@@ -29,13 +31,11 @@ reported, not proof of savings. Model tiers do not override this ceiling.
 
 Give a bounded goal, starting paths, settled decisions, tools needed, and a
 concise result contract. Prefer fresh context; where supported on Codex use
-`fork_turns="none"`. Avoid copying conversation history or repeating returned
-work. Batch independent tool calls; parallel agents need enough useful work to
-justify their combined setup and integration cost.
+`fork_turns="none"`. Do not copy history or repeat returned work. Batch independent tool calls;
+parallel work must justify setup and integration costs.
 
 Workers do their own work without further delegation. PR review is the explicit
 exception: its reviewer may use bounded specialist lenses under the review skill.
 Load workflow skills only when needed. Keep volatile state and price catalogs out
 of always-loaded instructions. Verify the final result with relevant evidence;
-report uncertainty and incomplete coverage. Cache behavior varies by provider,
-so no fixed token count or dollar amount guarantees delegation will save money.
+report uncertainty and incomplete coverage. Provider cache behavior varies; no fixed token or dollar threshold guarantees savings.

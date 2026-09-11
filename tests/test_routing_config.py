@@ -234,6 +234,14 @@ class WriteCase(RoutingCase):
 
 
 class TestWriting(WriteCase):
+    def test_premium_round_trip_preserves_existing_tiers(self):
+        self.write_config({"codex": {"cheap": "fast"}})
+        self.run_cli("set", "--harness", "codex", "--premium", "gpt-5.6-sol", "--premium-effort", "high")
+        self.assertEqual(self.load_config()["codex"]["premium"], {"model": "gpt-5.6-sol", "effort": "high"})
+        self.assertIn("premium: `gpt-5.6-sol`", self.run_cli("render", "--harness", "codex"))
+        self.run_cli("unset", "--harness", "codex", "--premium")
+        self.assertEqual(self.raw(), {"codex": {"cheap": "fast"}})
+
     def test_reads_create_nothing_and_set_creates_the_file(self):
         # The data root must stay untouched by anything that only looks: a
         # config appearing because someone ran `show` would be a write nobody
@@ -275,7 +283,7 @@ class TestWriting(WriteCase):
     def test_effort_needs_its_model_and_a_role_is_required(self):
         self.assertIn("--runner-effort needs --runner", self.expect_refusal(
             "set", "--harness", "codex", "--runner-effort", "low"))
-        self.assertIn("needs --cheap and/or --standard", self.expect_refusal(
+        self.assertIn("needs --cheap, --standard, and/or --premium", self.expect_refusal(
             "set", "--harness", "codex"))
         self.assertFalse((self.data / "routing.json").exists())
 
@@ -390,9 +398,9 @@ class TestSkillMatchesCLI(RoutingCase):
             "path": set(),
             "set": {"--harness", "--runner", "--runner-effort", "--executor",
                     "--executor-effort", "--cheap", "--cheap-effort",
-                    "--standard", "--standard-effort", "--dry-run"},
+                    "--standard", "--standard-effort", "--premium", "--premium-effort", "--dry-run"},
             "unset": {"--harness", "--runner", "--executor", "--cheap",
-                      "--standard", "--dry-run"},
+                      "--standard", "--premium", "--dry-run"},
         }
         seen = set()
         for path in sources:

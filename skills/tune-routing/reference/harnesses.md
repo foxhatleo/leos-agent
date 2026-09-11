@@ -9,7 +9,7 @@ none proves that a future child request will succeed under organization rules.
 | Codex | Native model picker and active config. Installer writes model-free user agent TOMLs. The guard requires the selected tier model and configured effort at spawn, with a parent-price ceiling. Other/customized profiles may override spawn settings. Native hook trust remains required. |
 | Cursor | Account model picker; installer writes ~/.cursor/agents profiles. Resolved subagentStart model is checked before launch. Do not assume a Task model field or a loaded ~/.cursor/rules directory. |
 | OpenCode | Native model list/provider config; installer writes native agents and one instruction entry. Task selects a subagent_type, not a model argument; the adapter queries actual registered agents before switching profiles. |
-| Hermes | Active profile's delegation.model is global to child work. Separate per-task cheap/standard selection is unavailable. The adapter observes parent models and checks known global child costs. |
+| Hermes | Active profile's delegation.model is global to child work. Separate per-task cheap/standard/premium selection is unavailable. The adapter observes parent models and checks known global child costs. |
 | Pi | Native model listing plus the installed subagent extension's documented schema. Core extension hooks alone do not establish a per-spawn model field. Report unsupported routing honestly. |
 
 Claude defaults: cheap Haiku, standard Sonnet. Codex defaults: cheap

@@ -21,13 +21,23 @@ a cheaper model while preserving quality.
 |---|---|---|---|
 | Cheap | Bounded factual checks, mechanical work, known procedures | Haiku | GPT-5.6 Luna |
 | Standard | Investigation, implementation, diagnosis, ordinary review | Sonnet | GPT-5.6 Terra |
-| Parent-level | Work requiring the parent's capability | Current parent | Current parent |
+| Premium | Difficult diagnosis, cross-module design, complex implementation, consequential review | Opus | GPT-5.6 Sol |
+| Parent-level | Exceptional work beyond premium capability that justifies delegation | Current parent | Current parent |
 
-Native profiles are `leo-cheap`, `leo-standard`, `leo-parent`, and
+Native profiles are `leo-cheap`, `leo-standard`, `leo-premium`, `leo-parent`, and
 `leo-reviewer`. `leo-runner` and `leo-executor` remain legacy aliases. Review
 may use nested read-only lenses; ordinary workers do not delegate. Small
 reviews run locally, and larger reviews divide independent areas rather than
 requiring every lens to reread everything.
+
+Choose tiers by ambiguity, consequence, and how reliably results can be checked.
+Cheap handles retrieval, mechanical edits, and known checks; standard handles
+ordinary implementation, tests, debugging, and scoped review. Premium handles
+subtle failures, design tradeoffs across modules, complex changes, and reviews
+where missed defects have substantial consequences. Parent-level delegation is
+discouraged: use it only when premium is insufficient and substantial independent
+work justifies a separate worker. Otherwise do that work in the parent.
+The existing price ceiling applies to every tier; premium does not bypass it.
 
 The tier name is not a price ordering. For example, the bundled reference
 catalog prices Terra output above Sol output; the ceiling therefore replaces
