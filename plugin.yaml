@@ -1,7 +1,7 @@
 manifest_version: 2
 api_version: 1
 name: leos-agent
-version: 12.2026091100.0
+version: 12.2026091101.0
 description: >-
   Adaptive delegation, cost-aware model routing, and deferred workflows across coding harnesses.
 author: Leo Liang
