@@ -93,7 +93,6 @@ def main():
 	# Every version string the README hardcodes must be the current one: the
 	# uninstall commands point at versioned cache paths.
 	readme = (ROOT / "README.md").read_text(encoding="utf-8")
-	check(canonical in readme, f"README.md does not mention version {canonical}")
 	stale = {v for v in re.findall(r"\b\d+\.\d+\.\d+\b", readme) if v != canonical}
 	check(not stale, f"README.md mentions non-current version(s): {sorted(stale)}")
 

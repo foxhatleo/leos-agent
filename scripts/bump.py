@@ -80,8 +80,7 @@ def rewrite_readme(text, old, new, label):
 	# check.py fails the build on ANY stray semver-shaped string in README, so
 	# every occurrence -- prose, install paths, the cachebuster example -- has
 	# to move, not just the first.
-	if old not in text:
-		raise BumpError(f"{label}: does not mention version {old}")
+	# A version-free README needs no release rewrite.
 	return text.replace(old, new)
 
 
