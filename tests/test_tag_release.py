@@ -183,7 +183,7 @@ class TestAReleaseIsPreparedAtomically(ReleaseRepo):
         result, _ = self.tag_release(clone)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         changed = git("show", "--name-only", "--format=", "origin/main", cwd=clone).split()
-        self.assertEqual(sorted(changed), sorted(VERSIONED))
+        self.assertEqual(sorted(changed), sorted(set(VERSIONED) - {"README.md"}))
 
     def test_the_tag_is_annotated_like_every_release_tag_before_it(self):
         clone = self.clone("runner")

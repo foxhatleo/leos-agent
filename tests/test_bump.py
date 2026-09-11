@@ -117,8 +117,19 @@ class TestRewrite(BumpFixture):
             self.assertEqual(old, self.STALE)
             with pinned(self.bump, 2026, 9, 7):
                 changed = self.bump.rewrite_all(root, old, "12.2026090700.0")
-            self.assertEqual(sorted(changed), sorted(VERSIONED))
+            self.assertEqual(sorted(changed), sorted(set(VERSIONED) - {"README.md"}))
             self.assertEqual(self.versions_in(root), {"12.2026090700.0"})
+
+    def test_version_free_readme_is_preserved(self):
+        import contextlib
+
+        with contextlib.ExitStack() as stack:
+            root = self.fixture(stack)
+            readme = root / "README.md"
+            before = readme.read_bytes()
+            changed = self.bump.rewrite_all(root, self.STALE, "12.2026090700.0")
+            self.assertNotIn("README.md", changed)
+            self.assertEqual(readme.read_bytes(), before)
 
     def test_readme_cache_paths_are_rewritten_too(self):
         # check.py fails on ANY stale version in README, and the uninstall
@@ -129,6 +140,9 @@ class TestRewrite(BumpFixture):
             root = self.fixture(stack)
             old = self.bump.current_version(root)
             self.assertEqual(old, self.STALE)
+            (root / "README.md").write_text(
+                f"Version {old}\nCache: plugins/leos-agent/{old}\n", encoding="utf-8"
+            )
             with pinned(self.bump, 2026, 9, 7):
                 self.bump.rewrite_all(root, old, "12.2026090700.0")
             readme = (root / "README.md").read_text(encoding="utf-8")
