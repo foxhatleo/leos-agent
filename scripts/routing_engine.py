@@ -16,7 +16,7 @@ CAPABILITIES = {
     "hermes": {"tools": ("delegate_task",), "model_field": None, "rewrite": False, "profiles": False},
     "pi": {"tools": ("subagent",), "model_field": None, "rewrite": False, "profiles": False},
 }
-PROFILE_TIERS = {"leo-cheap": "cheap", "leo-standard": "standard", "leo-parent": "parent",
+PROFILE_TIERS = {"leo-cheap": "cheap", "leo-standard": "standard", "leo-premium": "premium", "leo-parent": "parent",
                  "leo-runner": "cheap", "leo-executor": "standard", "leo-reviewer": "standard"}
 
 

@@ -40,7 +40,7 @@ REQUIRED_FILES = {
 	"scripts/harness_bridge.js", "scripts/dispatch_guard.py", "scripts/dispatch_log.py",
 	"scripts/session_models.py", "scripts/payload.py", "scripts/state.py",
 	"scripts/doctor.py", "skills/install/SKILL.md",
-} | {f"agents/leo-{name}.md" for name in ("cheap", "standard", "parent", "reviewer", "runner", "executor")}
+} | {f"agents/leo-{name}.md" for name in ("cheap", "standard", "premium", "parent", "reviewer", "runner", "executor")}
 
 
 class ReleaseError(Exception):

@@ -83,6 +83,17 @@ class RoutingEngine(unittest.TestCase):
         result = self.route("hermes", {"action": "steer", "message": "Stop searching"}, "opus")
         self.assertEqual(result["reason"], "not-a-dispatch")
 
+    def test_premium_defaults_and_parent_ceiling(self):
+        claude = self.route("claude", {"subagent_type": "leo-premium"}, "opus")
+        self.assertEqual(claude["updated_input"]["model"], "opus")
+        capped = self.route("claude", {"subagent_type": "leo-premium"}, "haiku")
+        self.assertEqual(capped["updated_input"]["model"], "haiku")
+        codex = self.route("codex", {"agent_type": "leo-premium", "model": "gpt-5.6-sol"}, "gpt-6-astra")
+        self.assertEqual(codex["action"], "allow")
+        wrong = self.route("codex", {"agent_type": "leo-premium", "model": "gpt-6-astra"}, "gpt-6-astra")
+        self.assertEqual(wrong["reason"], "tier-selection-required")
+        self.assertIn("gpt-5.6-sol", wrong["retry"])
+
     def test_only_owned_profiles_are_recognized(self):
         self.assertEqual(engine.tier_for("leos-agent:leo-runner"), "cheap")
         for name in ("leo-made-up", "other:leo-cheap", "path/leo-standard"):

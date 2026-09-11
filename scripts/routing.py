@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Machine-local tier mappings. Model identifiers are preserved for the harness.
 
-cheap/standard are configurable; parent means the current parent model.
+cheap/standard/premium are configurable; parent means the current parent model.
 runner/executor remain accepted aliases for existing configurations and CLI use.
 Configuration never ships inside a versioned plugin cache.
 """
@@ -23,10 +23,10 @@ from state import _data_root, _locked, atomic_write  # noqa: E402
 HARNESSES = ("claude", "codex", "cursor", "hermes", "pi", "opencode")
 
 CONFIG_NAME = "routing.json"
-ROLES = ("cheap", "standard", "runner", "executor")
+ROLES = ("cheap", "standard", "premium", "runner", "executor")
 ALIASES = {"runner": "cheap", "executor": "standard"}
-DEFAULTS = {"claude": {"cheap": "haiku", "standard": "sonnet"},
-            "codex": {"cheap": "gpt-5.6-luna", "standard": "gpt-5.6-terra"}}
+DEFAULTS = {"claude": {"cheap": "haiku", "standard": "sonnet", "premium": "opus"},
+            "codex": {"cheap": "gpt-5.6-luna", "standard": "gpt-5.6-terra", "premium": "gpt-5.6-sol"}}
 FIELDS = ("model", "effort")
 
 # Harnesses whose economical tier ships with models already baked in: Claude
@@ -86,7 +86,7 @@ def validate(data, harnesses=HARNESSES):
         if harness not in harnesses:
             _bad(f"{harness!r} is not a harness; expected one of {', '.join(sorted(harnesses))}")
         if not isinstance(entry, dict):
-            _bad(f"{harness}: expected an object with 'runner' and/or 'executor'")
+            _bad(f"{harness}: expected an object keyed by cheap, standard, or premium")
         roles = {}
         for role, value in entry.items():
             if role not in ROLES:
@@ -139,13 +139,13 @@ def stanza(harness, config):
                 "use its existing native delegation model. The installer does not change that setting. "
                 "The guard checks known child/parent prices when observable.")
     assignments = []
-    for role in ("cheap", "standard"):
+    for role in ("cheap", "standard", "premium"):
         entry = profile(config, harness, role)
         model = entry["model"] if entry else DEFAULTS.get(harness, {}).get(role)
         assignments.append(f"{role}: `{model}`" if model else f"{role}: unconfigured")
     line = "; ".join(assignments) + "; parent-level: current parent model."
     if harness == "claude":
-        return line + " Use `leo-cheap` or `leo-standard`; the guard applies configured models and the price ceiling."
+        return line + " Use `leo-cheap`, `leo-standard`, or `leo-premium`; the guard applies configured models and the price ceiling."
     if harness == "codex":
         return line + " Choose a native tier profile and explicitly set its model at spawn. The guard requires the tier model capped to the parent; our profiles do not pin models."
     if harness == "opencode":
@@ -311,7 +311,7 @@ def cmd_set(args):
             _bad(f"{args.harness}.{role}.effort: must be a non-empty string when present")
         roles[role] = (model.strip(), effort.strip() if effort else None)
     if not roles:
-        sys.exit("routing: set needs --cheap and/or --standard")
+        sys.exit("routing: set needs --cheap, --standard, and/or --premium")
 
     before, after = edit(lambda d: apply_set(d, args.harness, roles), write=not args.dry_run)
     for role in ROLES:
@@ -340,7 +340,7 @@ def cmd_unset(args):
         if was:
             print(f"{'unset':9} {args.harness:9} {role:9} {_described(was)} -> {_fallback(args.harness)}")
     if before == after:
-        print(f"{'unchanged':9} {args.harness:9} {'(both)':9} nothing configured")
+        print(f"{'unchanged':9} {args.harness:9} {'(all)':9} nothing configured")
     return _finish(args, before, after)
 
 
@@ -359,7 +359,7 @@ def cmd_show(args):
                 print(f"{harness:9} {role:9} {entry['model']}{effort}")
     for harness in sorted(set(BAKED) - set(config)):
         if not args.harness or harness == args.harness:
-            print(f"{harness:9} {'(both)':9} shipped default")
+            print(f"{harness:9} {'(all)':9} shipped default")
 
 
 def main(argv):
@@ -377,7 +377,7 @@ def main(argv):
     setter.add_argument("--runner-effort", metavar="E", help="needs --runner; omitting it clears any effort")
     setter.add_argument("--executor", metavar="MODEL", help="replaces the executor entry whole")
     setter.add_argument("--executor-effort", metavar="E", help="needs --executor; omitting it clears any effort")
-    for role in ("cheap", "standard"):
+    for role in ("cheap", "standard", "premium"):
         setter.add_argument(f"--{role}", metavar="MODEL", help=f"replaces the {role} tier entry whole")
         setter.add_argument(f"--{role}-effort", metavar="E", help=f"needs --{role}; omitting it clears any effort")
     setter.add_argument("--dry-run", action="store_true", help="show the result, write nothing")
@@ -388,6 +388,7 @@ def main(argv):
     unsetter.add_argument("--executor", action="store_true")
     unsetter.add_argument("--cheap", action="store_true", help="drop the cheap tier")
     unsetter.add_argument("--standard", action="store_true", help="drop the standard tier")
+    unsetter.add_argument("--premium", action="store_true", help="drop the premium tier")
     unsetter.add_argument("--dry-run", action="store_true", help="show the result, write nothing")
 
     args = parser.parse_args(argv)

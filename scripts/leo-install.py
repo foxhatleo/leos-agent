@@ -70,7 +70,7 @@ OPENCODE_COMMANDS = ("review-pr", "handoff", "handon")
 # Codex plugins cannot package custom agent definitions directly, so these are
 # copied into ~/.codex/agents. Keep this tuple authoritative: check.py and the
 # installer tests derive the expected payload from it.
-CODEX_AGENTS = ("leo-cheap", "leo-standard", "leo-parent", "leo-reviewer", "leo-runner", "leo-executor")
+CODEX_AGENTS = ("leo-cheap", "leo-standard", "leo-premium", "leo-parent", "leo-reviewer", "leo-runner", "leo-executor")
 
 
 class BlockError(Exception):

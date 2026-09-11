@@ -55,7 +55,7 @@ window ends at collection time, not at the end of a calendar day.
 | `usage-{since}.json` | Primary artifact: `usage_scan.py --since {since} --json` |
 | `usage-{since}.txt` | The same report rendered as text, from the same run |
 {trend_row}| `doctor-<harness>.json` | `doctor.py --harness <h>`; an `.exit.txt` sibling carries a non-zero exit (usually: not installed here); an `.error.txt` sibling means the run produced no report |
-| `routing-show.txt` | Configured cheap/standard tiers per harness |
+| `routing-show.txt` | Configured cheap/standard/premium tiers per harness |
 | `guard-report.txt` | Rendered dispatch-guard summary over the whole retained log |
 | `environment.txt` | OS, Python, plugin version, harness CLI versions, timestamps |
 | `plugin.json` | Installed plugin manifest |

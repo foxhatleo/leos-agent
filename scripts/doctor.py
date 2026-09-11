@@ -23,7 +23,7 @@ def diagnose(harness, root=None):
     try:
         config = routing.load()
         report["tiers"] = {tier: pricing.resolve(routing.tier_model(harness, tier, config) or "unknown").report()
-                           for tier in ("cheap", "standard")}
+                           for tier in ("cheap", "standard", "premium")}
         report["parent_tier"] = "current parent, determined at dispatch"
         report["policy_bytes"] = len(payload.payload_body(root, harness, config).encode())
         if harness == "cursor":
@@ -52,7 +52,7 @@ def diagnose(harness, root=None):
     except (OSError, ValueError):
         report["pricing"]["last_refresh"] = "no local refresh diagnostic"
     if harness == "claude":
-        for tier in ("cheap", "standard"):
+        for tier in ("cheap", "standard", "premium"):
             model = (report.get("tiers", {}).get(tier) or {}).get("requested")
             if model and model not in ("haiku", "sonnet", "opus", "fable"):
                 report["issues"].append(f"Claude {tier} model must be an Agent alias: haiku, sonnet, opus, or fable")
