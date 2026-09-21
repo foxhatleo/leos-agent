@@ -39,6 +39,20 @@ observations remain unknown. The observer emits empty JSON and never asks a
 child to continue. Claude PostModelSwitch refreshes its parent-model cache.
 Codex supplies its active model directly in tool-hook events.
 
+Completion signals share one contract. Every adapter sends the observer a
+SubagentStop-shaped event carrying at most the last 4 KiB of the child's final
+text under the harness's own key (`last_assistant_message` on Claude and Codex,
+`child_summary` on Hermes, `result_text` from the JavaScript adapters) plus a
+call id where the harness has one. `scripts/outcome.py` reduces that text to
+`Result:`/`Verified:` tokens and the text is discarded; `usage` is taken from the
+event or, on Claude and Codex, summed from the child transcript. Cursor's
+subagentStop has a status token and no text, so its rows say status-only.
+OpenCode uses `tool.execute.after` on `task`; Pi uses `tool_result` on
+`subagent`; Hermes registers `subagent_stop` and `post_tool_call` and tolerates a
+build that refuses either. The guard records the brief's `Escalation from
+<tier>:` header as a tier token; on Codex the brief is encrypted and the field
+reads `unobservable`.
+
 Scripts live in scripts/ and are included in the npm package. Hook input is
 bounded; errors fail open with local diagnostics. No ordinary dispatch makes a
 network or model call. Price refresh is a separate bounded background process.

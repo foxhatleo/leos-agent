@@ -39,6 +39,9 @@ class CursorHooks(unittest.TestCase):
         rows = self.module.dispatch_log.read()
         self.assertEqual(rows[-1]["decision"], "completed")
         self.assertIsNone(rows[-1]["effective_model"])
+        # A finished status is not a done outcome: Cursor never shows child text.
+        self.assertEqual((rows[-1]["outcome"], rows[-1]["outcome_source"], rows[-1]["status"]), ("unknown", "status-only", "completed"))
+        self.assertIsNone(rows[-1]["verified"])
 
     def test_unknown_resolved_model_does_not_use_config_as_observation(self):
         event = self.event(None, "claude-haiku-4-5")

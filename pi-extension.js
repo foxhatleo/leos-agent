@@ -21,5 +21,19 @@ export default function (pi) {
     });
     if (result.action === 'block') return { block: true, reason: result.retry || result.reason };
   });
+  pi.on('tool_result', async (event) => {
+    if (event.toolName !== 'subagent') return;
+    // Text parts only, last 4 KiB, classified and dropped by the observer.
+    // Returns nothing: this never alters Pi's tool result.
+    const text = (Array.isArray(event.content) ? event.content : [])
+      .filter((part) => part?.type === 'text' && typeof part.text === 'string')
+      .map((part) => part.text).join('\n').slice(-4096);
+    await runPython(root, 'pi', 'observe_agent.py', [], {
+      hook_event_name: 'SubagentStop', tool_name: 'subagent', toolCallId: event.toolCallId,
+      agent: event.input?.agent ?? event.input?.subagent_type ?? null,
+      result_text: text, status: event.isError ? 'error' : null,
+      usage: event.usage ?? null, reason: 'pi-tool-result',
+    });
+  });
   // package.json's pi.skills is the single skill discovery path.
 }

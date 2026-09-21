@@ -50,6 +50,97 @@ def transcript_model(path):
     return None
 
 
+def _text_parts(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(part.get("text", "") for part in content
+                         if isinstance(part, dict) and isinstance(part.get("text"), str))
+    return ""
+
+
+def transcript_tail_text(path, limit=4096):
+    """The last assistant message's text, clamped to `limit`, or "".
+
+    Claude records `{"type": "assistant", "message": {"content": [...]}}` and
+    Codex rollouts `{"type": "response_item", "payload": {"role": "assistant",
+    "content": [...]}}`. Reads at most 1 MiB from the end; returns in memory only.
+    """
+    if not isinstance(path, str) or not path:
+        return ""
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, handle.tell() - 1024 * 1024))
+            lines = handle.read().splitlines()
+    except OSError:
+        return ""
+    for line in reversed(lines):
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        message = entry.get("message") if entry.get("type") == "assistant" else None
+        payload = entry.get("payload") if isinstance(entry.get("payload"), dict) else None
+        if isinstance(message, dict):
+            text = _text_parts(message.get("content"))
+        elif payload and payload.get("role") == "assistant":
+            text = _text_parts(payload.get("content"))
+        else:
+            continue
+        if text.strip():
+            return text[-limit:]
+    return ""
+
+
+USAGE_READ_LIMIT = 16 * 1024 * 1024
+
+
+def transcript_usage(path):
+    """(usage, complete) summed over a child's transcript; (None, False) when unreadable.
+
+    Claude repeats one API call's usage across the records of a split turn, so
+    records are deduplicated by message id. Codex reports cumulative totals in
+    token_count events, so the last total wins there rather than a sum. A file
+    over USAGE_READ_LIMIT is not read: (None, False) says so.
+    """
+    import outcome
+    if not isinstance(path, str) or not path:
+        return None, False
+    try:
+        if os.path.getsize(path) > USAGE_READ_LIMIT:
+            return None, False
+        with open(path, "rb") as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        return None, False
+    total, seen, codex_total = None, set(), None
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        message = entry.get("message") if entry.get("type") == "assistant" else None
+        if isinstance(message, dict) and isinstance(message.get("usage"), dict):
+            key = message.get("id") or id(message)
+            if key in seen:
+                continue
+            seen.add(key)
+            total = outcome.add_usage(total, outcome.usage_from(message["usage"]))
+            continue
+        payload = entry.get("payload") if isinstance(entry.get("payload"), dict) else None
+        if payload and payload.get("type") == "token_count":
+            info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
+            usage = outcome.usage_from(info.get("total_token_usage") or payload.get("total_token_usage"))
+            if usage:
+                codex_total = usage
+    return (codex_total or total), True
+
+
 _AGENT_ID_RE = re.compile(r"[A-Za-z0-9_-]+")
 
 

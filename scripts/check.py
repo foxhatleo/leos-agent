@@ -209,7 +209,7 @@ def main():
 	# The guard's own modules must import cleanly: a hook that cannot even load
 	# fails open on every dispatch, silently, which is the one failure mode that
 	# looks exactly like everything working.
-	for name in ("dispatch_guard", "dispatch_log", "usage_scan", "payload", "emit_payload"):
+	for name in ("dispatch_guard", "dispatch_log", "outcome", "observe_agent", "usage_scan", "payload", "emit_payload"):
 		path = ROOT / "scripts" / f"{name}.py"
 		check(path.is_file(), f"scripts/{name}.py is missing")
 		if path.is_file():
@@ -264,6 +264,27 @@ def main():
 	# out. Prose elsewhere may be trimmed; this line pays for itself.
 	payload_text = (ROOT / "rules" / "preferences.md").read_text(encoding="utf-8")
 	check(all(tier in payload_text for tier in ("Cheap:", "Standard:", "Parent-level:")), "rules/preferences.md: missing three-tier guidance")
+	# The escalation contract is two tokens the guard and the observer parse:
+	# the brief header and the worker's closing line. Prose around them may
+	# change; the tokens themselves are load-bearing on every harness.
+	check("Escalation from" in payload_text and "Result:" in payload_text,
+		"rules/preferences.md: missing the escalation contract (Escalation from / Result:)")
+
+	# The Codex TOMLs are hand-maintained twins of agents/*.md. Nothing syncs
+	# them, so a contract edited into one body and not the other would ship two
+	# different workers under one tier name. Compare the decoded string exactly.
+	for name in installer.CODEX_AGENTS:
+		md = ROOT / "agents" / f"{name}.md"
+		toml = ROOT / "payload" / "codex-agents" / f"{name}.toml"
+		if not (md.is_file() and toml.is_file()):
+			continue
+		body = md.read_text(encoding="utf-8").split("---", 2)[2].lstrip("\n")
+		match = re.search(r'(?m)^developer_instructions = "(.*)"$', toml.read_text(encoding="utf-8"))
+		try:
+			decoded = json.loads('"' + match.group(1) + '"') if match else None
+		except ValueError:
+			decoded = None
+		check(decoded == body, f"payload/codex-agents/{name}.toml: developer_instructions differs from agents/{name}.md body")
 
 	# Payload files copied by the installer must carry the provenance string, or
 	# it will mistake its own installed copy for a stranger's file and refuse to

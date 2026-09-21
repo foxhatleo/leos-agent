@@ -269,6 +269,31 @@ class TestLog(GuardCase):
         self.assertEqual(sorted(r["n"] for r in rows), list(range(12)))
 
 
+class TestEscalationFields(GuardCase):
+    def rows(self):
+        return [json.loads(line) for line in (self.data / "dispatch.jsonl").read_text().splitlines()]
+
+    def test_a_marked_brief_records_the_tier_and_nothing_else(self):
+        secret = "ESCALATION_SECRET_do_not_log"
+        self.run_cli(dispatch_event(agent="leo-standard", prompt="Escalation from cheap: %s failed\nFix it" % secret))
+        row = self.rows()[-1]
+        self.assertEqual(row["escalation_from"], "cheap")
+        self.assertEqual(row["tier"], "standard")
+        self.assertNotIn(secret.encode(), (self.data / "dispatch.jsonl").read_bytes())
+
+    def test_an_unmarked_brief_is_null_and_an_opaque_one_is_unobservable(self):
+        self.run_cli(dispatch_event(agent="leos-agent:leo-cheap", prompt="Read scripts/a.py and report"))
+        self.assertIsNone(self.rows()[-1]["escalation_from"])
+        self.assertEqual(self.rows()[-1]["tier"], "cheap")
+        self.run_cli({"hook_event_name": "PreToolUse", "tool_name": "spawn_agent",
+                      "tool_input": {"task_name": "x", "message": "Escalation from cheap: encrypted anyway", "model": "gpt-5.6-luna"}},
+                     LEOS_AGENT_HARNESS="codex")
+        row = self.rows()[-1]
+        self.assertEqual(row["escalation_from"], "unobservable")
+        self.assertIsNone(row["tier"])
+        self.assertEqual(row["v"], 3)
+
+
 class TestReport(GuardCase):
     def test_lifecycle_records_do_not_inflate_attempts_or_invent_inheritance(self):
         summary = self.log.summarise([
@@ -359,6 +384,99 @@ class TestReport(GuardCase):
             summary = self.log.summarise(self.log.read())
         self.assertEqual(summary["errors"], 1)
         self.assertIn("guard error", self.log.render(summary))
+
+
+class TestOutcomeReport(GuardCase):
+    def d(self, ts, agent, call=None, session="s", harness="claude", **extra):
+        row = {"v": 3, "ts": ts, "harness": harness, "session": session, "decision": "allow", "agent": agent,
+               "tier": self.log._tier_of({"agent": agent}), "call_id": call, "escalation_from": None}
+        row.update(extra)
+        return row
+
+    def c(self, ts, agent=None, call=None, session="s", harness="claude", outcome="done", verified=True, **extra):
+        row = {"v": 3, "ts": ts, "harness": harness, "session": session, "decision": "completed", "agent": agent,
+               "call_id": call, "outcome": outcome, "verified": verified, "outcome_source": "message"}
+        row.update(extra)
+        return row
+
+    def test_call_id_then_nearest_preceding_then_unmatched(self):
+        summary = self.log.summarise([
+            self.d("2026-09-21T10:00:00Z", "leo-cheap", call="c1"),
+            self.c("2026-09-21T10:01:00Z", "leo-cheap", call="c1", outcome="done"),
+            self.d("2026-09-21T10:02:00Z", "leo-standard"),
+            self.c("2026-09-21T10:03:00Z", "leo-standard", outcome="escalate", verified=False),
+            self.c("2026-09-21T10:04:00Z", None, session="other", outcome="partial", verified=None),
+        ])
+        self.assertEqual(summary["joins"], {"call_id": 1, "nearest": 1, "unmatched": 1})
+        self.assertEqual(summary["outcomes"], {"cheap": {"done": 1}, "standard": {"escalate": 1}, "unrouted": {"partial": 1}})
+        self.assertEqual(summary["verified"]["cheap"], {"stated": 1})
+        self.assertEqual(summary["verified"]["standard"], {"none": 1})
+        self.assertEqual(summary["verified"]["unrouted"], {"unstated": 1})
+        text = self.log.render(summary)
+        self.assertIn("outcomes", text)
+        self.assertIn("cheap 1/1 stated evidence", text)
+
+    def test_ambiguity_is_its_own_bucket_never_a_tier(self):
+        summary = self.log.summarise([
+            self.d("2026-09-21T10:00:00Z", "leo-cheap"),
+            self.d("2026-09-21T10:00:00Z", "leo-cheap"),
+            self.c("2026-09-21T10:05:00Z", "leo-cheap", outcome="done"),
+        ])
+        self.assertEqual(summary["joins"], {"ambiguous": 1})
+        self.assertEqual(summary["outcomes"], {"ambiguous": {"done": 1}})
+
+    def test_escalation_chains_and_unobservable_markers(self):
+        summary = self.log.summarise([
+            self.d("2026-09-21T10:00:00Z", "leo-cheap"),
+            self.d("2026-09-21T10:05:00Z", "leo-standard", escalation_from="cheap"),
+            self.d("2026-09-21T10:06:00Z", "leo-premium", escalation_from="standard"),
+            self.d("2026-09-21T10:07:00Z", "spawn_agent", harness="codex", tier=None, escalation_from="unobservable"),
+        ])
+        self.assertEqual(summary["escalations"], {"cheap->standard": 1, "standard->premium": 1})
+        self.assertEqual(summary["escalation_unobservable"], 1)
+        text = self.log.render(summary)
+        self.assertIn("cheap -> standard 1", text)
+        self.assertIn("unobservable escalation marker", text)
+
+    def test_hermes_duplicates_collapse_and_silent_harnesses_are_named(self):
+        summary = self.log.summarise([
+            self.d("2026-09-21T10:00:00Z", "delegate_task", call="h1", harness="hermes", tier=None),
+            self.c("2026-09-21T10:01:00Z", "delegate_task", call="h1", harness="hermes", outcome="unknown", verified=None, reason="hermes-post-tool-call"),
+            self.c("2026-09-21T10:01:01Z", "delegate_task", call="h1", harness="hermes", outcome="done", reason="hermes-subagent-stop"),
+            self.d("2026-09-21T10:02:00Z", "subagent", harness="pi", tier=None),
+            self.d("2026-09-21T10:03:00Z", "leo-cheap", harness="cursor"),
+            self.c("2026-09-21T10:04:00Z", "leo-cheap", harness="cursor", outcome="unknown", verified=None, outcome_source="status-only", status="completed"),
+        ])
+        self.assertEqual(summary["outcomes"]["unrouted"], {"done": 1})
+        self.assertEqual(summary["silent_harnesses"], ["pi"])
+        text = self.log.render(summary)
+        self.assertIn("pi: no completion signal observed", text)
+        self.assertIn("cursor status-only 1 (no outcome signal available)", text)
+
+    def test_usage_is_summed_per_tier_with_row_counts(self):
+        summary = self.log.summarise([
+            self.d("2026-09-21T10:00:00Z", "leo-cheap", call="a"),
+            self.c("2026-09-21T10:01:00Z", "leo-cheap", call="a", usage={"input": 10, "output": 2}),
+            self.d("2026-09-21T10:02:00Z", "leo-cheap", call="b"),
+            self.c("2026-09-21T10:03:00Z", "leo-cheap", call="b", usage={"input": 5, "output": 1, "cache_read": 7}),
+        ])
+        self.assertEqual(summary["usage"], {"cheap": {"input": 15, "output": 3, "cache_read": 7, "rows": 2}})
+        self.assertIn("child usage cheap in 15 out 3 cache-read 7 (2 rows)", self.log.render(summary))
+
+    def test_a_pre_instrumentation_log_renders_as_before(self):
+        rows = [
+            {"decision": "allow", "agent": "leo-cheap", "session": "s"},
+            {"decision": "completed", "session": "s", "agent_id": "a", "agent": "leo-cheap"},
+            {"decision": "executed", "session": "s", "agent_id": "a", "agent": "leo-cheap", "effective_model": "haiku"},
+        ]
+        summary = self.log.summarise(rows)
+        self.assertEqual((summary["outcomes"], summary["verified"], summary["usage"], summary["escalations"]), ({}, {}, {}, {}))
+        self.assertEqual(summary["superseded"], 1)
+        self.assertEqual(summary["confirmed_executions"], 1)
+        self.assertEqual(summary["pre_instrumentation"], 3)
+        text = self.log.render(summary)
+        self.assertNotIn("outcomes", text)
+        self.assertNotIn("predate", text)
 
 
 class TestHarnessParity(unittest.TestCase):

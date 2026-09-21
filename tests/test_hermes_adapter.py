@@ -30,6 +30,35 @@ class HermesAdapter(unittest.TestCase):
             self.assertIsNone(self.adapter._on_pre_tool_call("terminal", {}))
         run.assert_not_called()
 
+    def rows(self):
+        import json
+        path = Path(self.tmp.name) / "dispatch.jsonl"
+        return [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+
+    def test_completion_hooks_record_tokens_not_text(self):
+        self.adapter._on_post_tool_call("delegate_task", {"tasks": [{"goal": "g"}]}, result={"result": "Did it.\nResult: done\nVerified: PRIVATE ran"},
+                                        task_id="t", tool_call_id="h1", status="ok")
+        self.adapter._on_subagent_stop(parent_session_id="t", child_role="researcher", child_summary="Result: partial\nVerified: none", child_status="completed")
+        rows = self.rows()
+        self.assertEqual([(r["outcome"], r["verified"], r["reason"]) for r in rows],
+                         [("done", True, "hermes-post-tool-call"), ("partial", False, "hermes-subagent-stop")])
+        self.assertEqual(rows[0]["call_id"], "h1")
+        self.assertNotIn("PRIVATE", (Path(self.tmp.name) / "dispatch.jsonl").read_text())
+
+    def test_post_tool_call_for_other_tools_launches_nothing(self):
+        with patch.object(self.adapter, "_python") as run:
+            self.assertIsNone(self.adapter._on_post_tool_call("terminal", {}, result="x"))
+        run.assert_not_called()
+
+    def test_registration_survives_a_build_without_completion_hooks(self):
+        ctx = Mock()
+        def refuse(name, callback):
+            if name in ("post_tool_call", "subagent_stop"):
+                raise TypeError("unknown hook")
+        ctx.register_hook.side_effect = refuse
+        self.adapter.register(ctx)
+        self.assertIn("pre_tool_call", [c.args[0] for c in ctx.register_hook.call_args_list])
+
     def test_registration_uses_native_skill_signature_and_one_section(self):
         ctx = Mock()
         self.adapter.register(ctx)

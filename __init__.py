@@ -100,10 +100,46 @@ def _on_pre_tool_call(tool_name="", args=None, task_id=None, session_id=None, to
     return None
 
 
+def _completion(event):
+    """One completion row through the shared observer; the text tail is read and dropped."""
+    try:
+        _python("observe_agent.py", (), {"hook_event_name": "SubagentStop", **event})
+    except (OSError, subprocess.SubprocessError):
+        logger.warning("leos-agent completion bridge failed open")
+
+
+def _on_post_tool_call(tool_name="", args=None, result=None, task_id=None, session_id=None, tool_call_id=None,
+                       status=None, **_):
+    if tool_name != "delegate_task":
+        return None
+    if isinstance(result, dict):
+        result = next((v for k in ("result", "summary", "output", "content", "text") if isinstance((v := result.get(k)), str)), "")
+    text = result if isinstance(result, str) else ""
+    _completion({"tool_name": tool_name, "session_id": session_id or task_id or "", "call_id": tool_call_id,
+                 "agent": "delegate_task", "result_text": text[-4096:], "status": status if isinstance(status, str) else None,
+                 "reason": "hermes-post-tool-call"})
+    return None
+
+
+def _on_subagent_stop(parent_session_id=None, child_role=None, child_summary=None, child_status=None, **_):
+    _completion({"session_id": parent_session_id or "", "agent": child_role if isinstance(child_role, str) else "delegate_task",
+                 "child_summary": (child_summary if isinstance(child_summary, str) else "")[-4096:],
+                 "status": child_status if isinstance(child_status, str) else None, "reason": "hermes-subagent-stop"})
+    return None
+
+
 def register(ctx):
     for skill in sorted((PLUGIN_ROOT / "skills").glob("*/SKILL.md")):
         ctx.register_skill("leo-" + skill.parent.name, skill, description="Leo's " + skill.parent.name + " workflow")
     ctx.register_hook("pre_tool_call", _on_pre_tool_call)
+    # Completion observers. Older Hermes builds do not know these names, and one
+    # of them (#12922) skipped built-in tools entirely; either way the report
+    # states the absence, so registration must never take the plugin down.
+    for name, callback in (("post_tool_call", _on_post_tool_call), ("subagent_stop", _on_subagent_stop)):
+        try:
+            ctx.register_hook(name, callback)
+        except Exception:  # noqa: BLE001 - any refusal is a capability gap, not a fault
+            logger.warning("leos-agent: Hermes does not accept the %s hook; completion signals unavailable", name)
     ctx.register_hook("pre_api_request", _on_request_model)
     ctx.register_hook("post_api_request", _on_request_model)
     ctx.register_hook("on_session_start", _on_session_start)

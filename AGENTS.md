@@ -63,7 +63,9 @@ python3 scripts/measure_context.py --check
 
 Use `scripts/measure_context.py --check`; its ceilings are real budgets.
 
-- The policy body has a 2.2 KB component limit; measure the current size.
+- The policy body has a 2.6 KB component limit (raised from 2.2 KB on
+  2026-09-21 so the delegation rule could become a procedure: decompose, gate on
+  verifiability, escalate one tier on a failed check). Measure the current size.
   Every sentence added to `rules/preferences.md` must displace one or earn its
   bytes. Prefer ordinary hook code for enforceable rules; do not add always-loaded
   prose to describe implementation details.
@@ -87,6 +89,9 @@ Use `scripts/measure_context.py --check`; its ceilings are real budgets.
 The policy in `rules/preferences.md` applies to work on this repo too.
 
 - Follow its cheap/standard/premium/parent-level tiers and delegation criteria.
+  Delegation is decided by decomposition and gated on a named check; a failed
+  check escalates one tier with a brief starting `Escalation from <tier>:`.
+  Workers end with `Result:` and `Verified:` lines; the observer parses them.
   Parent-level is exceptional. Workers never delegate except a PR reviewer's
   bounded read-only lenses. Prefer fresh context and absolute starting paths.
 - Keep the orchestrator at least as capable as its workers. If work exceeds it,
@@ -97,7 +102,13 @@ The policy in `rules/preferences.md` applies to work on this repo too.
   open, and is not a security boundary. Plugin installs namespace agent types
   as `leos-agent:leo-cheap`; the guard recognises both forms.
 - Never relay a subagent's self-report as verification. Read the diff, run the
-  command, check the registry.
+  command, check the registry. A worker's `Result:` line is a routing signal
+  for the log, not evidence.
+- The dispatch log holds enums, booleans, counts, hashes, and tier tokens. No
+  brief text, no result text, no evidence strings. `outcome.py` is the one
+  parser and returns nothing else. Cursor rows are status-only; Codex escalation
+  markers are `unobservable`; Hermes and Pi completion rows depend on the
+  installed build firing the hook, and the report names silent harnesses.
 - Tier labels are capability choices, not a guaranteed price ordering. Unknown
   IDs, ambiguous prices, and input/output crossovers remain explicit diagnostics.
   Price aliases must never rewrite the model ID sent to a harness. Catalog
@@ -260,6 +271,10 @@ these contracts when changing it or `scripts/ghreview.py`:
 - Do not reinstate mandatory delegation for every task or every review. Small
   work stays local; substantial independent work earns a worker. Legacy tier
   names are compatibility aliases, not vocabulary for new guidance.
+- Tier selection is escalation on evidence, not prediction. No classifier or
+  network call on the dispatch path decides whether or where to delegate; the
+  outcome log is for tuning the written policy. Delegation depth stays at one
+  level; work that outlasts a context continues by handoff.
 - Skills are the invocation surface. Do not restore duplicate command wrappers;
   Hermes's native `leo-install` registration is the necessary exception.
 - Keep `rules/preferences.md` valid unrendered for Cursor. Use the existing

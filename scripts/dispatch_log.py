@@ -40,15 +40,18 @@ from state import _data_root, _locked  # noqa: E402
 
 LOG_NAME = "dispatch.jsonl"
 
-# One megabyte, one generation. A record now carries the full price comparison,
-# so it measures ~790 bytes rather than the ~230 this comment used to claim:
-# roughly 1,300 dispatches per file and 2,600 retained. Still months of history
-# for one person, still bounded at 2 MiB forever, with nothing to configure --
-# but a third of the retention the old number promised, which is worth knowing
-# before reading a report and assuming it covers the whole period.
+# One megabyte, one generation. A v3 dispatch record carries the full price
+# comparison plus tier and escalation fields, roughly 850 bytes; a completion
+# record with outcome and usage is about 350. Call it 1,100 dispatches per file
+# and 2,200 retained. Still months of history for one person, still bounded at
+# 2 MiB forever, with nothing to configure -- but worth knowing before reading a
+# report and assuming it covers the whole period.
 MAX_BYTES = 1 << 20
 
-RECORD_VERSION = 2
+# v3 added tier, escalation_from, outcome, verified, outcome_source, usage.
+# The reader branches on this so "predates instrumentation" is never confused
+# with "the worker emitted no Result line".
+RECORD_VERSION = 3
 
 
 TIER_PREFIX = "leo-"
@@ -84,6 +87,7 @@ def _keep_prompts():
 
 def record(dispatch, decision, reason, harness, session=None, cwd=None, trivial=0):
     """The on-disk shape for one dispatch. Pure; writes nothing."""
+    from routing_engine import tier_for
     entry = {
         "v": RECORD_VERSION,
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -107,6 +111,8 @@ def record(dispatch, decision, reason, harness, session=None, cwd=None, trivial=
             "prompt_lines": dispatch.prompt_lines,
             "paths": dispatch.path_count,
             "prompt": dispatch.prompt_hash,
+            "tier": tier_for(dispatch.agent),
+            "escalation_from": dispatch.escalation_from,
         })
         if _keep_prompts():
             entry["prompt_text"] = dispatch.prompt_head
@@ -161,6 +167,91 @@ def read(limit=None, target=None):
     return out[-limit:] if limit else out
 
 
+COMPLETION = ("executed", "completed")
+
+
+def _tier_of(row):
+    """A dispatch or completion row's tier: v3 records it; older rows recompute."""
+    from routing_engine import tier_for
+    return row.get("tier") or tier_for(row.get("agent") or "") or None
+
+
+def _ts(row):
+    return row.get("ts") or ""
+
+
+def join(entries):
+    """Pair each completion row with the dispatch it finished. Read time only.
+
+    Order of evidence, each dispatch claimed at most once: call_id; (session,
+    agent_id); nearest preceding same-session same-tier dispatch that actually
+    ran; else unmatched. A tie or a second candidate at the same strength is
+    `ambiguous`, and an ambiguous outcome is never credited to a real tier.
+    Hermes may report one delegation twice (post_tool_call and subagent_stop);
+    those collapse here, preferring the row that carries an outcome.
+    """
+    dispatches = [e for e in entries if e.get("decision") not in COMPLETION and e.get("decision") not in ("block", "error")
+                  and (e.get("agent") or e.get("tool"))]
+    completions = []
+    seen = {}
+    for row in sorted((e for e in entries if e.get("decision") in COMPLETION), key=_ts):
+        key = (row.get("harness"), row.get("session"), row.get("call_id")) if row.get("call_id") else None
+        if key is None and row.get("agent_id"):
+            key = (row.get("harness"), row.get("session"), "agent", row.get("agent_id"))
+        if key is None:
+            key = (row.get("harness"), row.get("session"), row.get("agent"), _ts(row)[:18])
+        prior = seen.get(key)
+        if prior is None:
+            seen[key] = row
+            completions.append(row)
+        elif (prior.get("outcome") in (None, "unknown")) and row.get("outcome") not in (None, "unknown"):
+            completions[completions.index(prior)] = row
+            seen[key] = row
+        elif prior.get("decision") == "completed" and row.get("decision") == "executed":
+            completions[completions.index(prior)] = row
+            seen[key] = row
+    by_call = collections.defaultdict(list)
+    for d in dispatches:
+        if d.get("call_id"):
+            by_call[(d.get("harness"), d.get("session"), d["call_id"])].append(d)
+    claimed = set()
+    pairs = {}
+    stats = collections.Counter()
+    for row in completions:
+        tier = None
+        candidates = [d for d in by_call.get((row.get("harness"), row.get("session"), row.get("call_id")), []) if id(d) not in claimed] if row.get("call_id") else []
+        how = "call_id" if candidates else None
+        if not candidates and row.get("session") and row.get("agent_id"):
+            # Dispatch rows never know the child's agent_id, so this key only
+            # ever matches a dispatch that a later adapter learns to stamp.
+            candidates = [d for d in dispatches if id(d) not in claimed and d.get("session") == row.get("session")
+                          and d.get("agent_id") == row.get("agent_id")]
+            how = "agent_id" if candidates else None
+        if not candidates:
+            want = _tier_of(row)
+            preceding = [d for d in dispatches if id(d) not in claimed and d.get("harness") == row.get("harness")
+                         and d.get("session") == row.get("session") and _ts(d) <= _ts(row)
+                         and (want is None or _tier_of(d) == want)]
+            if preceding:
+                latest = max(_ts(d) for d in preceding)
+                candidates = [d for d in preceding if _ts(d) == latest]
+                how = "nearest"
+        if not candidates:
+            stats["unmatched"] += 1
+            pairs[id(row)] = (None, "unrouted" if _tier_of(row) is None else _tier_of(row), "unmatched")
+            continue
+        chosen = candidates[-1]
+        claimed.add(id(chosen))
+        if len(candidates) > 1:
+            stats["ambiguous"] += 1
+            tier = "ambiguous"
+        else:
+            stats[how] += 1
+            tier = _tier_of(chosen) or "unrouted"
+        pairs[id(row)] = (chosen, tier, how)
+    return completions, pairs, dict(stats)
+
+
 def summarise(entries):
     """The read-time judgment: burst collapse, tiers, and block conversion."""
     # A child whose model arrived late has two rows: the SubagentStop
@@ -212,8 +303,47 @@ def summarise(entries):
     blocked = [e for e in entries if e.get("decision") == "block"]
     confirmed = [e for e in entries if e.get("decision") == "executed"]
 
+    completions, pairs, joins = join(entries)
+    outcomes = {}
+    verified = {}
+    usage = {}
+    usage_rows = collections.Counter()
+    sources = collections.defaultdict(collections.Counter)
+    for row in completions:
+        _, tier, _how = pairs[id(row)]
+        if "outcome" in row:
+            outcomes.setdefault(tier, collections.Counter())[row.get("outcome") or "unknown"] += 1
+            state = {True: "stated", False: "none"}.get(row.get("verified"), "unstated")
+            verified.setdefault(tier, collections.Counter())[state] += 1
+            sources[row.get("harness")][row.get("outcome_source") or "none"] += 1
+        if isinstance(row.get("usage"), dict):
+            import outcome as _outcome
+            usage[tier] = _outcome.add_usage(usage.get(tier), row["usage"])
+            usage_rows[tier] += 1
+    escalations = collections.Counter()
+    unobservable = 0
+    for entry in dispatches:
+        source = entry.get("escalation_from")
+        if source == "unobservable":
+            unobservable += 1
+        elif source:
+            escalations["%s->%s" % (source, _tier_of(entry) or "unrouted")] += 1
+    # Harnesses that dispatched but never reported a completion: the report
+    # states the absence rather than guessing at a cause.
+    silent = sorted({e.get("harness") for e in dispatches} - {c.get("harness") for c in completions} - {None})
+    pre_instrumentation = sum(1 for e in entries if (e.get("v") or 0) < 3)
+
     return {
         "records": len(entries),
+        "outcomes": {tier: dict(c) for tier, c in sorted(outcomes.items())},
+        "verified": {tier: dict(c) for tier, c in sorted(verified.items())},
+        "usage": {tier: {**u, "rows": usage_rows[tier]} for tier, u in sorted(usage.items())},
+        "escalations": dict(escalations),
+        "escalation_unobservable": unobservable,
+        "outcome_sources": {h: dict(c) for h, c in sorted(sources.items()) if h},
+        "silent_harnesses": silent,
+        "joins": joins,
+        "pre_instrumentation": pre_instrumentation,
         "dispatch_attempts": len([e for e in dispatches if e.get("decision") != "error"]),
         "window": [entries[0].get("ts"), entries[-1].get("ts")] if entries else [],
         "harnesses": dict(collections.Counter(e.get("harness") for e in entries)),
@@ -251,10 +381,60 @@ def render(summary):
     if summary["blocked"]:
         lines.append("  blocks      %d (execution/savings not inferred from retries)" % summary["blocked"])
     lines.append("  short-brief signals  %d  (heuristic only; not evidence of wasted spend)" % summary["trivial_lone_spawns"])
+    lines.extend(_render_outcomes(summary))
     lines.append("  agent @ model:")
     for name, count in sorted(summary["agents"].items(), key=lambda kv: (-kv[1], kv[0])):
         lines.append("    %-44s %d" % (name, count))
     return "\n".join(lines)
+
+
+def _render_outcomes(summary):
+    """Outcome, verification, escalation and usage sections; empty when there is nothing to say."""
+    lines = []
+    outcomes = summary.get("outcomes") or {}
+    if outcomes:
+        first = True
+        for tier, counts in outcomes.items():
+            body = "  ".join("%s %d" % kv for kv in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+            lines.append("  %-11s %-9s %s" % ("outcomes" if first else "", tier, body))
+            first = False
+    verified = summary.get("verified") or {}
+    if verified:
+        parts = []
+        for tier, counts in verified.items():
+            total = sum(counts.values())
+            parts.append("%s %d/%d stated evidence" % (tier, counts.get("stated", 0), total))
+        lines.append("  verified    " + "; ".join(parts))
+    usage = summary.get("usage") or {}
+    if usage:
+        parts = []
+        for tier, u in usage.items():
+            parts.append("%s in %d out %d cache-read %d (%d row%s)" % (
+                tier, u.get("input", 0), u.get("output", 0), u.get("cache_read", 0), u["rows"], "" if u["rows"] == 1 else "s"))
+        lines.append("  child usage " + "; ".join(parts) + "  (tokens summed from observed children only)")
+    escalations = summary.get("escalations") or {}
+    if escalations or summary.get("escalation_unobservable"):
+        body = "; ".join("%s %d" % (k.replace("->", " -> "), v) for k, v in sorted(escalations.items())) or "none observed"
+        lines.append("  escalations " + body)
+        if summary.get("escalation_unobservable"):
+            lines.append("              %d dispatch(es) with an unobservable escalation marker (opaque brief)" % summary["escalation_unobservable"])
+    sources = summary.get("outcome_sources") or {}
+    silent = summary.get("silent_harnesses") or []
+    if sources or silent:
+        parts = []
+        for harness, counts in sources.items():
+            for source, n in sorted(counts.items()):
+                note = " (no outcome signal available)" if source == "status-only" else ""
+                parts.append("%s %s %d%s" % (harness, source, n, note))
+        lines.append("  signals     " + "; ".join(parts) if parts else "  signals")
+        for harness in silent:
+            lines.append("              %s: no completion signal observed" % harness)
+    joins = summary.get("joins") or {}
+    if joins:
+        lines.append("  joins       " + ", ".join("%s %d" % (k.replace("nearest", "nearest-preceding"), v) for k, v in sorted(joins.items())))
+    if summary.get("pre_instrumentation") and outcomes:
+        lines.append("  %d record(s) predate outcome signals" % summary["pre_instrumentation"])
+    return lines
 
 
 def main(argv=None):

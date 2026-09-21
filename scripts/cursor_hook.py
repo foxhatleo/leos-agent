@@ -3,7 +3,6 @@
 import json
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dispatch_guard
@@ -29,12 +28,14 @@ def handle(event):
         if result["action"] == "block":
             return {"permission": "deny", "user_message": dispatch_guard.render_block(result)}
     elif kind == "subagentStop":
-        # This event proves lifecycle completion, not which model was billed.
-        dispatch_log.append({"v": dispatch_log.RECORD_VERSION,
-                             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                             "harness": "cursor", "decision": "completed", "status": event.get("status"),
-                             "session": dispatch_log.digest(session), "agent": event.get("subagent_type"),
-                             "call_id": event.get("tool_call_id"), "effective_model": None})
+        # This event proves lifecycle completion, not which model was billed and
+        # not how the work ended: Cursor exposes a status token and no child text,
+        # so the row says status-only rather than inventing an outcome.
+        import observe_agent
+        observe_agent.observe({"hook_event_name": "SubagentStop", "session_id": session,
+                               "subagent_type": event.get("subagent_type"), "tool_call_id": event.get("tool_call_id"),
+                               "status": event.get("status") if isinstance(event.get("status"), str) else "unknown",
+                               "reason": "cursor-lifecycle-status"}, "cursor")
     return None
 
 

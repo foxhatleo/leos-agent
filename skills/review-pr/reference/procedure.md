@@ -161,3 +161,6 @@ Include:
 
 Say comments/replies are pending only when they were actually staged. Never
 claim a submitted review, and never submit one from this workflow.
+
+End the report with the worker contract lines: `Result: done|partial|blocked|escalate`
+(partial when coverage was incomplete) and `Verified: <the checks you actually ran>`.

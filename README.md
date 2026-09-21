@@ -3,10 +3,12 @@
 Cost-aware delegation and portable workflows for Claude Code, Codex, Cursor,
 OpenCode, Hermes, and Pi.
 
-The main agent handles small work directly and delegates substantial, bounded
-work to the cheapest competent tier. The policy separates **whether to delegate**
-from **which model to use**. Native adapters check model costs where the harness
-exposes enough information, while skills load detailed procedures on demand.
+The main agent splits a task into steps, keeps small or dependent steps local,
+and delegates independent or output-heavy steps to the cheapest tier whose
+result a named check can verify. A failed check escalates one tier up; work
+that cannot be checked stays local. Native adapters check model costs and
+record how each worker's run ended where the harness exposes enough
+information, while skills load detailed procedures on demand.
 
 This is a useful direction when expensive parents otherwise do large amounts of
 routine work or spawn expensive children by inheritance. It can cost more when
@@ -29,6 +31,15 @@ Native profiles are `leo-cheap`, `leo-standard`, `leo-premium`, `leo-parent`, an
 may use nested read-only lenses; ordinary workers do not delegate. Small
 reviews run locally, and larger reviews divide independent areas rather than
 requiring every lens to reread everything.
+
+Delegation is decided by decomposition, not by guessing at size. A step is
+delegated when it is independent of the parent's next step or when its tool
+output would swell the parent's context; dependent chains stay local. Every
+delegation names the check that proves its result. Workers end their reply with
+`Result: done|partial|blocked|escalate` and `Verified: <evidence or none>`. When a
+result fails its check or reports escalate, the parent re-dispatches one tier up
+with a brief that begins `Escalation from <tier>:`, never the same tier again.
+Work that outlasts one context continues by handoff, not a deeper tree.
 
 Choose tiers by ambiguity, consequence, and how reliably results can be checked.
 Cheap handles retrieval, mechanical edits, and known checks; standard handles
@@ -62,14 +73,23 @@ operation.
 
 ## Harness capabilities
 
-| Harness | Policy delivery | Model control | Important limit |
-|---|---|---|---|
-| Claude Code | SessionStart, including forks | Agent/Task argument correction; native profiles | The first dispatch may precede parent transcript persistence; missing parent data permits dispatch with a diagnostic. Forced settings/provider substitutions also limit enforcement. |
-| Codex | Separate native SessionStart hook | Tier-enforcing explicit spawn selection; model-free native profiles | Hooks need native trust. Other/customized profiles can still override spawn settings. |
-| Cursor | Native always-apply rule | Installed user agents; resolved subagentStart model ceiling | No invented Task model argument; hook diagnostics distinguish planned models from completion. Worker no-delegation is instruction-only: no per-agent tool restriction, and no parent-agent identity at subagentStart. |
-| OpenCode | One registered rendered instruction | Native agent selection, confirmed through the SDK | Task has no model field; source/config paths must remain valid. |
-| Hermes | Frozen system-prompt section | Global native delegation-model ceiling when parent/model are observable | Native delegation has one global model, not separate per-task tiers. |
-| Pi | Extension caches rendered body per session | Advisory policy and extension-dependent dispatch checks | No native per-spawn model guarantee for third-party subagent tools. |
+| Harness | Policy delivery | Model control | Outcome signal | Important limit |
+|---|---|---|---|---|
+| Claude Code | SessionStart, including forks | Agent/Task argument correction; native profiles | SubagentStop final message, child transcript fallback, child usage from transcript | The first dispatch may precede parent transcript persistence; missing parent data permits dispatch with a diagnostic. Forced settings/provider substitutions also limit enforcement. |
+| Codex | Separate native SessionStart hook | Tier-enforcing explicit spawn selection; model-free native profiles | SubagentStop final message, rollout fallback, cumulative token counts | Hooks need native trust. Other/customized profiles can still override spawn settings. Encrypted briefs make the escalation marker unobservable; recorded as such. |
+| Cursor | Native always-apply rule | Installed user agents; resolved subagentStart model ceiling | Status token only; no child text, so no outcome and no usage | No invented Task model argument; hook diagnostics distinguish planned models from completion. Worker no-delegation is instruction-only: no per-agent tool restriction, and no parent-agent identity at subagentStart. |
+| OpenCode | One registered rendered instruction | Native agent selection, confirmed through the SDK | `tool.execute.after` output of `task`, joined by call id; no usage | Task has no model field; source/config paths must remain valid. |
+| Hermes | Frozen system-prompt section | Global native delegation-model ceiling when parent/model are observable | `subagent_stop` and `post_tool_call` when the installed build fires them; no usage | Native delegation has one global model, not separate per-task tiers. Older builds skip post-tool hooks for built-in tools; the report then says no completion signal was observed. |
+| Pi | Extension caches rendered body per session | Advisory policy and extension-dependent dispatch checks | `tool_result` text and usage for a tool named `subagent` | No native per-spawn model guarantee for third-party subagent tools. |
+
+Completion capture reads the last 4 KiB of a worker's final text for its
+`Result:` and `Verified:` lines and drops the text. The dispatch log stores the
+outcome enum, a verified tri-state, a source token, token counts, the tier, and
+the escalation source tier; never brief or result text. `dispatch_log.py report`
+joins completions to dispatches by call id, then agent id, then the nearest
+preceding same-tier dispatch, and prints outcome and verification rates per
+tier, escalation chains, summed child usage, and which harnesses supplied no
+signal.
 
 Portable skills are registered on all six. Native capability differences are
 reported rather than presented as full enforcement parity. Policy, pricing,
@@ -240,7 +260,7 @@ python3 scripts/measure_context.py --check
 python3 scripts/pricing.py resolve claude-sonnet-5
 ```
 
-Default policy bodies are about 1.8–2.0 KB, with a 2.2 KB component budget.
+Default policy bodies are about 2.4–2.5 KB, with a 2.6 KB component budget.
 Measurement counts metadata separately and treats bytes/4 only as a rough
 prose-token proxy. Harness wrappers, history, tools, cache behavior, and child
 work are outside that static measurement. No assertion is made that instruction

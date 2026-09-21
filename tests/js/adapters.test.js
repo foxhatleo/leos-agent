@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { LeosAgent } from '../../index.js';
@@ -34,6 +34,52 @@ test('OpenCode leaves unrelated tools untouched without querying agents', async 
   const args = { command: 'pwd' };
   await hooks['tool.execute.before']({ tool: 'bash' }, { args });
   assert.deepEqual(args, { command: 'pwd' });
+});
+
+const logRows = () => {
+  const path = join(storage, 'dispatch.jsonl');
+  return existsSync(path) ? readFileSync(path, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
+};
+
+test('OpenCode records the task outcome by callID and stores none of the text', async () => {
+  const hooks = await LeosAgent({ directory: storage, client: {} });
+  const before = logRows().length;
+  await hooks['tool.execute.after']({ tool: 'task', sessionID: 's', callID: 'call-7' },
+    { title: 'x', output: 'Edited files PRIVATE_OUTPUT.\n\nResult: done\nVerified: node --test green', metadata: {} });
+  const rows = logRows();
+  assert.equal(rows.length, before + 1);
+  const row = rows.at(-1);
+  assert.equal(row.harness, 'opencode');
+  assert.equal(row.call_id, 'call-7');
+  assert.equal(row.outcome, 'done');
+  assert.equal(row.verified, true);
+  assert.equal(row.outcome_source, 'tool-output');
+  assert.equal(readFileSync(join(storage, 'dispatch.jsonl'), 'utf8').includes('PRIVATE_OUTPUT'), false);
+  await hooks['tool.execute.after']({ tool: 'bash', sessionID: 's', callID: 'c2' }, { output: 'Result: done' });
+  assert.equal(logRows().length, before + 1);
+});
+
+test('Pi records the subagent result with usage and returns nothing', async () => {
+  const hooks = {};
+  piExtension({ on: (name, callback) => { hooks[name] = callback; } });
+  const before = logRows().length;
+  const returned = await hooks.tool_result({ toolName: 'subagent', toolCallId: 'p1', input: { agent: 'leo-cheap' },
+    content: [{ type: 'text', text: 'Looked.\nResult: escalate\nVerified: none' }], isError: false,
+    usage: { input: 120, output: 8 } });
+  assert.equal(returned, undefined);
+  const row = logRows().at(-1);
+  assert.equal(logRows().length, before + 1);
+  assert.equal(row.harness, 'pi');
+  assert.equal(row.call_id, 'p1');
+  assert.equal(row.agent, 'leo-cheap');
+  assert.equal(row.outcome, 'escalate');
+  assert.equal(row.verified, false);
+  assert.deepEqual(row.usage, { input: 120, output: 8 });
+  await hooks.tool_result({ toolName: 'read', toolCallId: 'p2', content: [{ type: 'text', text: 'Result: done' }] });
+  assert.equal(logRows().length, before + 1);
+  const huge = 'y'.repeat(3 * 1024 * 1024) + '\nResult: partial';
+  await hooks.tool_result({ toolName: 'subagent', toolCallId: 'p3', content: [{ type: 'text', text: huge }] });
+  assert.equal(logRows().at(-1).outcome, 'partial');
 });
 
 test('Pi uses one skill discovery source and caches session payload', async () => {

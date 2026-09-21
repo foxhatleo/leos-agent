@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 Dispatch = collections.namedtuple(
     "Dispatch",
-    "tool agent model prompt_bytes prompt_lines path_count prompt_hash prompt_head opaque",
+    "tool agent model prompt_bytes prompt_lines path_count prompt_hash prompt_head opaque escalation_from",
 )
 
 # The agent-selection field is mandatory, and that is the whole trick. A rule
@@ -118,6 +118,7 @@ def normalize(event, _harness=None):
         return None
 
     from dispatch_log import digest  # local: a no-op call must not pay for this
+    from outcome import escalation_tier
 
     opaque = tool in OPAQUE_BRIEF_TOOLS
     head = prompt[:PATH_SCAN_BYTES]
@@ -133,6 +134,10 @@ def normalize(event, _harness=None):
         prompt_hash=None if opaque else digest(prompt),
         prompt_head="" if opaque else prompt[:200],
         opaque=opaque,
+        # Three states, not two: an encrypted brief cannot say "no escalation",
+        # and recording null there would read as one. The tier token itself is
+        # the only thing kept; the failure text after the marker never is.
+        escalation_from="unobservable" if opaque else escalation_tier(head),
     )
 
 

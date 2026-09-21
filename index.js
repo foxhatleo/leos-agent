@@ -39,6 +39,18 @@ export const LeosAgent = async (ctx) => {
       if (result.action === 'block') throw new Error(`[leo routing] ${result.reason}. ${result.retry || ''}`);
       if (result.action === 'correct' && result.updated_input) output.args = result.updated_input;
     },
+    // The task tool's return value is the child's final text. Its last 4 KiB
+    // go to the observer for the Result/Verified tokens and are then dropped;
+    // callID is the join key back to the dispatch row. Never mutates output.
+    'tool.execute.after': async (input, output) => {
+      if (input?.tool !== 'task') return;
+      const text = String(output?.output ?? '').slice(-4096);
+      await bounded(runPython(root, 'opencode', 'observe_agent.py', [], {
+        hook_event_name: 'SubagentStop', tool_name: 'task', session_id: input.sessionID, call_id: input.callID,
+        agent: output?.metadata?.agent ?? output?.metadata?.subagent_type ?? null,
+        result_text: text, outcome_source: 'tool-output', reason: 'opencode-tool-output',
+      }), 3000);
+    },
   };
 };
 export default LeosAgent;

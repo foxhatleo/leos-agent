@@ -38,6 +38,19 @@ class TestRouting(unittest.TestCase):
         self.assertIn("Edit", executor_tools)
         self.assertIn("Write", executor_tools)
 
+    def test_escalation_contract_tokens_are_present_wherever_they_are_parsed_from(self):
+        # The guard parses the brief header and the observer parses the worker's
+        # closing line. The policy must teach the parent both tokens, and every
+        # worker body must ask for the closing line on every harness.
+        policy = (ROOT / "rules" / "preferences.md").read_text(encoding="utf-8")
+        self.assertIn("Escalation from <tier>:", policy)
+        self.assertIn("Result: escalate", policy)
+        for path in sorted((ROOT / "agents").glob("leo-*.md")):
+            with self.subTest(agent=path.stem):
+                self.assertIn("Result: done|partial|blocked|escalate", path.read_text(encoding="utf-8"))
+        self.assertIn("Result: done|partial|blocked|escalate",
+                      (ROOT / "skills" / "review-pr" / "reference" / "procedure.md").read_text(encoding="utf-8"))
+
     def test_clean_fork_flag_is_stated_everywhere_spawning_is_described(self):
         # A harness flag, not prose: every file that tells the model to spawn has
         # to name it, or one spawn path silently inherits the parent's history.

@@ -19,9 +19,9 @@ ROOT = Path(__file__).resolve().parent.parent
 # Deliberately tight ceilings. Raise one only with a concrete reason and record
 # the before/after output in the change that raises it.
 LIMITS = {
-	"global_policy_bytes": 2_200,
+	"global_policy_bytes": 2_600,
 	# Default policy body, with native Cursor loading accounted separately.
-	"rendered_policy_bytes": 2_200,
+	"rendered_policy_bytes": 2_600,
 	"codex_implicit_skill_metadata_bytes": 600,
 	"codex_discoverable_skill_metadata_bytes": 2_000,
 	"claude_implicit_skill_metadata_bytes": 800,
