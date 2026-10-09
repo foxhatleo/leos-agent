@@ -436,18 +436,14 @@ def digest(data):
 	return hashlib.sha256(data).hexdigest()
 
 
-def legacy_copy(text):
-	"""Recognize unchanged pre-v12 copies by full content, not a loose marker."""
-	# Older OpenCode installs replaced <plugin-root> with an absolute source path.
-	# Undo that for each candidate root and require the entire known hash: a file
-	# with a single edited line still fails every variant, which is the property
-	# that lets this delete a copy without ever deleting someone's work.
-	expected = known_hashes("sha256")
-	return any(digest(value.encode()) in expected for value in root_variants(text))
-
-
 def known_copy(text, model=None):
-	"""Full-content match against any copy an earlier release wrote."""
+	"""Full-content match against any copy an earlier release wrote.
+
+	Older OpenCode installs replaced <plugin-root> with an absolute source path.
+	Undo that for each candidate root and require the entire known hash: a file
+	with a single edited line still fails every variant, which is the property
+	that lets this delete a copy without ever deleting someone's work.
+	"""
 	expected = known_hashes("sha256") | known_hashes("released")
 	for value in root_variants(text):
 		for variant in {value, strip_routed_model(value, model)}:
@@ -711,11 +707,6 @@ def prepare_backup_dir(backup):
 		os.makedirs(root, mode=0o700, exist_ok=True)
 	os.makedirs(backup.parent, mode=0o700, exist_ok=True)
 	os.chmod(backup.parent, 0o700)
-
-
-def transaction_active():
-	from install_transaction import ACTIVE
-	return ACTIVE.get() is not None
 
 
 def remove_file(path):

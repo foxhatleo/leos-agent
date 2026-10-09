@@ -995,7 +995,7 @@ class TestLegacyMigration(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             dest = Path(tmp) / "review-pr.md"
             dest.write_text(original)
-            self.assertTrue(installer.legacy_copy(original))
+            self.assertTrue(installer.known_copy(original))
             installer.remove_legacy_command(dest, args(), "legacy")
             self.assertFalse(dest.exists())
             dest.write_text(original + "My change\n")
@@ -1049,10 +1049,9 @@ class TestLegacyMigration(unittest.TestCase):
         stays the arbiter. If that ever stopped being true, this deletes work."""
         installer = load_installer()
         original = "---\ndescription: Stage a pending (unsubmitted) GitHub review on a pull request of this repository.\nargument-hint: \"[pr-number]\"\n---\n\nUse the leos-agent `review-pr` skill on `$ARGUMENTS`.\n\nWith no argument, review the pull request for the current branch. Comments are\nstaged as a PENDING review — never submitted, never made public.\n"
-        self.assertTrue(installer.legacy_copy(original))
-        self.assertFalse(installer.legacy_copy(original + "one appended line\n"))
-        self.assertFalse(installer.legacy_copy("# a file we never wrote\n"))
+        self.assertTrue(installer.known_copy(original))
         self.assertFalse(installer.known_copy(original + "one appended line\n"))
+        self.assertFalse(installer.known_copy("# a file we never wrote\n"))
 
     def test_the_frozen_hash_manifest_is_well_formed(self):
         manifest = json.loads((ROOT / "payload" / "legacy-copy-hashes.json").read_text())
