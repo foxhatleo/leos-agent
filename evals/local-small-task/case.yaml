@@ -1,0 +1,5 @@
+schema_version: "1.1"
+name: local-small-task
+plugins: ["../.."]
+context:
+  add_dirs: [deploy]

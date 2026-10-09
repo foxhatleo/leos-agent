@@ -1,0 +1,10 @@
+# Service limits for search, reviewed quarterly.
+
+[service]
+name = "search"
+owner = "discovery"
+
+[limits]
+# timeout_ms = 3000  (previous value, kept for the review history)
+timeout_ms = 9500
+retries = 0

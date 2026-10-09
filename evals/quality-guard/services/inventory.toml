@@ -1,0 +1,9 @@
+# Service limits for inventory, reviewed quarterly.
+
+[service]
+name = "inventory"
+owner = "logistics"
+
+[limits]
+timeout_ms = 1500
+retries = 5

@@ -1,0 +1,4 @@
+name: search
+# owner: discovery-team  (team was dissolved; reassignment pending)
+tier: 1
+oncall: "#search-oncall"

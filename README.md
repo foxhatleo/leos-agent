@@ -291,6 +291,49 @@ brief excerpts; avoid it for sensitive work. Installation backups and handoffs
 stay local. Handoff names are validated, reservations avoid collisions, and
 symlink escapes are refused by the helper.
 
+### Evaluating cost and quality
+
+`evals/` is a [`claude plugin eval`](https://code.claude.com/docs/en/plugin-evals)
+suite for the delegation policy on Claude Code. Each case runs three times with
+the plugin and three times without it, every run in a fresh temporary home, so
+the plugin's default tiers apply rather than your `routing.json`. Fixtures are
+small read-only directories inside each case. No case needs `--scaffold` or
+`--allow-tools`, and every grader is a regex or tool-use check, so no judge
+model is called.
+
+| Case | Expected with the plugin |
+|---|---|
+| `cheap-retrieval` | Bulk reading goes to the cheap tier; correct answer |
+| `local-small-task` | No delegation in either arm; correct answer |
+| `worker-contract` | The worker's reply carries `Result:` and `Verified:` lines; correct answer |
+| `escalation-after-failed-check` | A staged cheap result fails its check; re-dispatch to standard with an `Escalation from cheap:` brief, no cheap retry; correct answer |
+| `quality-guard` | Correctness only |
+
+```sh
+claude plugin eval . --model sonnet --no-publish --max-cost-usd 6
+claude plugin eval . --case local-small-task --runs 1 --ablation none
+```
+
+Every run is a real model call billed to your plan or API account. A full run
+is 5 cases × 3 runs × 2 arms = 30 agent runs: roughly $2–5 at list prices on
+2026-10-09 with a standard-tier parent, and about twice that with a premium
+one. Pin a standard or premium parent, since a cheap parent has no cheaper tier
+to delegate to. Runs inherit most `CLAUDE_CODE_*` settings from your shell, so
+unset overrides such as `CLAUDE_CODE_SUBAGENT_MODEL` first.
+
+`WITH` and `W/OUT` count only the graders scored in both arms: each case's
+correct answer, plus the no-delegation check on `local-small-task`. `Δ` is
+therefore a quality difference on that task (and, there, over-delegation), so a
+negative `Δ` is a regression. With three runs per arm, one run moves a
+single-grader case by 0.33. The routing, contract, and escalation graders are
+with-arm indicators, because the baseline has no `leo-*` agents;
+`--ablation none` scores them, so use it to gate on behaviour. At the default
+threshold of 1.0, one failed scored grader fails the case. `COST` is the CLI's
+list-price estimate for both arms of a case together. It is not a bill, the
+summary does not split it by arm, and the suite does not measure tokens.
+Results show how the policy behaves on these five tasks with the pinned model;
+they do not establish savings in general.
+
 ## Development and releases
 
 ```sh

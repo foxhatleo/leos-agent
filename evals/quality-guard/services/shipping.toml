@@ -1,0 +1,9 @@
+# Service limits for shipping, reviewed quarterly.
+
+[service]
+name = "shipping"
+owner = "logistics"
+
+[limits]
+timeout_ms = 2400
+retries = 4

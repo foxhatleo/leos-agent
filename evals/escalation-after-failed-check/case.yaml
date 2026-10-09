@@ -1,0 +1,5 @@
+schema_version: "1.1"
+name: escalation-after-failed-check
+plugins: ["../.."]
+context:
+  add_dirs: [postmortems]

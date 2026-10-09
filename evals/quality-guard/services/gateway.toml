@@ -1,0 +1,9 @@
+# Service limits for gateway, reviewed quarterly.
+
+[service]
+name = "gateway"
+owner = "edge"
+
+[limits]
+timeout_ms = 11000
+retries = 0

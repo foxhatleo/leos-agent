@@ -1,0 +1,4 @@
+name: chat
+owner: messaging
+tier: 2
+oncall: "#chat-oncall"

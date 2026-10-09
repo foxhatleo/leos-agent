@@ -1,0 +1,9 @@
+# Service limits for billing, reviewed quarterly.
+
+[service]
+name = "billing"
+owner = "payments"
+
+[limits]
+timeout_ms = 3000
+retries = 3

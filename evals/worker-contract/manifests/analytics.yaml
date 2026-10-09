@@ -1,0 +1,4 @@
+name: analytics
+owner: data-platform
+tier: 1
+oncall: "#analytics-oncall"
