@@ -27,7 +27,10 @@ a cheaper model while preserving quality.
 | Parent-level | Exceptional work beyond premium capability that justifies delegation | Current parent | Current parent |
 
 Native profiles are `leo-cheap`, `leo-standard`, `leo-premium`, `leo-parent`, and
-`leo-reviewer`. `leo-runner` and `leo-executor` remain legacy aliases. Review
+`leo-reviewer`. The retired `leo-runner` and `leo-executor` profiles are gone,
+but the guard and logs still map those names to cheap and standard, and routing
+config still accepts its `runner` and `executor` keys. On Claude Code each
+worker profile caps its turns; a capped run returns its output marked partial. Review
 may use nested read-only lenses; ordinary workers do not delegate. Small
 reviews run locally, and larger reviews divide independent areas rather than
 requiring every lens to reread everything.
@@ -38,7 +41,9 @@ output would swell the parent's context; dependent chains stay local. Every
 delegation names the check that proves its result. Workers end their reply with
 `Result: done|partial|blocked|escalate` and `Verified: <evidence or none>`. When a
 result fails its check or reports escalate, the parent re-dispatches one tier up
-with a brief that begins `Escalation from <tier>:`, never the same tier again.
+with a brief that begins `Escalation from <tier>:`; it repeats a tier only after
+a transient tool error. `blocked` means the work needs a decision or permission,
+so the parent asks for it instead of escalating.
 Work that outlasts one context continues by handoff, not a deeper tree.
 
 Choose tiers by ambiguity, consequence, and how reliably results can be checked.
@@ -49,6 +54,15 @@ where missed defects have substantial consequences. Parent-level delegation is
 discouraged: use it only when premium is insufficient and substantial independent
 work justifies a separate worker. Otherwise do that work in the parent.
 The existing price ceiling applies to every tier; premium does not bypass it.
+
+The bundled catalog puts the large price gap in the cheap tier. Under the usual
+parents, Opus on Claude and Sol on Codex, premium costs the same as the parent
+(Opus) or is capped to it (Astra is priced above Sol), and on Codex the standard
+default is Sol itself. A child at the parent's price buys context isolation, not
+a lower rate, so the policy keeps that work local unless isolation matters.
+Cheap models also tend to spend more turns, so the cheap tier is for bounded work
+with a mechanical check. The policy batches small steps of the same shape into
+one dispatch and passes large briefs and diffs as file paths.
 
 The tier name is not a price ordering. For example, the bundled reference
 catalog prices GPT-6 Astra above GPT-6.1 Sol, so a premium Astra selection
@@ -319,11 +333,14 @@ python3 scripts/measure_context.py --check
 python3 scripts/pricing.py resolve claude-sonnet-5
 ```
 
-Default policy bodies are about 2.4–2.5 KB, with a 2.6 KB component budget.
+Default policy bodies are about 2.5 KB, with a 2.6 KB component budget.
 Measurement counts metadata separately and treats bytes/4 only as a rough
 prose-token proxy. Harness wrappers, history, tools, cache behavior, and child
 work are outside that static measurement. No assertion is made that instruction
-overhead always pays for itself.
+overhead always pays for itself. `claude plugin details leos-agent` lists hooks
+as having no model context cost, so its estimate leaves out the policy the
+SessionStart hook injects; `measure_context.py` counts it. On Claude Code,
+`/skill-doctor` reports what each skill's listing costs and how often it runs.
 
 Usage scanning handles Claude streaming duplicates, Codex cumulative/cache
 accounting, and OpenCode message-time usage. Cursor/Hermes/Pi usage schemas are

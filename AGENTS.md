@@ -27,7 +27,7 @@ The repo root *is* the plugin. Six manifests sit side by side over one tree:
 |---|---|
 | `rules/preferences.md` | The always-loaded policy. Cursor reads it raw as an always-apply rule; every other harness renders it live through `scripts/emit_payload.py` or a native hook. |
 | `skills/` | Portable skills. `skills-claude/` holds the two Claude-only ones. `reference/` subdirectories hold deferred procedure text. |
-| `agents/` | Claude Code agent profiles (`leo-cheap`, `leo-standard`, `leo-premium`, `leo-parent`, `leo-reviewer`; `leo-runner`/`leo-executor` are legacy aliases). |
+| `agents/` | Claude Code agent profiles (`leo-cheap`, `leo-standard`, `leo-premium`, `leo-parent`, `leo-reviewer`). The retired `leo-runner`/`leo-executor` names have no profile but still map to cheap/standard in routing code. |
 | `payload/` | Codex agent TOMLs, the bundled price catalog, legacy-copy hashes. |
 | `hooks/` | Native hook manifests per harness. Scripts they call live in `scripts/` so npm installs ship them. |
 | `scripts/` | Installer, guard, routing engine, diagnostics, release tooling. Stdlib-only Python, Python 3.9 floor. |
@@ -158,11 +158,13 @@ The policy in `rules/preferences.md` applies to work on this repo too.
   (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `HERMES_HOME`, `PI_CODING_AGENT_DIR`,
   `OPENCODE_CONFIG_DIR`, `OPENCODE_CONFIG`, `XDG_CONFIG_HOME`,
   `LEOS_AGENT_LOCAL_PATH`) so fixtures never reach real user files.
-- Never rely on `${CLAUDE_PLUGIN_ROOT}` in skill or command body text. It is
-  only guaranteed in `hooks.json`, MCP, and LSP configs. Skills resolve the
-  plugin root from `LEOS_AGENT_ROOT`, `CLAUDE_PLUGIN_ROOT`, `PLUGIN_ROOT`, or
-  the nearest ancestor containing `rules/preferences.md`, and pass an absolute
-  path to subagents. `check.py` lints for the placeholder.
+- Never rely on `${CLAUDE_PLUGIN_ROOT}` in skill or command body text. Claude
+  Code substitutes it inline in skill, command, and agent bodies (not in the
+  Bash tool's environment), but the other five harnesses do not, so a portable
+  body cannot depend on it. Skills resolve the plugin root from
+  `LEOS_AGENT_ROOT`, `CLAUDE_PLUGIN_ROOT`, `PLUGIN_ROOT`, or the nearest
+  ancestor containing `rules/preferences.md`, and pass an absolute path to
+  subagents. `check.py` lints for the placeholder.
 - Skills are either user-invoked (`disable-model-invocation: true`) or
   model-invoked, never ambiguous. `check.py` fails a skill missing the flag
   unless it is in the explicit model-invocable set.

@@ -169,7 +169,7 @@ class TestRendering(RoutingCase):
     def test_codex_profiles_leave_model_selection_to_the_guard(self):
         """The profile pins no model at all: rendering is a pure strip, and the
         routing config it used to consult is not consulted any more."""
-        shipped = (ROOT / "payload" / "codex-agents" / "leo-runner.toml").read_text(encoding="utf-8")
+        shipped = (ROOT / "payload" / "codex-agents" / "leo-cheap.toml").read_text(encoding="utf-8")
         rendered = self.installer.render_codex_agent(shipped)
         self.assertNotIn('model =', rendered)
         # Neither setting may override the guarded spawn selection.

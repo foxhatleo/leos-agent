@@ -19,7 +19,9 @@ leaves a breadcrumb in $LEOS_AGENT_LOCAL_PATH/emit-payload.log instead.
 
 Determinism is the contract: two runs must produce byte-identical output, or the
 prompt prefix stops being cacheable and every session pays a full cold write.
-Nothing here may emit a timestamp, an absolute path, or git state.
+Nothing here may emit a timestamp, an absolute path, or git state. It also keeps
+resumes cheap: Claude Code drops a resumed session's SessionStart output when the
+same text is already in the conversation, so only a changed policy is re-added.
 
 Env:
   LEOS_AGENT_HARNESS   overrides harness detection
@@ -38,6 +40,9 @@ import routing  # noqa: E402
 import state  # noqa: E402
 
 LOG_NAME = "emit-payload.log"
+# The dispatch log's bound: rotate past 1 MiB and keep one older file. Every
+# session start can add a line, so an unrotated log grows without limit.
+LOG_MAX_BYTES = 1 << 20
 
 
 def _breadcrumb(reason):
@@ -45,8 +50,16 @@ def _breadcrumb(reason):
     try:
         root = state._data_root()
         os.makedirs(root, mode=0o700, exist_ok=True)
-        with open(os.path.join(root, LOG_NAME), "a", encoding="utf-8") as fh:
-            fh.write(f"{reason}\n")
+        target = os.path.join(root, LOG_NAME)
+        with state._locked(target):
+            try:
+                if os.path.getsize(target) > LOG_MAX_BYTES:
+                    os.replace(target, target + ".1")
+            except OSError:
+                pass  # absent or unstattable: nothing to rotate
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as fh:
+                fh.write(f"{reason}\n")
     except Exception:
         pass
 
