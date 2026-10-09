@@ -118,8 +118,8 @@ class TestForks(ClaudeCase):
 
 
 class TestForcedModel(ClaudeCase):
-    def forced(self, event, **env):
-        with self.env(CLAUDE_CODE_SUBAGENT_MODEL_FORCE="1", **env):
+    def forced(self, event, force="1", **env):
+        with self.env(CLAUDE_CODE_SUBAGENT_MODEL_FORCE=force, **env):
             return self.guard.process(event, "claude")
 
     def test_a_forced_setting_never_logs_a_non_dispatch(self):
@@ -130,6 +130,19 @@ class TestForcedModel(ClaudeCase):
                 self.assertEqual(self.forced(self.with_parent({"tool_name": tool, "tool_input": args}))["reason"],
                                  "not-a-dispatch")
         self.assertEqual(self.log_lines(), [])
+
+    def test_force_is_read_the_way_claude_reads_a_boolean(self):
+        """Claude Code treats 1, true, yes and on as set, in any case and with
+        surrounding spaces; every other value leaves the force off."""
+        event = self.with_parent(dispatch_event(), "claude-opus-5-5")
+        for value in ("1", "true", "TRUE", " yes ", "On"):
+            with self.subTest(value=value):
+                result = self.forced(event, value, CLAUDE_CODE_SUBAGENT_MODEL="haiku")
+                self.assertEqual((result["action"], result["reason"]), ("allow", "forced-model-setting"))
+        for value in ("0", "false", "off", "", "2", "enabled"):
+            with self.subTest(value=value):
+                result = self.forced(event, value, CLAUDE_CODE_SUBAGENT_MODEL="haiku")
+                self.assertEqual((result["action"], result["reason"]), ("correct", "explicit-tier-default"))
 
     def test_forced_models_are_checked_against_the_parent(self):
         event = self.with_parent(dispatch_event(), "claude-sonnet-5-5")

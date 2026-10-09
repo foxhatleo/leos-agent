@@ -178,6 +178,16 @@ def _log(entry):
         pass
 
 
+# Claude Code reads its boolean environment variables as one of these,
+# case-insensitive and trimmed; anything else, including unset, is false.
+CLAUDE_TRUE = frozenset(("1", "true", "yes", "on"))
+
+
+def claude_flag(name):
+    """Whether Claude Code would treat environment variable `name` as on."""
+    return os.environ.get(name, "").strip().lower() in CLAUDE_TRUE
+
+
 GUARD_OFF = frozenset(("off", "0", "false", "no", "disable", "disabled"))
 GUARD_ON = frozenset(("on", "1", "true", "yes", "enable", "enabled", ""))
 
@@ -213,8 +223,8 @@ def process(event, name=None):
         from session_models import parent_model
         parent = parent_model(event, name)
         effective = event.get("effective_model")
-        if name == "claude" and os.environ.get("CLAUDE_CODE_SUBAGENT_MODEL_FORCE") == "1":
-            forced = os.environ.get("CLAUDE_CODE_SUBAGENT_MODEL") or parent
+        if name == "claude" and claude_flag("CLAUDE_CODE_SUBAGENT_MODEL_FORCE"):
+            forced = os.environ.get("CLAUDE_CODE_SUBAGENT_MODEL", "").strip() or parent
             result = route(name, tool, args, parent, effective_model=forced)
             # Forced settings cannot be overridden by updatedInput. A fork runs
             # on the parent whatever the setting, so nothing is forced there.
