@@ -59,13 +59,21 @@ export const LeosAgent = async (ctx) => {
     },
     // The task tool's return value is the child's final text. Its last 4 KiB
     // go to the observer for the Result/Verified tokens and are then dropped;
-    // callID is the join key back to the dispatch row. Never mutates output.
+    // callID is the join key back to the dispatch row. Task metadata carries
+    // the child session and the model the child ran on, but no agent: the
+    // agent is the executed argument. A background task fires this hook at
+    // launch, before the child has done anything, so it records nothing.
+    // Never mutates output.
     'tool.execute.after': async (input, output) => {
       if (input?.tool !== 'task') return;
+      const metadata = output?.metadata ?? {};
+      if (metadata.background === true) return;
       const text = String(output?.output ?? '').slice(-4096);
       await bounded(runPython(root, 'opencode', 'observe_agent.py', [], {
         hook_event_name: 'SubagentStop', tool_name: 'task', session_id: input.sessionID, call_id: input.callID,
-        agent: output?.metadata?.agent ?? output?.metadata?.subagent_type ?? null,
+        agent: typeof input?.args?.subagent_type === 'string' ? input.args.subagent_type : null,
+        agent_id: typeof metadata.sessionId === 'string' ? metadata.sessionId : null,
+        child_model: modelName(metadata.model),
         result_text: text, outcome_source: 'tool-output', reason: 'opencode-tool-output',
       }), 3000);
     },

@@ -14,12 +14,48 @@ def _path(harness, session):
     return Path(_data_root()) / "sessions" / (key + ".json")
 
 
+# One file per session, read back for a day at most (parent_model's expiry).
+# Two days of history and a few hundred files bound the directory forever.
+SESSION_MAX_AGE = 2 * 86400
+SESSION_MAX_FILES = 256
+_SESSION_FILE_RE = re.compile(r"[0-9a-f]{64}\.json")
+_STALE_TMP_RE = re.compile(r"tmp\w+\.tmp")
+
+
+def prune_sessions(directory, now=None):
+    """Delete observations past SESSION_MAX_AGE, then all but the newest SESSION_MAX_FILES."""
+    now = time.time() if now is None else now
+    observations = []
+    try:
+        entries = list(os.scandir(directory))
+    except OSError:
+        return
+    for entry in entries:
+        try:
+            mtime = entry.stat().st_mtime
+        except OSError:
+            continue
+        if _SESSION_FILE_RE.fullmatch(entry.name):
+            observations.append((mtime, entry.path))
+        elif _STALE_TMP_RE.fullmatch(entry.name) and now - mtime > SESSION_MAX_AGE:
+            observations.append((mtime, entry.path))  # left by an interrupted write
+    observations.sort(reverse=True)
+    for index, (mtime, path) in enumerate(observations):
+        if index >= SESSION_MAX_FILES or now - mtime > SESSION_MAX_AGE:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+
 def remember(event, harness):
     session = event.get("session_id") or event.get("sessionId")
     model = event.get("to_model") or event.get("model")
     if not isinstance(session, str) or not isinstance(model, str) or not model:
         return
-    atomic_write(str(_path(harness, session)), {"model": model, "observed_at": time.time()})
+    target = _path(harness, session)
+    atomic_write(str(target), {"model": model, "observed_at": time.time()})
+    prune_sessions(str(target.parent))
 
 
 def transcript_model(path):
@@ -95,29 +131,77 @@ def transcript_tail_text(path, limit=4096):
     return ""
 
 
-USAGE_READ_LIMIT = 16 * 1024 * 1024
+HANDBACK_READ_LIMIT = 256 * 1024
+HANDBACK_TOOL = "SubagentHandback"
 
 
-def transcript_usage(path):
-    """(usage, complete) summed over a child's transcript; (None, False) when unreadable.
+def transcript_handback_text(path, limit=4096):
+    """The report a Claude child delivered through its hand-back tool, clamped, or "".
 
-    Claude repeats one API call's usage across the records of a split turn, so
-    records are deduplicated by message id. Codex reports cumulative totals in
-    token_count events, so the last total wins there rather than a sum. A file
-    over USAGE_READ_LIMIT is not read: (None, False) says so.
+    A child that reports through that tool stops with closing text, if any, as
+    its last message; the report is the tool call's `message` input. Reads at
+    most HANDBACK_READ_LIMIT from the end; returns in memory only.
     """
-    import outcome
     if not isinstance(path, str) or not path:
-        return None, False
+        return ""
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, handle.tell() - HANDBACK_READ_LIMIT))
+            lines = handle.read().splitlines()
+    except OSError:
+        return ""
+    for line in reversed(lines):
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        message = entry.get("message") if isinstance(entry, dict) and entry.get("type") == "assistant" else None
+        content = message.get("content") if isinstance(message, dict) else None
+        for part in reversed(content if isinstance(content, list) else []):
+            if not (isinstance(part, dict) and part.get("type") == "tool_use" and part.get("name") == HANDBACK_TOOL):
+                continue
+            report = part["input"].get("message") if isinstance(part.get("input"), dict) else None
+            if isinstance(report, str) and report.strip():
+                return report[-limit:]
+    return ""
+
+
+USAGE_READ_LIMIT = 16 * 1024 * 1024
+_CLAUDE_USAGE = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens")
+_CODEX_USAGE = ("input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens")
+_FIELDS = ("input", "cache_read", "cache_write", "output")
+
+
+def _count(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+
+
+def transcript_stats(path):
+    """{"usage", "complete", "turns"} for one child transcript; usage None when unreadable.
+
+    The accounting is usage_scan's, so the dispatch report and the usage scan
+    agree about the same child. Claude writes streaming snapshots of one
+    request under one requestId (message id when absent), and each category
+    keeps its largest snapshot. Codex token_count totals are cumulative and
+    its input includes cached input, so deltas are summed with the cached part
+    moved out of input. A turn is one model request. A file over
+    USAGE_READ_LIMIT is not read; a delta that cannot be established marks the
+    usage incomplete.
+    """
+    stats = {"usage": None, "complete": False, "turns": None}
+    if not isinstance(path, str) or not path:
+        return stats
     try:
         if os.path.getsize(path) > USAGE_READ_LIMIT:
-            return None, False
+            return stats
         with open(path, "rb") as handle:
             lines = handle.read().splitlines()
     except OSError:
-        return None, False
-    total, seen, codex_total = None, set(), None
-    for line in lines:
+        return stats
+    claude, codex = {}, []
+    previous, complete = None, True
+    for index, line in enumerate(lines):
         try:
             entry = json.loads(line)
         except ValueError:
@@ -125,20 +209,44 @@ def transcript_usage(path):
         if not isinstance(entry, dict):
             continue
         message = entry.get("message") if entry.get("type") == "assistant" else None
-        if isinstance(message, dict) and isinstance(message.get("usage"), dict):
-            key = message.get("id") or id(message)
-            if key in seen:
-                continue
-            seen.add(key)
-            total = outcome.add_usage(total, outcome.usage_from(message["usage"]))
+        if isinstance(message, dict) and isinstance(message.get("usage"), dict) and message["usage"]:
+            key = entry.get("requestId") or message.get("id") or index
+            values = tuple(_count(message["usage"].get(k)) for k in _CLAUDE_USAGE)
+            prior = claude.get(key)
+            claude[key] = tuple(max(a, b) for a, b in zip(prior, values)) if prior else values
             continue
         payload = entry.get("payload") if isinstance(entry.get("payload"), dict) else None
-        if payload and payload.get("type") == "token_count":
-            info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
-            usage = outcome.usage_from(info.get("total_token_usage") or payload.get("total_token_usage"))
-            if usage:
-                codex_total = usage
-    return (codex_total or total), True
+        if not payload or payload.get("type") != "token_count":
+            continue
+        info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
+        total = info.get("total_token_usage") or payload.get("total_token_usage")
+        last = info.get("last_token_usage")
+        if not isinstance(total, dict):
+            continue  # a rate-limit-only event; there is no count to dedupe
+        current = tuple(_count(total.get(k)) for k in _CODEX_USAGE)
+        if current == previous:
+            continue
+        if previous is not None and all(a >= b for a, b in zip(current, previous)):
+            delta = tuple(a - b for a, b in zip(current, previous))
+        elif isinstance(last, dict):
+            delta = tuple(_count(last.get(k)) for k in _CODEX_USAGE)
+        else:
+            previous, complete = current, False
+            continue
+        previous = current
+        if any(delta):
+            inp, read, write, out = delta
+            codex.append((max(0, inp - read - write), read, write, out))
+    requests = codex or list(claude.values())
+    if not requests:
+        stats["complete"] = complete
+        return stats
+    usage = dict(zip(_FIELDS, (sum(column) for column in zip(*requests))))
+    for key in ("cache_read", "cache_write"):
+        if not usage[key]:
+            del usage[key]
+    stats.update(usage=usage, complete=complete, turns=len(requests))
+    return stats
 
 
 _AGENT_ID_RE = re.compile(r"[A-Za-z0-9_-]+")
