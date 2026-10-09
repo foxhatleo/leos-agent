@@ -278,8 +278,12 @@ retries old findings against a new head. Replacing a pending review requires
 an unchanged ownership receipt and saves recovery data. New comments/replies
 remain pending. Only verified addressed threads rooted by the authenticated
 user can be auto-resolved; resolution is public and requires SHA-bound evidence.
+Every changed non-generated file is read before staging. Neutral always comes
+with a pending comment; CI never affects the verdict. A ready-to-merge verdict
+stands until the PR diff changes, so a merge from the base keeps it.
 Watchers use cross-process leases, bounded retries, and completion reports;
-emission alone never records a PR as reviewed.
+emission alone never records a PR as reviewed. A head waiting on the user's
+decision is parked without spending retries.
 
 Logs omit prompt text by default and rotate at 1 MiB plus one retained file.
 `LEOS_AGENT_DISPATCH_LOG_PROMPTS=1` is an explicit debug option that retains

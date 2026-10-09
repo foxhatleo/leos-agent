@@ -239,6 +239,10 @@ these contracts when changing it or `scripts/ghreview.py`:
   here, but do not ban explicitly authorized submission globally.
 - Replace only unchanged owned drafts after the new review is ready. Preserve
   manual edits, ownership receipts, and recovery data. Head drift means re-review.
+  Receipts hash only what GitHub returns for a PENDING review (path, body,
+  reply target); its line/side fields are null, so anchors never belong in
+  ownership. Pre-scheme-2 receipts are refused as `legacy_receipt` and need a
+  one-time user-approved `--force`.
 - Unaddressable findings go in the pending body, never a public comment.
   `carried` is delivered; `omitted` is not. Inspect `complete`, not just exit code.
 - Resolve only verified fixes to the authenticated user's root threads, with
@@ -246,6 +250,13 @@ these contracts when changing it or `scripts/ghreview.py`:
 - Watcher emission/staging is not completion. Require coverage and successful
   intended actions at that SHA; retain leases, bounded retries, and failure
   reports. Partial coverage blocks readiness, not a verified blocking verdict.
+  A decision only Leo can make parks the head (`block`) instead of burning
+  retries. The first tick emits without settling.
+- Verdicts: neutral needs a staged comment or note; CI is informational only;
+  the only caps are unverified behaviour and an unread ticket. A recorded
+  ready-to-merge stands until the PR diff (hunk headers ignored) changes;
+  downgrading it needs an explicit `verdict_override`. Stage and `record` both
+  enforce this. Reports give each PR its own `##` section.
 
 ## Security and untrusted input
 

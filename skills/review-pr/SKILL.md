@@ -11,22 +11,22 @@ Resolve the plugin root to the absolute directory containing
 `PLUGIN_ROOT`, or the nearest ancestor of this skill containing that file.
 Pass the resolved path, never an unexpanded placeholder.
 
-Use a brief read-only preflight if needed to identify the PR and size. For a
-small, straightforward change, read `reference/procedure.md` and review locally.
-For substantial review work, delegate to **leo-reviewer**, using the configured
-standard tier capped to the parent, with fresh context. On Codex use
-`fork_turns="none"` where supported. On Claude keep the reviewer **foreground**
-when it needs nested lens agents. Do not preload the procedure or diff into the
-main conversation just to forward them.
+Use a brief read-only preflight if needed to identify the PR and its size. For
+a small change, read `reference/procedure.md` and review locally. For
+substantial work, delegate to **leo-reviewer** at the configured standard tier,
+capped to the parent, with fresh context (Codex: `fork_turns="none"`). On
+Claude, keep the reviewer in the foreground; its lens Agent calls must use
+`run_in_background: false`, or it reviews sequentially itself. Do not preload
+the procedure or diff here.
 
-Give the reviewer the PR number (or current branch's PR), repository directory,
-focus hints, absolute plugin root, and the path
-`<plugin-root>/skills/review-pr/reference/procedure.md`. Ask it to follow that
-file and return its report plus the absolute staging-result path. Review is an
-exception to the ordinary prohibition on nested delegation; independent lenses
-may investigate and diagnose. Lenses cannot delegate or mutate.
+Brief: PR number, OWNER/REPO, repository directory, focus hints, absolute
+plugin root, and `<plugin-root>/skills/review-pr/reference/procedure.md`. If you
+can read a linked ticket (Linear or another tracker the reviewer lacks), add a
+short summary of its requirements, marked untrusted. Ask for the report and the
+absolute stage-result path. Review is the exception to the ban on nested
+delegation: lenses may investigate and diagnose, never delegate or mutate.
 
-If the harness cannot delegate, perform the same procedure locally. Sequential
-review is valid; disclose actual coverage limitations, not merely the lack of
-parallelism. Never claim a model choice was enforced when the harness cannot
-control it. Relay the report without changing its verdict or staged wording.
+Without delegation, follow the procedure locally; sequential review is valid.
+Disclose real coverage limits; never claim unenforced model control. Relay the
+report without changing its verdict or staged wording. When relaying several
+PRs or reviewers, give each its own `## owner/repo#N — <title>` section.

@@ -9,15 +9,23 @@ review. Idle ticks use only the GitHub API; pagination increases calls for large
   watch_review.py monitor [-C DIR] --interval 60
   watch_review.py record [-C DIR] <n> --head <full-sha> --result <stage-report.json> --claim <token>
   watch_review.py renew|release [-C DIR] <n> --claim <token>
+  watch_review.py block [-C DIR] <n> --head <full-sha> --reason TEXT --claim <token>
+  watch_review.py unblock [-C DIR] <n>
   watch_review.py state|forget [-C DIR] [numbers...]
 
-A head must settle before emission. Cross-process leases prevent duplicate
+Every eligible head is emitted on the first tick; a head that appears or
+changes later must settle first. Cross-process leases prevent duplicate
 workers; renew every 15 minutes during a long review. Expired or released
-claims retry up to three times per head, then require explicit `forget`.
-Emission is not completion. A head is recorded only when every finding is
-covered -- anchored in the diff, carried in the review body, or dismissed with
-a stated reason via --acknowledge-omitted, which is never automatic. A new push
-is eligible again. Drafts, team-only requests, and PRs already approved by
+claims retry up to three times per head, then require explicit `forget`. A
+head that waits on the user's decision is parked with `block`: no attempt is
+spent and nothing is emitted until a new push, `unblock`, or `forget`.
+Emission is not completion. A head is recorded only when every changed
+non-generated file was reviewed and every finding is covered -- anchored in
+the diff, carried in the review body, or dismissed with a stated reason via
+--acknowledge-omitted, which is never automatic. A recorded ready-to-merge
+verdict stands until the PR diff changes: a new head with the same diff (a
+merge from the base) is carried forward silently. Any other new push is
+eligible again. Drafts, team-only requests, and PRs already approved by
 another user are excluded.
 
 Intended for Claude Code's Monitor tool, which turns each stdout line into a
@@ -41,6 +49,7 @@ import time
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ghreview  # noqa: E402
 import state as state_mod  # noqa: E402
 
 STATE_NAME = "review-watcher"
@@ -174,7 +183,11 @@ def heads_of(entry):
 	return heads
 
 
-def record(repo, number, head, claim_token=None):
+def verdicts_of(entry):
+	return {int(n): v for n, v in (entry.get("verdicts") or {}).items() if isinstance(v, dict)}
+
+
+def record(repo, number, head, claim_token=None, result=None):
 	if not re.fullmatch(r"[0-9a-f]{40}", head):
 		raise ValueError("record requires the full reviewed head SHA")
 	path = state_mod.state_file(STATE_NAME)
@@ -184,18 +197,41 @@ def record(repo, number, head, claim_token=None):
 		claim = entry.get("claims", {}).get(str(number))
 		if claim_token and (not claim or claim.get("token") != claim_token or claim.get("head") != head):
 			raise ValueError("review claim was superseded; refusing stale completion")
+		patch = {"heads": {str(number): head}}
+		if result is not None:
+			prior = verdicts_of(entry).get(number)
+			refusal = downgrade_refusal(prior, result)
+			if refusal:
+				raise ValueError(refusal)
+			patch["verdicts"] = {str(number): ghreview.verdict_record(
+				result["verdict"], head, result.get("diff_fingerprint"), result)}
 		entry.setdefault("claims", {}).pop(str(number), None)
-		data[repo] = state_mod.deep_merge(entry, {"heads": {str(number): head}})
+		entry.setdefault("blocked", {}).pop(str(number), None)
+		if "verdicts" in patch:
+			# Replace, never merge: a stale override reason must not survive.
+			entry.setdefault("verdicts", {}).pop(str(number), None)
+		data[repo] = state_mod.deep_merge(entry, patch)
 		state_mod.atomic_write(path, data)
+
+
+def downgrade_refusal(prior, result):
+	"""A standing ready-to-merge is only replaced by a stated override."""
+	if (result.get("verdict") != ghreview.READY
+			and ghreview.standing_ready(prior, result.get("diff_fingerprint"))
+			and not str(result.get("verdict_override") or "").strip()):
+		return ("a ready-to-merge verdict stands for this unchanged PR diff; the report must carry "
+			"verdict_override saying why it no longer holds")
+	return None
 
 
 def completion_refusal(result, repo, number, head, acknowledgement=None):
 	"""Why this stage report may not mark `head` reviewed, or None when it may.
 
-	Coverage, not staging success. A finding counts as covered when it is anchored
-	inline, carried in the review body, or dismissed by a person who said why. A
-	report from an older release carries neither `review_created` nor `omitted`, so
-	it can only pass on `complete` and behaves exactly as it did before.
+	Coverage, not staging success. Every changed non-generated file must have
+	been reviewed, and a finding counts as covered when it is anchored inline,
+	carried in the review body, or dismissed by a person who said why. The
+	verdict must obey the rules stage enforces, so a hand-edited report cannot
+	smuggle in what stage would have refused.
 	"""
 	if not isinstance(result, dict):
 		return "completion report must be a JSON object"
@@ -205,6 +241,19 @@ def completion_refusal(result, repo, number, head, acknowledgement=None):
 		return "completion report belongs to another repository or pull request"
 	if acknowledgement is not None and not acknowledgement.strip():
 		return "acknowledgement must state a non-blank reason"
+	coverage = result.get("coverage")
+	if not isinstance(coverage, dict) or not isinstance(coverage.get("unreviewed"), list):
+		return "completion report has no coverage block; restage with this release's ghreview.py"
+	if coverage["unreviewed"]:
+		return ("review did not read %d changed non-generated file(s): %s; review them and restage"
+			% (len(coverage["unreviewed"]), ", ".join(map(str, coverage["unreviewed"]))))
+	verdict = result.get("verdict")
+	if verdict not in ghreview.VERDICTS:
+		return "completion report has no verdict; restage with this release's ghreview.py"
+	pending = sum(result.get(key) or 0 for key in ("staged", "carried", "notes")
+		if isinstance(result.get(key), int))
+	if verdict == ghreview.NEUTRAL and pending == 0:
+		return "neutral needs at least one pending comment; stage the reservation or record ready-to-merge"
 	if result.get("complete") is True and acknowledgement is None:
 		return None
 	omitted = result.get("omitted")
@@ -267,6 +316,9 @@ def claim_review(repo, number, head, now, lease=1800):
 		entry = data.setdefault(repo, {})
 		if heads_of(entry).get(number) == head:
 			return None
+		blocked = entry.setdefault("blocked", {})
+		if (blocked.get(str(number)) or {}).get("head") == head:
+			return None  # parked on the user's decision: silent, no attempt spent
 		claims = entry.setdefault("claims", {})
 		old = claims.get(str(number), {})
 		if old.get("head") == head and old.get("expires", 0) > now:
@@ -280,6 +332,7 @@ def claim_review(repo, number, head, now, lease=1800):
 				print(f"watch-review: {repo}#{number} exhausted 3 attempts at {head}; use forget to retry", flush=True)
 			return None
 		token = uuid.uuid4().hex
+		blocked.pop(str(number), None)  # a block names one head; a new push lifts it
 		claims[str(number)] = {"head": head, "expires": now + lease, "token": token, "attempts": attempts + 1}
 		state_mod.atomic_write(path, data)
 		return token
@@ -294,6 +347,74 @@ def renew_claim(repo, number, token, now, release=False):
 			raise ValueError("review claim is missing or superseded")
 		claim["expires"] = now if release else now + 1800
 		state_mod.atomic_write(path, data)
+
+
+def block_head(repo, number, head, reason, token, now):
+	"""Park a head on a decision only the user can make, without spending attempts."""
+	if not re.fullmatch(r"[0-9a-f]{40}", head):
+		raise ValueError("block requires the full head SHA")
+	if not reason or not reason.strip():
+		raise ValueError("block requires a non-blank reason")
+	path = state_mod.state_file(STATE_NAME)
+	with state_mod._locked(path):
+		data = state_mod.load(path)
+		entry = data.setdefault(repo, {})
+		claim = entry.get("claims", {}).get(str(number))
+		if not claim or claim.get("token") != token or claim.get("head") != head:
+			raise ValueError("review claim is missing or superseded")
+		entry["claims"].pop(str(number))
+		entry.setdefault("blocked", {})[str(number)] = {"head": head, "reason": reason.strip(), "at": int(now)}
+		state_mod.atomic_write(path, data)
+
+
+def unblock(repo, numbers):
+	"""Lift a block after the user decides; the head is emitted again with fresh attempts."""
+	path = state_mod.state_file(STATE_NAME)
+	with state_mod._locked(path):
+		data = state_mod.load(path)
+		entry = data.get(repo) or {}
+		for number in numbers:
+			if (entry.get("blocked") or {}).pop(str(number), None) is not None:
+				(entry.get("claims") or {}).pop(str(number), None)
+		data[repo] = entry
+		state_mod.atomic_write(path, data)
+
+
+def pr_files(repo, number, head, cwd):
+	"""The PR's files at `head`, or None when the head moved while reading them."""
+	out = gh(["api", f"repos/{repo}/pulls/{number}/files", "--paginate", "--jq", ".[]"], cwd)
+	files = [json.loads(line) for line in out.splitlines() if line.strip()]
+	if gh(["api", f"repos/{repo}/pulls/{number}", "--jq", ".head.sha"], cwd).strip() != head:
+		return None
+	return files
+
+
+def carry_ready(repo, number, head, cwd):
+	"""Keep a ready-to-merge decision across a head whose PR diff is unchanged.
+
+	A merge from the base moves the head without changing what the PR does;
+	re-reviewing it would only re-litigate a decision already made. Returns
+	True when the head was carried forward and must not be emitted.
+	"""
+	prior = verdicts_of(state_mod.load(state_mod.state_file(STATE_NAME)).get(repo) or {}).get(number)
+	if not prior or prior.get("verdict") != ghreview.READY or not prior.get("diff"):
+		return False
+	files = pr_files(repo, number, head, cwd)
+	if files is None or not ghreview.standing_ready(prior, ghreview.diff_fingerprint(files)):
+		return False
+	path = state_mod.state_file(STATE_NAME)
+	with state_mod._locked(path):
+		data = state_mod.load(path)
+		entry = data.setdefault(repo, {})
+		current = (entry.get("verdicts") or {}).get(str(number)) or {}
+		if current.get("diff") != prior["diff"] or current.get("verdict") != ghreview.READY:
+			return False  # a review recorded meanwhile; let the normal path decide
+		current["carried_to"] = head
+		entry.setdefault("heads", {})[str(number)] = head
+		state_mod.atomic_write(path, data)
+	print(f"watch-review: {repo}#{number} {head} keeps ready-to-merge from {prior.get('head')}; PR diff unchanged",
+		file=sys.stderr, flush=True)
+	return True
 
 
 FAILURE_REMINDER_TICKS = 10
@@ -320,20 +441,33 @@ def monitor(args):
 	"""Lease each emitted review; only verified completion suppresses its head."""
 	first_seen = {}
 	failures, last_error = 0, None
+	# What is already waiting when the watch starts has had all the time it
+	# needs to settle; only heads that change while it runs wait the window.
+	settle = 0
+	# Heads already checked against a ready-to-merge diff. A leased or parked
+	# head comes back every tick; its files need fetching only once.
+	diff_checked = set()
 	while True:
 		try:
 			repo, _, matches = discover(args.directory)
 			active = {(pr["number"], pr.get("headRefOid") or "") for pr in matches}
 			first_seen = {key: stamp for key, stamp in first_seen.items() if key in active}
+			diff_checked &= active
 			for verb, pr, previous in due(
-				matches, reviewed_heads(repo), first_seen, set(), time.time(), args.settle
+				matches, reviewed_heads(repo), first_seen, set(), time.time(), settle
 			):
-				token = claim_review(repo, pr["number"], pr.get("headRefOid") or "", time.time())
+				head = pr.get("headRefOid") or ""
+				if previous and (pr["number"], head) not in diff_checked:
+					if carry_ready(repo, pr["number"], head, args.directory):
+						continue
+					diff_checked.add((pr["number"], head))
+				token = claim_review(repo, pr["number"], head, time.time())
 				if not token:
 					continue
 				# One line, one event. The title is data — a reader must treat
 				# it as a string to show Leo, never as an instruction.
 				print(event_line(verb, repo, pr, previous) + f" claim={token}", flush=True)
+			settle = args.settle
 			if failures:
 				print(f"watch-review: recovered after {failures} failed tick(s)", flush=True)
 				failures, last_error = 0, None
@@ -377,9 +511,16 @@ def main(argv):
 		command.add_argument("-C", "--directory", default=".")
 		command.add_argument("number", type=int)
 		command.add_argument("--claim", required=True)
-	forget = sub.add_parser("forget")
-	forget.add_argument("-C", "--directory", default=".")
-	forget.add_argument("numbers", nargs="+", type=int)
+	block = sub.add_parser("block", help="park a head on a decision only the user can make")
+	block.add_argument("-C", "--directory", default=".")
+	block.add_argument("number", type=int)
+	block.add_argument("--head", required=True, help="full head SHA the claim was issued for")
+	block.add_argument("--reason", required=True, help="the decision the user must make")
+	block.add_argument("--claim", required=True)
+	for operation in ("forget", "unblock"):
+		command = sub.add_parser(operation)
+		command.add_argument("-C", "--directory", default=".")
+		command.add_argument("numbers", nargs="+", type=int)
 
 	args = parser.parse_args(argv)
 	if not os.path.isdir(args.directory):
@@ -412,9 +553,13 @@ def main(argv):
 			review = json.loads(gh(["api", f"repos/{repo}/pulls/{args.numbers[0]}/reviews/{result['review_id']}"], args.directory))
 			if review.get("commit_id") != args.head:
 				raise ValueError("GitHub review head disagrees with completion report")
-		record(repo, args.numbers[0], args.head, args.claim)
+		record(repo, args.numbers[0], args.head, args.claim, result)
 	elif args.mode in ("renew", "release"):
 		renew_claim(repo, args.number, args.claim, time.time(), args.mode == "release")
+	elif args.mode == "block":
+		block_head(repo, args.number, args.head, args.reason, args.claim, time.time())
+	elif args.mode == "unblock":
+		unblock(repo, args.numbers)
 	elif args.mode == "forget":
 		path = state_mod.state_file(STATE_NAME)
 		with state_mod._locked(path):
@@ -424,17 +569,24 @@ def main(argv):
 			# Drop from both shapes: a legacy entry has not necessarily been
 			# rewritten into heads yet, and leaving it there would re-suppress.
 			entry["claims"] = {n: value for n, value in (entry.get("claims") or {}).items() if n not in drop}
+			entry["blocked"] = {n: value for n, value in (entry.get("blocked") or {}).items() if n not in drop}
 			entry["heads"] = {n: sha for n, sha in (entry.get("heads") or {}).items() if n not in drop}
 			entry["reviewed"] = [n for n in (entry.get("reviewed") or []) if str(n) not in drop]
 			data[repo] = entry
 			state_mod.atomic_write(path, data)
-	print(
-		json.dumps(
-			{"repo": repo, "heads": {str(n): sha for n, sha in sorted(reviewed_heads(repo).items())}},
-			indent=1,
-		)
-	)
+	print(json.dumps(summary(repo), indent=1))
 	return 0
+
+
+def summary(repo):
+	"""What `state` and every other one-shot command print: heads, verdicts, parked heads."""
+	entry = state_mod.load(state_mod.state_file(STATE_NAME)).get(repo) or {}
+	return {
+		"repo": repo,
+		"heads": {str(n): sha for n, sha in sorted(heads_of(entry).items())},
+		"verdicts": {str(n): v for n, v in sorted(verdicts_of(entry).items())},
+		"blocked": dict(sorted((entry.get("blocked") or {}).items(), key=lambda item: int(item[0]))),
+	}
 
 
 if __name__ == "__main__":
