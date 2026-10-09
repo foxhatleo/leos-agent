@@ -4,6 +4,12 @@
 Subcommands:
   map            -R OWNER/REPO -n PR              JSON: per-file addressable-line ranges + flags
   extract        -R OWNER/REPO -n PR [PATH ...]   unified patches for the given files (all if none)
+  show           -R OWNER/REPO -n PR --commit SHA PATH [--lines A:B]
+                                                  a file (numbered) or directory at SHA, read
+                                                  from GitHub; never from a local checkout
+  delta          -R OWNER/REPO -n PR --commit SHA --since OLD
+                                                  which changed files need re-reading after a
+                                                  complete review recorded at OLD
   pending        -R OWNER/REPO -n PR              current user's PENDING review {id, node_id}, if any
   clear-pending  -R OWNER/REPO -n PR              DELETE the current user's PENDING review, if any
   threads        -R OWNER/REPO -n PR [--all]      JSON: unresolved review threads rooted by the
@@ -14,19 +20,27 @@ Subcommands:
   reply          -R OWNER/REPO -n PR --thread-id PRRT_… --body-file FILE [--dry-run]
                                                   STAGE a reply into the current user's pending
                                                   review (created as an empty shell if absent)
-  stage          -R OWNER/REPO -n PR --commit SHA --input FILE [--replace-pending] [--dry-run]
+  stage          -R OWNER/REPO -n PR --commit SHA --input FILE [--replace-pending]
+                 [--since OLD] [--dry-run]
                  validate comments against the diff, then create ONE pending review
                  (payload deliberately has NO "event" field -> review stays PENDING)
   verdict        -R OWNER/REPO -n PR --commit SHA
                  the recorded verdict for this PR and whether it still stands
 
+-R is canonicalised once to GitHub's full_name, so receipts and verdicts do not
+depend on how the repository was spelled.
+
 stage --input file: {"verdict": "ready-to-merge"|"neutral"|"seriously-problematic",
                      "reviewed": [changed paths actually read],
                      "comments": [{"path", "line", "side", "body",
-                                   "start_line"?, "start_side"?}, ...],
+                                   "start_line"?, "start_side"?, "confidence"?}, ...],
                      "notes": ["review-level reservation", ...]?,
                      "verdict_override": "why a standing ready-to-merge no longer holds"?}
 line = absolute line number in the new file for side RIGHT (old file for LEFT).
+A multi-line range must lie inside one hunk; otherwise it is staged as a
+single-line comment on `line` and listed under `narrowed`. A comment whose
+`confidence` (0-100) is below MIN_CONFIDENCE is not staged; it is listed
+under `filtered`, which is a decision, not an omission.
 A line that is not addressable in the diff cannot be an inline comment — one
 bad line would 422 the entire review — so that finding is CARRIED in the
 review body instead, with its path, line and the reason it could not anchor.
@@ -36,17 +50,28 @@ renderable in it (a non-object, or no path or no text) is `omitted`.
 `complete` means every finding reached the author: staged inline or carried.
 `coverage` lists changed files the input did not declare reviewed.
 
-Verdict rules are enforced before anything is mutated: neutral needs at least
-one pending comment or note; ready-to-merge needs every changed non-generated
-file reviewed; a recorded ready-to-merge stands while the PR diff is unchanged
-and is only replaced with an explicit verdict_override.
+Verdict rules are enforced before anything is mutated: neutral and
+seriously-problematic need at least one pending comment or note; ready-to-merge
+needs every changed non-generated file reviewed; a recorded ready-to-merge
+stands while the PR diff is unchanged and is only replaced with an explicit
+verdict_override that is not template text. With --since, files whose patch is
+unchanged since the complete review recorded at OLD count as covered (listed
+under coverage.carried); every other changed file must be read again.
 
-Exit codes: 0 success; 1 API failure after retry; 2 usage/input error;
+Generated files are lockfiles and known generated suffixes, plus whatever the
+base branch's root .gitattributes marks linguist-generated (=false un-marks).
+The base, not the head, is read so a PR cannot exempt its own files.
+
+Read-only GETs are retried once on a transient failure (5xx, 429, timeout,
+connection reset). Mutations are never retried.
+
+Exit codes: 0 success; 1 API failure; 2 usage/input error;
 3 refused — a pending review being cleared (clear-pending, or stage
 --replace-pending) contains comments not staged by this script; pass --force
 to discard them anyway.
 """
 import argparse
+import base64
 import json
 import re
 import subprocess
@@ -54,19 +79,41 @@ import hashlib
 import time
 import os
 from pathlib import Path
+from urllib.parse import parse_qs, quote, urlsplit
 
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+# Only names that are generated by construction. Directory names such as
+# build/, dist/ or vendor/ hold hand-written code often enough (build scripts,
+# patched vendored libraries) that exempting them from coverage would let real
+# changes go unread; a repository that does generate into them says so with
+# linguist-generated in .gitattributes, which is honoured below.
 GENERATED_PATTERNS = [
-    r"(^|/)package-lock\.json$", r"(^|/)yarn\.lock$", r"(^|/)pnpm-lock\.yaml$",
-    r"(^|/)Cargo\.lock$", r"(^|/)Gemfile\.lock$", r"(^|/)poetry\.lock$",
-    r"(^|/)uv\.lock$", r"(^|/)go\.sum$", r"(^|/)composer\.lock$",
-    r"\.min\.(js|css)$", r"\.(map|snap)$", r"\.pb\.(go|py|rb|java)$", r"_pb2\.py$",
-    r"(^|/)(dist|build|vendor|node_modules|__snapshots__)/", r"\.generated\.",
+    r"(^|/)package-lock\.json$", r"(^|/)npm-shrinkwrap\.json$", r"(^|/)yarn\.lock$",
+    r"(^|/)pnpm-lock\.yaml$", r"(^|/)bun\.lockb?$", r"(^|/)Cargo\.lock$",
+    r"(^|/)Gemfile\.lock$", r"(^|/)poetry\.lock$", r"(^|/)Pipfile\.lock$",
+    r"(^|/)uv\.lock$", r"(^|/)go\.sum$", r"(^|/)composer\.lock$", r"(^|/)flake\.lock$",
+    r"(^|/)Podfile\.lock$", r"(^|/)pubspec\.lock$", r"(^|/)mix\.lock$",
+    r"\.min\.(js|css)$", r"\.(js|mjs|cjs|css)\.map$",
+    r"\.pb\.(go|cc|h)$", r"_pb2(_grpc)?\.pyi?$", r"\.generated\.",
 ]
 HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+GH_TIMEOUT = 30
+# A paginated call is one gh process for every page; a 3000-file PR is 30
+# pages at per_page=100, which does not fit the single-request timeout.
+GH_PAGINATED_TIMEOUT = 180
+RETRY_DELAY = 2.0
+TRANSIENT_ERROR = re.compile(
+    r"HTTP (5\d\d|429)|timed? ?out|connection (reset|refused)|unexpected EOF|TLS handshake"
+    r"|temporarily unavailable|bad gateway|service unavailable",
+    re.IGNORECASE)
+
+# The lens confidence the procedure asks for; a staged comment that declares a
+# lower one is filtered rather than posted.
+MIN_CONFIDENCE = 80
 SNAP_TOLERANCE = 3  # lines outside a hunk boundary still snapped into it
 SNAP_MAX_DISTANCE = 10  # beyond this from the requested line, drop instead of snapping
 
@@ -91,28 +138,154 @@ def _mark(body):
     return body if MARKER in body else f"{body}\n\n{MARKER}"
 
 
-def gh(args, payload=None):
-    """Run gh, return stdout. Raises CalledProcessError with stderr attached."""
-    proc = subprocess.run(
-        ["gh"] + args,
-        input=payload,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    if proc.returncode != 0:
-        raise subprocess.CalledProcessError(proc.returncode, proc.args, proc.stdout, proc.stderr)
-    return proc.stdout
+def idempotent(args):
+    """A REST GET: gh api with no method override, no body and no fields."""
+    if not args or args[0] != "api" or (len(args) > 1 and args[1] == "graphql"):
+        return False
+    return not any(a in ("--method", "-X", "--input", "-f", "-F", "--field", "--raw-field") for a in args)
+
+
+def gh(args, payload=None, timeout=None, retry=None, binary=False):
+    """Run gh, return stdout. Raises CalledProcessError with stderr attached.
+
+    A read-only call (a REST GET, or a GraphQL query whose caller says so) is
+    retried once after a transient failure. A mutation never is: its outcome is
+    uncertain, and repeating it could stage a second review.
+    """
+    if timeout is None:
+        timeout = GH_PAGINATED_TIMEOUT if "--paginate" in args else GH_TIMEOUT
+    attempts = 2 if (idempotent(args) if retry is None else retry) else 1
+    for attempt in range(attempts):
+        last = attempt + 1 == attempts
+        try:
+            proc = subprocess.run(["gh"] + args, input=payload, capture_output=True,
+                                  text=not binary, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            if last:
+                raise
+            time.sleep(RETRY_DELAY)
+            continue
+        if proc.returncode == 0:
+            return proc.stdout
+        stderr = proc.stderr.decode("utf-8", "replace") if binary else proc.stderr
+        if not last and TRANSIENT_ERROR.search(stderr or ""):
+            time.sleep(RETRY_DELAY)
+            continue
+        raise subprocess.CalledProcessError(proc.returncode, proc.args, proc.stdout, stderr)
+
+
+def ndjson(out):
+    """Objects from gh --jq '.[]' output, one per line.
+
+    Split on newline only: a JSON string may legally hold U+2028, U+2029 or
+    U+0085 unescaped, and str.splitlines() would cut an object in two there.
+    """
+    return [json.loads(line) for line in out.split("\n") if line.strip()]
 
 
 def fetch_files(repo, pr):
     """List PR files as dicts. --paginate + --jq '.[]' yields NDJSON."""
-    out = gh(["api", f"repos/{repo}/pulls/{pr}/files", "--paginate", "--jq", ".[]"])
-    return [json.loads(line) for line in out.splitlines() if line.strip()]
+    out = gh(["api", f"repos/{repo}/pulls/{pr}/files?per_page=100", "--paginate", "--jq", ".[]"])
+    return ndjson(out)
 
 
-def is_generated(path):
+def is_generated(path, rules=None):
+    """Generated by the repository's own attributes first, then by name."""
+    marked = linguist_generated(path, rules or [])
+    if marked is not None:
+        return marked
     return any(re.search(p, path) for p in GENERATED_PATTERNS)
+
+
+def _glob_regex(pattern):
+    """A gitattributes pattern as (anchored, compiled regex), or None.
+
+    Same rules as .gitignore without negation: a pattern with no slash matches
+    a basename at any depth, one with a slash is anchored at the root, `**`
+    spans directories, and a trailing-slash pattern names a directory, which
+    gitattributes never applies to the files inside it.
+    """
+    if not pattern or pattern.endswith("/"):
+        return None
+    anchored = "/" in pattern
+    pattern = pattern.lstrip("/")
+    out, i = [], 0
+    while i < len(pattern):
+        if pattern.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif pattern[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif pattern[i] == "?":
+            out.append("[^/]")
+            i += 1
+        elif pattern[i] == "[" and "]" in pattern[i + 2:]:
+            end = pattern.index("]", i + 2)
+            body = pattern[i + 1:end]
+            if body.startswith("!"):
+                body = "^" + body[1:]
+            out.append("[" + body.replace("\\", "\\\\") + "]")
+            i = end + 1
+        elif pattern[i] == "\\" and i + 1 < len(pattern):
+            out.append(re.escape(pattern[i + 1]))
+            i += 2
+        else:
+            out.append(re.escape(pattern[i]))
+            i += 1
+    return anchored, re.compile("".join(out) + r"\Z")
+
+
+def attribute_rules(text):
+    """[(anchored, regex, value)] for every line that sets linguist-generated."""
+    rules = []
+    for raw in (text or "").split("\n"):
+        tokens = raw.strip().split()
+        if not tokens or tokens[0].startswith("#") or tokens[0].startswith("[attr]"):
+            continue
+        pattern = tokens[0].strip('"')
+        for token in tokens[1:]:
+            name, value = token, True
+            if token.startswith("-"):
+                name, value = token[1:], False
+            elif token.startswith("!"):
+                name, value = token[1:], None
+            elif "=" in token:
+                name, setting = token.split("=", 1)
+                value = setting.lower() not in ("false", "0", "no")
+            if name != "linguist-generated":
+                continue
+            compiled = _glob_regex(pattern)
+            if compiled:
+                rules.append((compiled[0], compiled[1], value))
+    return rules
+
+
+def linguist_generated(path, rules):
+    """True/False when an attribute line decides; None when none does. Last match wins."""
+    decided = None
+    base = path.rsplit("/", 1)[-1]
+    for anchored, regex, value in rules:
+        if regex.match(path if anchored else base):
+            decided = value
+    return decided
+
+
+def patch_lines(patch):
+    """A patch split the way git and GitHub count its lines: on newline only.
+
+    str.splitlines() also breaks on form feed, vertical tab, U+001C-U+001E,
+    U+0085, U+2028/9 and a lone carriage return, all of which git keeps inside
+    a line; that shifted every later line number by one per occurrence. A
+    trailing newline ends the last line rather than starting another.
+    """
+    lines = patch.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
 
 
 def parse_patch(patch):
@@ -130,7 +303,7 @@ def parse_patch(patch):
         if r_start is not None:
             hunks.append({"r": (r_start, new_ln - 1), "l": (l_start, old_ln - 1)})
 
-    for line in patch.splitlines():
+    for line in patch_lines(patch):
         m = HUNK_RE.match(line)
         if m:
             close_hunk()
@@ -175,8 +348,16 @@ def snap_line(diffmap, side, line):
     return line if line in diffmap.get(side.lower(), set()) else None
 
 
-def validate_comments(comments, maps):
+def same_hunk(diffmap, side, start, end):
+    """GitHub accepts a multi-line comment only when both ends lie in one hunk;
+    a range across two hunks makes it reject the entire review with a 422."""
+    key = "r" if side == "RIGHT" else "l"
+    return any(h[key][0] <= start and end <= h[key][1] for h in diffmap.get("hunks", []))
+
+
+def validate_comments(comments, maps, narrowed=None):
     staged, snapped, dropped = [], [], []
+    narrowed = [] if narrowed is None else narrowed
     for c in comments:
         if not isinstance(c, dict):
             dropped.append({"value": c, "reason": "comment must be an object"})
@@ -208,14 +389,19 @@ def validate_comments(comments, maps):
             continue
         entry = {"path": path, "line": new_line, "side": side, "body": _mark(body)}
         # Multi-line ranges: keep only if the start anchors cleanly before the
-        # end on the same side; otherwise degrade to a single-line comment.
+        # end on the same side and in the same hunk; otherwise degrade to a
+        # single-line comment on `line` and say so.
         start = c.get("start_line")
         if isinstance(start, int) and not isinstance(start, bool):
             start_side = c.get("start_side", side)
             snapped_start = snap_line(maps[path], start_side, start)
-            if snapped_start is not None and snapped_start < new_line and start_side == side:
+            if (snapped_start is not None and snapped_start < new_line and start_side == side
+                    and same_hunk(maps[path], side, snapped_start, new_line)):
                 entry["start_line"] = snapped_start
                 entry["start_side"] = start_side
+            else:
+                narrowed.append({"path": path, "start_line": start, "line": new_line, "side": side,
+                                 "reason": "range is not inside one hunk on one side; staged on line only"})
         if new_line != line:
             snapped.append({"path": path, "from": line, "to": new_line})
         staged.append(entry)
@@ -270,8 +456,11 @@ def current_login():
     return gh(["api", "user", "-q", ".login"]).strip()
 
 
-def graphql(query, variables):
-    """Run a GraphQL query/mutation via gh. Int/bool variables go through -F (typed)."""
+def graphql(query, variables, retry=False):
+    """Run a GraphQL query/mutation via gh. Int/bool variables go through -F (typed).
+
+    retry=True only for a query; a mutation's outcome after a failure is unknown.
+    """
     args = ["api", "graphql", "-f", f"query={query}"]
     for key, value in variables.items():
         # bool before int: bool is a subclass of int, so this order matters.
@@ -281,7 +470,38 @@ def graphql(query, variables):
             args += ["-F", f"{key}={value}"]
         else:
             args += ["-f", f"{key}={value}"]
-    return json.loads(gh(args))
+    return json.loads(gh(args, retry=retry))
+
+
+REPO_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+# canonical full_name -> the spelling this invocation was given, so a receipt
+# written under that spelling by an older release is still found.
+GIVEN_SPELLING = {}
+
+
+def canonical_repo(repo):
+    """GitHub's own OWNER/REPO spelling for `repo`.
+
+    Owner and repository names are case-insensitive and renamed repositories
+    redirect, so the same PR can be named many ways. Receipts and verdicts are
+    keyed by name; keyed by whatever was typed, `Foo/Bar` and `foo/bar` stopped
+    recognising each other's drafts and decisions.
+    """
+    if not isinstance(repo, str) or not REPO_RE.fullmatch(repo):
+        raise ValueError("-R must be OWNER/REPO")
+    # Lenses call `show` and `extract` many times in one review; one lookup an
+    # hour per spelling is enough, and a rename only ever adds a redirect.
+    cache = cache_path("repo", repo.lower())
+    hit = read_cache(cache, FILES_CACHE_TTL)
+    name = hit.get("full_name") if isinstance(hit, dict) else None
+    if not (isinstance(name, str) and REPO_RE.fullmatch(name) and name.lower() == repo.lower()):
+        name = gh(["api", f"repos/{repo}", "--jq", ".full_name"]).strip()
+        if not REPO_RE.fullmatch(name):
+            raise ValueError(f"GitHub returned no repository name for {repo}")
+        write_cache(cache, {"full_name": name})
+    if name != repo:
+        GIVEN_SPELLING[name] = repo
+    return name
 
 
 def pending_review(repo, pr):
@@ -290,12 +510,9 @@ def pending_review(repo, pr):
     REST node_id is the GraphQL PullRequestReview id (verified identical) —
     usable directly in mutations.
     """
-    out = gh(["api", f"repos/{repo}/pulls/{pr}/reviews", "--paginate", "--jq", ".[]"])
+    out = gh(["api", f"repos/{repo}/pulls/{pr}/reviews?per_page=100", "--paginate", "--jq", ".[]"])
     login = current_login()
-    for line in out.splitlines():
-        if not line.strip():
-            continue
-        review = json.loads(line)
+    for review in ndjson(out):
         if review.get("state") == "PENDING" and review.get("user", {}).get("login") == login:
             return review
     return None
@@ -303,14 +520,15 @@ def pending_review(repo, pr):
 
 def review_comments(repo, pr, review_id):
     """All comments on a (pending) review, oldest first."""
-    out = gh(["api", f"repos/{repo}/pulls/{pr}/reviews/{review_id}/comments",
+    out = gh(["api", f"repos/{repo}/pulls/{pr}/reviews/{review_id}/comments?per_page=100",
               "--paginate", "--jq", ".[]"])
-    return [json.loads(l) for l in out.splitlines() if l.strip()]
+    return ndjson(out)
 
 
 # A receipt is only useful while its pending review is still around to be
 # recognised. Nothing ever deleted them, so the directory grew for the life of
-# the machine; a bounded sweep on write keeps it to recent reviews.
+# the machine; a bounded sweep on write keeps it to recent reviews. A receipt
+# is touched whenever it proves ownership, so a long-lived draft keeps it.
 RECEIPT_TTL = 30 * 86400
 
 
@@ -318,6 +536,18 @@ def receipt_path(repo, pr, review_id):
     from state import _data_root
     key = hashlib.sha256(f"{repo}:{pr}:{review_id}".encode()).hexdigest()
     return Path(_data_root()) / "reviews" / (key + ".json")
+
+
+def receipt_file(repo, pr, review_id):
+    """The receipt path to read: the canonical one, else one written under the
+    spelling this invocation was given (by a release that did not canonicalise)."""
+    path = receipt_path(repo, pr, review_id)
+    given = GIVEN_SPELLING.get(repo)
+    if not path.exists() and given:
+        legacy = receipt_path(given, pr, review_id)
+        if legacy.exists():
+            return legacy
+    return path
 
 
 def prune_receipts(keep=None, now=None):
@@ -422,10 +652,18 @@ def owns(review, comments, receipt):
 
 def read_receipt(repo, pr, review_id):
     try:
-        receipt = json.loads(receipt_path(repo, pr, review_id).read_text())
+        receipt = json.loads(receipt_file(repo, pr, review_id).read_text())
     except (OSError, ValueError):
         return {}
     return receipt if isinstance(receipt, dict) else {}
+
+
+def touch_receipt(repo, pr, review_id):
+    """Keep a receipt that just proved ownership out of the age-based sweep."""
+    try:
+        os.utime(str(receipt_file(repo, pr, review_id)))
+    except OSError:
+        pass
 
 
 def ownership_refusal(review, comments, receipt, owned, recoverable):
@@ -444,8 +682,8 @@ def ownership_refusal(review, comments, receipt, owned, recoverable):
         refusal["changed_paths"] = sorted({path for path, _ in stored ^ current})
         refusal["reason"] = "pending review was edited after staging; preserve it"
     else:
-        refusal["reason"] = ("pending review contains replies, which cannot be restored "
-                             "if replacement fails; preserve it")
+        refusal["reason"] = ("pending review contains a reply whose thread could not be found, so "
+                             "it cannot be restored if replacement fails; preserve it")
     return refusal
 
 
@@ -456,11 +694,40 @@ def pending_snapshot(repo, pr, force=False):
     comments = review_comments(repo, pr, review["id"])
     receipt = read_receipt(repo, pr, review["id"])
     owned = owns(review, comments, receipt)
-    # Replies cannot be reconstructed safely as new root comments on recovery.
-    recoverable = not any(c.get("in_reply_to_id") for c in comments)
+    if owned:
+        touch_receipt(repo, pr, review["id"])
+    # A reply cannot come back as a root comment, so recovery re-adds it to its
+    # thread; that needs the thread's node id, which only GraphQL knows.
+    replies = [c for c in comments if c.get("in_reply_to_id")]
+    targets = reply_targets(repo, pr, replies) if replies and (owned or force) else []
+    recoverable = targets is not None
     if not force and (not owned or not recoverable):
         return None, ownership_refusal(review, comments, receipt, owned, recoverable)
-    return {"review": review, "comments": comments, "forced": not owned}, None
+    return {"review": review, "comments": comments, "replies": targets or [], "forced": not owned}, None
+
+
+def reply_targets(repo, pr, replies):
+    """[{thread_id, in_reply_to_id, body}] per reply in a draft, or None when one
+    cannot be placed. A pending reply's REST in_reply_to_id is the REST id of
+    the comment it answers, which GraphQL exposes as that comment's databaseId."""
+    threads = {}
+    for thread in fetch_threads(repo, pr):
+        nodes = thread.get("comments", {}).get("nodes", [])
+        # A thread rooted in a draft disappears with the draft, so a reply to
+        # it has nothing to go back onto: leave it unplaceable.
+        if not nodes or (nodes[0].get("pullRequestReview") or {}).get("state") == "PENDING":
+            continue
+        for comment in nodes:
+            if comment.get("databaseId") is not None:
+                threads[comment["databaseId"]] = thread["id"]
+    targets = []
+    for reply in replies:
+        thread = threads.get(reply.get("in_reply_to_id"))
+        if not thread:
+            return None
+        targets.append({"thread_id": thread, "in_reply_to_id": reply["in_reply_to_id"],
+                        "body": reply.get("body") or ""})
+    return targets
 
 
 def clear_pending_guarded(repo, pr, force):
@@ -489,11 +756,160 @@ def require_head(repo, pr, commit):
         raise ValueError(f"PR head changed from {commit} to {actual}; re-review before staging or resolving")
 
 
-def pinned_files(repo, pr, commit):
+def base_sha(repo, pr):
+    return gh(["api", f"repos/{repo}/pulls/{pr}", "--jq", ".base.sha"]).strip()
+
+
+# The file list at one head, kept briefly so the lenses' `extract` calls and
+# `map` do not each re-page a large PR. Only those read-only calls use it;
+# `stage` and `verdict` always fetch, so no decision ever rests on a cached
+# list. The key includes the head; the TTL bounds staleness from a moved base.
+FILES_CACHE_TTL = 3600
+CONTENT_CACHE_TTL = 7 * 86400  # content addressed by commit SHA never changes
+
+
+def cache_dir():
+    from state import _data_root
+    return Path(_data_root()) / "reviews" / "cache"
+
+
+def cache_path(kind, *parts):
+    key = hashlib.sha256(json.dumps([kind] + [str(p) for p in parts]).encode()).hexdigest()
+    return cache_dir() / f"{kind}-{key}.json"
+
+
+def read_cache(path, ttl):
+    try:
+        if time.time() - path.stat().st_mtime > ttl:
+            return None
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def write_cache(path, data):
+    """Best effort: a cache that cannot be written only costs a refetch."""
+    from state import atomic_write
+    try:
+        os.makedirs(str(path.parent), mode=0o700, exist_ok=True)
+        atomic_write(str(path), data)
+        prune_cache()
+    except OSError:
+        pass
+
+
+def prune_cache(now=None):
+    now = time.time() if now is None else now
+    try:
+        entries = list(cache_dir().iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        ttl = FILES_CACHE_TTL if entry.name.startswith("files-") else CONTENT_CACHE_TTL
+        try:
+            if entry.name.endswith(".json") and now - entry.stat().st_mtime > ttl:
+                entry.unlink()
+        except OSError:
+            continue
+
+
+def listed_for_other_head(files, commit):
+    """Paths whose listing entry names another commit than `commit`.
+
+    Right after a push, pulls/N can already report the new head while the
+    files listing still describes the old one. Each entry's contents_url
+    carries `?ref=<head>` (a removed file's names the base side, so it is
+    skipped); an entry naming another commit is a stale listing, not this diff.
+    """
+    stale = []
+    for f in files:
+        url = f.get("contents_url")
+        if f.get("status") == "removed" or not isinstance(url, str):
+            continue
+        ref = parse_qs(urlsplit(url).query).get("ref", [None])[0]
+        if ref != commit:
+            stale.append(f.get("filename"))
+    return stale
+
+
+def pinned_files(repo, pr, commit, cached=False):
     require_head(repo, pr, commit)
+    path = cache_path("files", repo, pr, commit)
+    if cached:
+        files = read_cache(path, FILES_CACHE_TTL)
+        if isinstance(files, list):
+            return files
     files = fetch_files(repo, pr)
+    if listed_for_other_head(files, commit):
+        time.sleep(RETRY_DELAY)
+        files = fetch_files(repo, pr)
+        stale = listed_for_other_head(files, commit)
+        if stale:
+            raise ValueError("GitHub's file listing still describes another head than %s (%s); "
+                             "retry once it catches up" % (commit, ", ".join(stale[:5])))
     require_head(repo, pr, commit)
+    write_cache(path, files)
     return files
+
+
+def not_found(error):
+    return isinstance(error, subprocess.CalledProcessError) and "HTTP 404" in (error.stderr or "")
+
+
+def contents(repo, commit, path):
+    """GET contents/PATH at a commit: a dict for a file, symlink or submodule, a
+    list for a directory. Raises ValueError when PATH does not exist there."""
+    if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError("a full 40-character commit SHA is required")
+    path = (path or "").strip("/")
+    if any(part in ("..", ".") for part in path.split("/")) or "\x00" in path:
+        raise ValueError("path must be relative to the repository root")
+    try:
+        out = gh(["api", f"repos/{repo}/contents/{quote(path)}?ref={commit}"])
+    except subprocess.CalledProcessError as error:
+        if not_found(error):
+            raise ValueError(f"{path or '/'} does not exist at {commit}") from None
+        raise
+    return json.loads(out)
+
+
+def file_bytes(repo, commit, path, meta):
+    """A file's bytes: inline base64 up to 1 MB, the raw media type above that."""
+    if meta.get("encoding") == "base64" and meta.get("content"):
+        return base64.b64decode(meta["content"])
+    return gh(["api", "-H", "Accept: application/vnd.github.raw+json",
+               f"repos/{repo}/contents/{quote(path.strip('/'))}?ref={commit}"],
+              binary=True, timeout=GH_PAGINATED_TIMEOUT)
+
+
+def text_at(repo, commit, path, max_bytes):
+    """A text file at commit, or None when it is absent. Cached: SHA-addressed."""
+    cache = cache_path("text", repo, commit, path)
+    hit = read_cache(cache, CONTENT_CACHE_TTL)
+    if isinstance(hit, dict) and "text" in hit:
+        return hit["text"]
+    try:
+        meta = contents(repo, commit, path)
+    except ValueError:
+        text = None
+    else:
+        if not isinstance(meta, dict) or meta.get("type") != "file" or (meta.get("size") or 0) > max_bytes:
+            text = None
+        else:
+            text = file_bytes(repo, commit, path, meta).decode("utf-8", "replace")
+    write_cache(cache, {"text": text})
+    return text
+
+
+GITATTRIBUTES_MAX_BYTES = 256_000
+
+
+def generated_rules(repo, pr):
+    """linguist-generated rules from the base branch's root .gitattributes."""
+    base = base_sha(repo, pr)
+    if not re.fullmatch(r"[0-9a-f]{40}", base):
+        return []
+    return attribute_rules(text_at(repo, base, ".gitattributes", GITATTRIBUTES_MAX_BYTES))
 
 
 THREADS_QUERY = """
@@ -507,7 +923,7 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
           comments(first: 100) {
             pageInfo { hasNextPage endCursor }
             nodes {
-              id author { login } body createdAt
+              id databaseId author { login } body createdAt
               pullRequestReview { id state }
             }
           }
@@ -523,7 +939,7 @@ query($thread: ID!, $cursor: String) {
     ... on PullRequestReviewThread {
       comments(first: 100, after: $cursor) {
         pageInfo { hasNextPage endCursor }
-        nodes { id author { login } body createdAt pullRequestReview { id state } }
+        nodes { id databaseId author { login } body createdAt pullRequestReview { id state } }
       }
     }
   }
@@ -549,7 +965,7 @@ def fetch_threads(repo, pr):
         variables = {"owner": owner, "name": name, "number": int(pr)}
         if cursor:
             variables["cursor"] = cursor
-        conn = graphql(THREADS_QUERY, variables)["data"]["repository"]["pullRequest"]["reviewThreads"]
+        conn = graphql(THREADS_QUERY, variables, retry=True)["data"]["repository"]["pullRequest"]["reviewThreads"]
         for thread in conn["nodes"]:
             comments = thread["comments"]
             seen = set()
@@ -558,7 +974,7 @@ def fetch_threads(repo, pr):
                 if not after or after in seen:
                     raise ValueError("thread comment pagination did not advance")
                 seen.add(after)
-                page = graphql(THREAD_COMMENTS_QUERY, {"thread": thread["id"], "cursor": after})["data"]["node"]["comments"]
+                page = graphql(THREAD_COMMENTS_QUERY, {"thread": thread["id"], "cursor": after}, retry=True)["data"]["node"]["comments"]
                 comments["nodes"].extend(page["nodes"])
                 comments["pageInfo"] = page["pageInfo"]
             nodes.append(thread)
@@ -584,7 +1000,8 @@ def post_review(repo, pr, commit, staged, body=""):
 
 READY = "ready-to-merge"
 NEUTRAL = "neutral"
-VERDICTS = (READY, NEUTRAL, "seriously-problematic")
+BLOCKING = "seriously-problematic"
+VERDICTS = (READY, NEUTRAL, BLOCKING)
 # Shared with watch_review.py, so `watch_review.py state` shows every verdict,
 # whether it came from the watcher or from a manual review-pr pass.
 VERDICT_STATE = "review-watcher"
@@ -596,37 +1013,97 @@ def diff_fingerprint(files):
 
     A merge from the base that leaves the change alone moves the head and can
     shift every hunk's line numbers, so hunk headers are dropped. Context and
-    changed lines stay: if they differ, the PR is a different change. A file
-    with no patch (binary, or too large) falls back to its blob SHA.
+    changed lines stay: if they differ, the PR is a different change. So a
+    base change inside, or within GitHub's three context lines of, a PR hunk
+    does change it, and so does any change to a file with no patch (binary, or
+    too large), which falls back to its blob SHA.
     """
-    rows = []
-    for f in sorted(files, key=lambda f: f.get("filename") or ""):
-        patch = f.get("patch")
-        if patch is None:
-            content = "blob:%s" % f.get("sha")
-        else:
-            content = "\n".join("@@" if HUNK_RE.match(line) else line for line in patch.splitlines())
-        rows.append([f.get("filename"), f.get("previous_filename"), f.get("status"), content])
+    rows = [_patch_row(f) for f in sorted(files, key=lambda f: f.get("filename") or "")]
     return hashlib.sha256(json.dumps(rows).encode()).hexdigest()
 
 
-def review_coverage(files, reviewed):
-    """Which changed files the reviewer declared read, and which it did not."""
+def _patch_row(f):
+    patch = f.get("patch")
+    if patch is None:
+        content = "blob:%s" % f.get("sha")
+    else:
+        content = "\n".join("@@" if HUNK_RE.match(line) else line for line in patch_lines(patch))
+    return [f.get("filename"), f.get("previous_filename"), f.get("status"), content]
+
+
+def patch_identity(f):
+    """One file's share of diff_fingerprint: equal exactly when the PR's change
+    to that file is unchanged, hunk line numbers aside. Truncated: it is
+    compared against a stored value, never used as a security token."""
+    return hashlib.sha256(json.dumps(_patch_row(f)).encode()).hexdigest()[:24]
+
+
+def carried_paths(files, prior, since):
+    """Paths whose patch is unchanged since the complete review at `since`.
+
+    Raises when no such review is recorded, so --since never quietly widens
+    coverage: the reviewer then reads every changed file as usual.
+    """
+    if not isinstance(since, str) or not re.fullmatch(r"[0-9a-f]{40}", since):
+        raise ValueError("--since needs the full 40-character SHA of the earlier reviewed head")
+    patches = (prior or {}).get("patches")
+    if not isinstance(patches, dict) or since not in ((prior or {}).get("head"), (prior or {}).get("carried_to")):
+        raise ValueError("no review with per-file coverage is recorded at %s; read every changed file "
+                         "and stage without --since" % since)
+    return {f["filename"] for f in files if patches.get(f["filename"]) == patch_identity(f)}
+
+
+def review_coverage(files, reviewed, rules=None, carried=None, since=None):
+    """Which changed files the reviewer declared read, and which it did not.
+
+    `carried` files were read at an earlier head whose patch for them is
+    identical; they count as covered and are listed, so the record shows which
+    files this pass actually read and which it relied on.
+    """
     declared = {path for path in reviewed if isinstance(path, str)}
+    carried = set(carried or ())
     changed = [f["filename"] for f in files]
-    unreviewed = [path for path in changed if path not in declared and not is_generated(path)]
-    return {"files_changed": len(changed),
-            "files_reviewed": sum(path in declared for path in changed),
-            "files_skipped_generated": [path for path in changed if path not in declared and is_generated(path)],
-            "unreviewed": unreviewed,
-            "complete": not unreviewed}
+    generated = {path for path in changed if is_generated(path, rules)}
+    unreviewed = [path for path in changed if path not in declared and path not in generated
+                  and path not in carried]
+    coverage = {"files_changed": len(changed),
+                "files_reviewed": sum(path in declared for path in changed),
+                "files_skipped_generated": [path for path in changed if path not in declared and path in generated],
+                "unreviewed": unreviewed,
+                "complete": not unreviewed}
+    if since:
+        coverage["carried_from"] = since
+        coverage["carried"] = [path for path in changed if path not in declared and path in carried
+                               and path not in generated]
+    return coverage
+
+
+def covered_patches(files, coverage, reviewed):
+    """{path: patch identity} for every file this pass covered, for the next --since."""
+    declared = {path for path in reviewed if isinstance(path, str)}
+    covered = declared | set(coverage.get("carried") or ())
+    return {f["filename"]: patch_identity(f) for f in files if f["filename"] in covered}
 
 
 def load_verdict(repo, pr):
+    """The newest verdict for this PR under any spelling of the repository.
+
+    Older releases keyed verdicts by whatever -R was given; the newest record
+    under a case-insensitively equal key is the decision that stands.
+    """
     from state import load, state_file
-    entry = (load(state_file(VERDICT_STATE)).get(repo) or {}).get("verdicts") or {}
-    prior = entry.get(str(pr))
-    return prior if isinstance(prior, dict) else None
+    best = None
+    for key, entry in load(state_file(VERDICT_STATE)).items():
+        if not isinstance(entry, dict) or key.lower() != repo.lower():
+            continue
+        prior = (entry.get("verdicts") or {}).get(str(pr))
+        if not isinstance(prior, dict):
+            continue
+        at = prior.get("at")
+        rank = (at if isinstance(at, (int, float)) and not isinstance(at, bool) else 0, key == repo)
+        if best is None or rank > best[0]:
+            best = (rank, prior)
+    return best[1] if best else None
 
 
 def save_verdict(repo, pr, record):
@@ -667,7 +1144,40 @@ def stage_request(data):
     override = data.get("verdict_override")
     if override is not None and (not isinstance(override, str) or not override.strip()):
         raise ValueError("verdict_override must state why the prior decision no longer holds")
+    if override is not None and templated(override):
+        raise ValueError("verdict_override looks like template text; name the newly verified defect "
+                         "(path:line and what fails), or leave the field out")
     return comments, notes, reviewed, verdict, override
+
+
+# Text an override copied from an example, or a placeholder, would contain.
+# Narrow on purpose: it cannot judge an override, only refuse one nobody wrote.
+TEMPLATE_OVERRIDE = re.compile(
+    r"only when overriding|^\W*(todo|tbd|n/?a|none|override|reason|defect|x+)\W*$"
+    r"|^[\s.…_-]*$|^\s*<[^<>]*>\s*$", re.IGNORECASE)
+
+
+def templated(text):
+    return bool(TEMPLATE_OVERRIDE.search(text.strip())) or len("".join(text.split())) < 8
+
+
+def confidence_filter(comments):
+    """(kept, filtered): a comment declaring confidence below MIN_CONFIDENCE is
+    held back. One without the field is the reviewer's own verified finding."""
+    kept, filtered = [], []
+    for c in comments:
+        value = c.get("confidence") if isinstance(c, dict) else None
+        if value is None:
+            kept.append(c)
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 100:
+            raise ValueError("comment confidence must be a number from 0 to 100")
+        if value < MIN_CONFIDENCE:
+            filtered.append({"path": c.get("path"), "line": c.get("line"), "confidence": value,
+                             "reason": "confidence below %d; not staged" % MIN_CONFIDENCE})
+        else:
+            kept.append({k: v for k, v in c.items() if k != "confidence"})
+    return kept, filtered
 
 
 def verdict_refusal(verdict, pending, coverage, prior, diff, override):
@@ -675,6 +1185,9 @@ def verdict_refusal(verdict, pending, coverage, prior, diff, override):
     if verdict == NEUTRAL and pending == 0:
         return ("neutral needs at least one pending comment or note: stage the reservation "
                 "so the author sees it, or the verdict is ready-to-merge")
+    if verdict == BLOCKING and pending == 0:
+        return ("seriously-problematic needs at least one pending comment or note stating the "
+                "blocking issue, so the author sees what blocks the merge")
     if verdict == READY and coverage["unreviewed"]:
         return ("ready-to-merge needs every changed non-generated file reviewed; unreviewed: %s"
                 % ", ".join(coverage["unreviewed"]))
@@ -692,7 +1205,8 @@ def render_notes(notes):
 
 
 def cmd_map(a):
-    files = pinned_files(a.repo, a.pr, a.commit)
+    files = pinned_files(a.repo, a.pr, a.commit, cached=True)
+    rules = generated_rules(a.repo, a.pr)
     report = []
     for f in files:
         diffmap = parse_patch(f["patch"]) if f.get("patch") else None
@@ -701,7 +1215,7 @@ def cmd_map(a):
             "status": f["status"],
             "additions": f["additions"],
             "deletions": f["deletions"],
-            "generated": is_generated(f["filename"]),
+            "generated": is_generated(f["filename"], rules),
             "has_patch": diffmap is not None,
             "right_ranges": ranges(diffmap["right"]) if diffmap else [],
             "left_ranges": ranges(diffmap["left"]) if diffmap else [],
@@ -712,18 +1226,144 @@ def cmd_map(a):
         "files": report,
         "reviewable_files": len(reviewable),
         "reviewable_lines": sum(f["additions"] + f["deletions"] for f in reviewable),
+        # Still part of coverage: GitHub sent no patch (binary or too large),
+        # so read them with `show` rather than skipping them.
+        "read_with_show": [f["path"] for f in report if not f["has_patch"] and not f["generated"]
+                           and f["status"] != "removed"],
     }, indent=1))
 
 
 def cmd_extract(a):
     wanted = set(a.paths)
-    for f in pinned_files(a.repo, a.pr, a.commit):
+    seen = set()
+    for f in pinned_files(a.repo, a.pr, a.commit, cached=True):
         if wanted and f["filename"] not in wanted:
             continue
+        seen.add(f["filename"])
+        header = f"--- {f['filename']} ({f['status']}, +{f['additions']} -{f['deletions']}"
         if f.get("patch"):
-            print(f"--- {f['filename']} ({f['status']}, +{f['additions']} -{f['deletions']})")
+            print(header + ")")
             print(f["patch"])
-            print()
+        else:
+            print(header + "; GitHub sent no patch: read the file with `show`)")
+        print()
+    for path in sorted(wanted - seen):
+        print(f"--- {path} (not changed in this PR)\n")
+
+
+SHOW_MAX_BYTES = 200_000          # printed whole; larger files need --lines
+SHOW_RANGE_MAX_BYTES = 10_000_000  # fetched at most, to print a --lines range
+# Rendered visibly: invisible and control characters are exactly what a
+# reviewer must see (bidirectional overrides, zero-width joiners, a stray form
+# feed), and raw they could also rewrite the terminal of whoever runs this.
+INVISIBLE = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f­​-‏‪-‮"
+                       "  ⁠-⁤⁦-⁩﻿]")
+
+
+def visible(text):
+    return INVISIBLE.sub(lambda m: ("\\u%04x" if ord(m.group()) > 0xff else "\\x%02x") % ord(m.group()), text)
+
+
+def line_range(spec, total):
+    match = re.fullmatch(r"(\d+)?:(\d+)?", spec or "")
+    if not match:
+        raise ValueError("--lines takes START:END, either side optional, e.g. 40:90")
+    start = int(match.group(1) or 1)
+    end = min(int(match.group(2) or total), total)
+    if start < 1 or start > max(total, 1) or end < start:
+        raise ValueError(f"--lines {spec} is outside the file's {total} line(s)")
+    return start, end
+
+
+def render_file(path, commit, data, spec=None):
+    """Numbered lines as GitHub counts them, so anchors can be checked directly."""
+    if b"\x00" in data[:8192]:
+        return f"--- {path} @ {commit[:12]}: binary, {len(data)} bytes; not shown\n"
+    lines = patch_lines(data.decode("utf-8", "replace"))
+    crlf = bool(lines) and all(line.endswith("\r") for line in lines)
+    if crlf:
+        lines = [line[:-1] for line in lines]
+    start, end = line_range(spec, len(lines)) if spec else (1, len(lines))
+    out = ["--- %s @ %s (%d line%s%s%s)" % (path, commit[:12], len(lines), "" if len(lines) == 1 else "s",
+                                         ", CRLF" if crlf else "",
+                                         "" if not spec else ", showing %d-%d" % (start, end))]
+    out.extend("%6d\t%s" % (n, visible(lines[n - 1])) for n in range(start, end + 1))
+    return "\n".join(out) + "\n"
+
+
+def cmd_show(a):
+    """A file or directory at an exact commit, from GitHub, never from a checkout.
+
+    Reading code at the pinned SHA is the only way a finding is judged against
+    the revision under review; a local working tree is usually at another one.
+    """
+    meta = contents(a.repo, a.commit, a.path)
+    if isinstance(meta, list):
+        rows = sorted(meta, key=lambda e: (e.get("type") != "dir", e.get("name") or ""))
+        print("--- %s/ @ %s (%d entries)" % (a.path.strip("/") or ".", a.commit[:12], len(rows)))
+        for entry in rows:
+            suffix = "/" if entry.get("type") == "dir" else ""
+            print("%s%s\t%s" % (visible(entry.get("name") or ""), suffix,
+                                entry.get("size") if entry.get("type") == "file" else entry.get("type")))
+        return
+    kind = meta.get("type")
+    if kind == "symlink":
+        print(f"--- {a.path} @ {a.commit[:12]}: symlink to {visible(str(meta.get('target')))}")
+        return
+    if kind == "submodule":
+        print(f"--- {a.path} @ {a.commit[:12]}: submodule at {meta.get('sha')} ({meta.get('submodule_git_url')})")
+        return
+    if kind != "file":
+        raise ValueError(f"{a.path} is a {kind!r}, not a file or directory")
+    size = meta.get("size") or 0
+    limit = SHOW_RANGE_MAX_BYTES if a.lines else SHOW_MAX_BYTES
+    if size > limit:
+        raise ValueError(f"{a.path} is {size} bytes at {a.commit[:12]}; "
+                         + ("pass --lines START:END to read part of it" if not a.lines
+                            else f"too large to read here (limit {limit})"))
+    sys.stdout.write(render_file(a.path, a.commit, file_bytes(a.repo, a.commit, a.path, meta), a.lines))
+
+
+def cmd_delta(a):
+    """What an incremental re-review must read again, and what it may carry."""
+    files = pinned_files(a.repo, a.pr, a.commit)
+    rules = generated_rules(a.repo, a.pr)
+    prior = load_verdict(a.repo, a.pr)
+    report = {"commit": a.commit, "since": a.since, "incremental": False}
+    try:
+        carried = carried_paths(files, prior, a.since)
+    except ValueError as error:
+        report["reason"] = str(error)
+        print(json.dumps(report, indent=1))
+        return
+    blocker = incremental_blocker(a.repo, a.pr)
+    if blocker:
+        report["reason"] = blocker
+        print(json.dumps(report, indent=1))
+        return
+    changed = [f["filename"] for f in files]
+    report.update(incremental=True,
+                  carry=[p for p in changed if p in carried and not is_generated(p, rules)],
+                  review=[p for p in changed if p not in carried and not is_generated(p, rules)],
+                  generated=[p for p in changed if is_generated(p, rules)])
+    print(json.dumps(report, indent=1))
+
+
+def incremental_blocker(repo, pr):
+    """Why an incremental pass may not replace the user's pending draft, or None.
+
+    Findings from the earlier pass on files that are now carried exist only in
+    that draft until the user submits it. Replacing it with a review that does
+    not re-read those files would discard them, so carry only once it is gone.
+    """
+    review = pending_review(repo, pr)
+    if review is None:
+        return None
+    if review_comments(repo, pr, review["id"]) or (review.get("body") or "").strip():
+        return ("a pending draft from an earlier pass still holds findings; an incremental "
+                "review would replace it and lose those on unchanged files, so read every "
+                "changed file (or submit or discard the draft first)")
+    return None
 
 
 def cmd_pending(a):
@@ -855,9 +1495,46 @@ def cmd_verdict(a):
     files = pinned_files(a.repo, a.pr, a.commit)
     diff = diff_fingerprint(files)
     prior = load_verdict(a.repo, a.pr)
+    shown = {k: v for k, v in prior.items() if k != "patches"} if prior else None
+    patches = (prior or {}).get("patches")
+    earlier = (prior or {}).get("carried_to") or (prior or {}).get("head")
     print(json.dumps({"repo": a.repo, "pr": a.pr, "commit": a.commit, "diff_fingerprint": diff,
-                      "prior": prior, "diff_unchanged": bool(prior) and prior.get("diff") == diff,
-                      "standing_ready": standing_ready(prior, diff)}, indent=1))
+                      "prior": shown, "diff_unchanged": bool(prior) and prior.get("diff") == diff,
+                      "standing_ready": standing_ready(prior, diff),
+                      # An earlier head with per-file coverage: `delta --since` it.
+                      "incremental_since": earlier if isinstance(patches, dict) and earlier != a.commit else None},
+                     indent=1))
+
+
+def restore_draft(repo, pr, cleared):
+    """Put back an owned draft deleted for a replacement that then failed."""
+    if not cleared or not cleared.get("deleted"):
+        return
+    backup = cleared["backup"]
+    print(f"replacement failed; prior draft is recoverable from {backup}", file=sys.stderr)
+    try:
+        previous = json.loads(Path(backup).read_text())
+        if pending_review(repo, pr) is None:
+            old = previous["review"]
+            roots = [c for c in previous["comments"] if not c.get("in_reply_to_id")]
+            restored = post_review(repo, pr, old["commit_id"],
+                                   [restore_anchor(c) for c in roots], old.get("body") or "")
+            # Replies go back onto their threads, inside the restored draft. A
+            # reply answers a submitted comment, so its in_reply_to_id (part of
+            # the receipt) is the same before and after.
+            lost = 0
+            for reply in previous.get("replies") or []:
+                try:
+                    graphql(REPLY_MUTATION, {"thread": reply["thread_id"], "review": restored["node_id"],
+                                             "body": reply["body"]})
+                except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+                    lost += 1
+            if lost:
+                print(f"{lost} reply(ies) could not be restored; recovery snapshot retained", file=sys.stderr)
+            remember_posted(repo, pr, restored, previous["comments"],
+                            restored.get("body") or old.get("body") or "")
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        print("automatic restoration unavailable; recovery snapshot retained", file=sys.stderr)
 
 
 def cmd_stage(a):
@@ -871,11 +1548,22 @@ def cmd_stage(a):
             file=sys.stderr,
         )
         sys.exit(2)
+    comments, filtered = confidence_filter(comments)
+    since = getattr(a, "since", None)
 
     files = pinned_files(a.repo, a.pr, a.commit)
+    rules = generated_rules(a.repo, a.pr)
     diff = diff_fingerprint(files)
-    coverage = review_coverage(files, reviewed)
-    staged, snapped, dropped = validate_comments(comments, build_maps(files))
+    prior = load_verdict(a.repo, a.pr)
+    carried_files = set()
+    if since:
+        carried_files = carried_paths(files, prior, since)
+        blocker = incremental_blocker(a.repo, a.pr)
+        if blocker:
+            raise ValueError(blocker)
+    coverage = review_coverage(files, reviewed, rules, carried_files, since)
+    narrowed = []
+    staged, snapped, dropped = validate_comments(comments, build_maps(files), narrowed)
     # A finding that failed to anchor is carried in the review body; only input
     # with nothing renderable in it is omitted. `complete` therefore means every
     # finding reached the author, not that every finding reached a diff line.
@@ -883,14 +1571,14 @@ def cmd_stage(a):
     if notes:
         body = (body or MARKER + "\n\n") + render_notes(notes)
     omitted = [d for d in dropped if not representable(d)] + overflow
-    prior = load_verdict(a.repo, a.pr)
     refusal = verdict_refusal(verdict, len(staged) + len(carried) + len(notes), coverage, prior, diff, override)
     if refusal:
         raise ValueError(refusal)
     report = {"repo": a.repo, "pr": a.pr, "commit": a.commit, "complete": False, "review_created": False,
               "staged": len(staged), "carried": len(carried), "notes": len(notes), "omitted": omitted,
-              "snapped": snapped, "dropped": dropped, "verdict": verdict, "diff_fingerprint": diff,
-              "coverage": coverage}
+              "snapped": snapped, "dropped": dropped, "narrowed": narrowed, "filtered": filtered,
+              "verdict": verdict, "diff_fingerprint": diff, "coverage": coverage,
+              "patches": covered_patches(files, coverage, reviewed)}
     if standing_ready(prior, diff) and verdict != READY:
         report.update(verdict_override=override.strip(), prior_verdict=prior)
     for d in carried:
@@ -907,16 +1595,27 @@ def cmd_stage(a):
         if comments:
             print(json.dumps({**report, "note": "nothing renderable in the input; no review created"}))
             return
+        # Check the head before deleting anything: a moved head means this
+        # review is stale, and the draft it would replace must survive.
+        require_head(a.repo, a.pr, a.commit)
+        cleared = None
         if a.replace_pending:
-            _, refusal = clear_pending_guarded(a.repo, a.pr, a.force)
+            cleared, refusal = clear_pending_guarded(a.repo, a.pr, a.force)
             if refusal:
                 print(json.dumps(refusal, indent=1))
                 sys.exit(3)
-        require_head(a.repo, a.pr, a.commit)
+            if cleared.get("deleted"):
+                report["deleted_pending"] = cleared["deleted"]
+        try:
+            require_head(a.repo, a.pr, a.commit)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
+            restore_draft(a.repo, a.pr, cleared)
+            raise
         save_verdict(a.repo, a.pr, verdict_record(verdict, a.commit, diff, report))
         print(json.dumps({**report, "complete": True, "note": "no findings; nothing created"}, indent=1))
         return
 
+    cleared = None
     if a.replace_pending:
         # Refuse (and print the report) BEFORE posting anything new — never
         # discard a pending review that isn't fully ours to begin with.
@@ -933,19 +1632,7 @@ def cmd_stage(a):
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
         # Never retry uncertain publication or reinterpret anchors at a new
         # head. Retain a local recovery snapshot of any replaced owned draft.
-        if report.get("deleted_pending"):
-            backup = cleared["backup"]
-            print(f"replacement failed; prior draft is recoverable from {backup}", file=sys.stderr)
-            try:
-                previous = json.loads(Path(backup).read_text())
-                if pending_review(a.repo, a.pr) is None:
-                    old = previous["review"]
-                    restored = post_review(a.repo, a.pr, old["commit_id"],
-                                           [restore_anchor(c) for c in previous["comments"]], old.get("body") or "")
-                    remember_posted(a.repo, a.pr, restored, previous["comments"],
-                                    restored.get("body") or old.get("body") or "")
-            except (OSError, ValueError, KeyError, subprocess.SubprocessError):
-                print("automatic restoration unavailable; recovery snapshot retained", file=sys.stderr)
+        restore_draft(a.repo, a.pr, cleared)
         raise
     remember_posted(a.repo, a.pr, review, staged, review.get("body") or body)
 
@@ -960,6 +1647,13 @@ def verdict_record(verdict, head, diff, report):
     record = {"verdict": verdict, "head": head, "diff": diff, "at": int(time.time())}
     if report.get("verdict_override"):
         record["override"] = report["verdict_override"]
+    # Per-file coverage at this head, which a later `--since` pass carries for
+    # every file whose patch is unchanged. watch_review records through here
+    # too, so a watcher-recorded head carries the same evidence.
+    if isinstance(report.get("patches"), dict):
+        record["patches"] = report["patches"]
+    if isinstance(report.get("coverage"), dict) and report["coverage"].get("carried_from"):
+        record["carried_from"] = report["coverage"]["carried_from"]
     return record
 
 
@@ -973,6 +1667,8 @@ COMMANDS = {
     "reply": cmd_reply,
     "stage": cmd_stage,
     "verdict": cmd_verdict,
+    "show": cmd_show,
+    "delta": cmd_delta,
 }
 
 
@@ -986,10 +1682,16 @@ def main():
         if name == "clear-pending":
             sp.add_argument("--force", action="store_true",
                              help="delete even if it holds comments not staged by this script")
-        if name in ("map", "extract", "resolve-thread", "reply", "verdict"):
+        if name in ("map", "extract", "resolve-thread", "reply", "verdict", "delta"):
             sp.add_argument("--commit", required=True, help="full reviewed head SHA")
         if name == "extract":
             sp.add_argument("paths", nargs="*")
+        if name == "show":
+            sp.add_argument("--commit", required=True, help="full SHA to read at (the reviewed head)")
+            sp.add_argument("path", help="repository-relative file or directory; '' for the root")
+            sp.add_argument("--lines", help="START:END, 1-based and inclusive; either side optional")
+        if name == "delta":
+            sp.add_argument("--since", required=True, help="full SHA of the earlier completely reviewed head")
         if name == "threads":
             sp.add_argument("--all", action="store_true", help="include resolved threads")
         if name == "resolve-thread":
@@ -1004,12 +1706,15 @@ def main():
             sp.add_argument("--commit", required=True, help="head SHA (headRefOid) to anchor comments to")
             sp.add_argument("--input", required=True, help="JSON file with the comments array")
             sp.add_argument("--replace-pending", action="store_true")
+            sp.add_argument("--since", help="earlier completely reviewed head: carry coverage for files "
+                                             "whose patch is unchanged since then")
             sp.add_argument("--force", action="store_true",
                              help="with --replace-pending, delete even if it holds "
                                   "comments not staged by this script")
             sp.add_argument("--dry-run", action="store_true")
     a = p.parse_args()
     try:
+        a.repo = canonical_repo(a.repo)
         COMMANDS[a.cmd](a)
     except subprocess.TimeoutExpired:
         print("gh timed out; inspect remote state before retrying a mutation", file=sys.stderr)

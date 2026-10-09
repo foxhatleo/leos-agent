@@ -349,14 +349,24 @@ unknown cache/model costs remain explicit. Compaction pre-context counts are
 not discarded tokens. Requested/corrected/blocked dispatches are distinct from
 observed child models. Missing/rotated logs do not prove a broken install.
 
-PR review pins the full head SHA; it never silently moves line anchors or
-retries old findings against a new head. Replacing a pending review requires
+PR review pins the full head SHA and reads code only at it, from GitHub, never
+from a local checkout; it never silently moves line anchors or retries old
+findings against a new head. Replacing a pending review requires
 an unchanged ownership receipt and saves recovery data. New comments/replies
 remain pending. Only verified addressed threads rooted by the authenticated
 user can be auto-resolved; resolution is public and requires SHA-bound evidence.
-Every changed non-generated file is read before staging. Neutral always comes
-with a pending comment; CI never affects the verdict. A ready-to-merge verdict
-stands until the PR diff changes, so a merge from the base keeps it.
+Every changed non-generated file is read before staging; after a complete
+review whose draft is no longer pending, a new head re-reads only the files
+whose patch changed. Each finding is
+re-checked at the SHA before staging, and the repository's own CLAUDE.md,
+AGENTS.md and REVIEW.md rules count only when quoted. Review runs at the
+standard tier; a consequential PR or an escalation runs it at premium. Neutral
+and seriously-problematic always come with a pending comment; CI never affects
+the verdict. A ready-to-merge verdict stands until the PR diff changes, hunk
+line numbers aside: a merge from the base keeps it unless the base touched
+lines within three of a PR hunk or a file GitHub sends no patch for. An
+optional cross-model lens, off unless the user enables it, sends the pinned
+diff to a second provider's CLI.
 Watchers use cross-process leases, bounded retries, and completion reports;
 emission alone never records a PR as reviewed. A head waiting on the user's
 decision is parked without spending retries.
