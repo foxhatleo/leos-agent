@@ -40,6 +40,32 @@ class ModelObservations(unittest.TestCase):
         with patch.object(session_models.time, "time", return_value=90000):
             self.assertIsNone(session_models.parent_model({"session_id": "s"}, "claude"))
 
+    def test_session_observations_are_pruned_by_age_and_count(self):
+        directory = self.root / "sessions"
+        directory.mkdir()
+        now = int(session_models.time.time())  # the fresh file gets the real clock's mtime
+        aged = []
+        for n in range(session_models.SESSION_MAX_FILES + 40):
+            path = directory / ("%064x.json" % n)
+            path.write_text("{}")
+            # Ten files are three days old; the rest are spread over the last hour.
+            stamp = now - (3 * 86400 if n < 10 else n)
+            os.utime(path, (stamp, stamp))
+            aged.append(path)
+        stale_tmp = directory / "tmpabc123.tmp"
+        stale_tmp.write_text("{")
+        os.utime(stale_tmp, (now - 3 * 86400,) * 2)
+        foreign = directory / "notes.txt"
+        foreign.write_text("mine")
+        os.utime(foreign, (now - 30 * 86400,) * 2)
+        session_models.remember({"session_id": "fresh", "model": "haiku"}, "claude")
+        self.assertEqual(len(list(directory.glob("*.json"))), session_models.SESSION_MAX_FILES)
+        self.assertTrue(session_models._path("claude", "fresh").exists())
+        self.assertFalse((directory / ("%064x.json" % (session_models.SESSION_MAX_FILES + 39))).exists())  # the oldest recent one
+        self.assertFalse(any(path.exists() for path in aged[:10]))
+        self.assertFalse(stale_tmp.exists())
+        self.assertTrue(foreign.exists())
+
     def test_nested_claude_uses_immediate_caller_not_root(self):
         root = self.transcript("opus")
         child = self.root / "opus" / "subagents" / "agent-child.jsonl"
@@ -95,9 +121,8 @@ class ModelObservations(unittest.TestCase):
                                "agent_id": "delayed", "agent_transcript_path": str(child)}, "claude")
         child.parent.mkdir(parents=True)
         child.write_text(json.dumps({"type": "assistant", "message": {"model": "haiku"}}))
-        event = {"hook_event_name": "SessionEnd", "session_id": "s", "transcript_path": str(parent)}
-        observe_agent.observe(event, "claude")
-        observe_agent.observe(event, "claude")
+        observe_agent.reconcile("s", str(parent))
+        observe_agent.reconcile("s", str(parent))
         rows = [r for r in dispatch_log.read() if r["decision"] == "executed"]
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["effective_model"], "haiku")

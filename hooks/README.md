@@ -41,23 +41,39 @@ bounded lenses, which review-pr depends on.
 
 Claude/Codex SubagentStop reads only a bounded tail of the child's transcript
 to observe its latest response model. Transcript formats can change; missing
-observations remain unknown. The observer emits empty JSON and never asks a
-child to continue. Claude PostModelSwitch refreshes its parent-model cache.
-Codex supplies its active model directly in tool-hook events.
+observations remain unknown. The observer injects nothing into the parent. Its
+one non-empty reply goes to a leo-* child whose final message lacks the
+`Result:`/`Verified:` lines: on a first stop (`stop_hook_active` false) it asks
+once for the report restated with them, as `additionalContext` on Claude and
+`decision: block` on Codex, and records the child at its next stop. A Claude
+child that reported through its hand-back tool is never asked. Guard modes
+`warn` and `off` disable the prompt. Claude PostModelSwitch refreshes its
+parent-model cache. Codex supplies its active model directly in tool-hook events.
 
 Completion signals share one contract. Every adapter sends the observer a
 SubagentStop-shaped event carrying at most the last 4 KiB of the child's final
 text under the harness's own key (`last_assistant_message` on Claude and Codex,
 `child_summary` on Hermes, `result_text` from the JavaScript adapters) plus a
-call id where the harness has one. `scripts/outcome.py` reduces that text to
-`Result:`/`Verified:` tokens and the text is discarded; `usage` is taken from the
-event or, on Claude and Codex, summed from the child transcript. Cursor's
-subagentStop has a status token and no text, so its rows say status-only.
-OpenCode uses `tool.execute.after` on `task`; Pi uses `tool_result` on
-`subagent`; Hermes registers `subagent_stop` and `post_tool_call` and tolerates a
-build that refuses either. The guard records the brief's `Escalation from
-<tier>:` header as a tier token; on Codex the brief is encrypted and the field
-reads `unobservable`.
+call id where the harness has one. Claude's SubagentStop has no call id, so a
+Claude PostToolUse hook on `Agent|Task` runs `scripts/link_agent.py`: it writes
+one row tying the call's `tool_use_id` to `tool_response.agentId`, for a
+foreground result and for a background launch, and reads nothing else. The
+report joins Claude completions through that row and guesses the nearest
+preceding dispatch only when no link exists. `scripts/outcome.py` reduces the
+child's text to `Result:`/`Verified:` tokens and the text is discarded; `usage` is taken from the
+event or, on Claude and Codex, summed from the child transcript by the usage
+scan's rules, with a turn count. A Claude child that reports through its
+hand-back tool is read from that report. Cursor's subagentStop carries the
+child's `summary`, call id and child conversation id; without a summary the
+row says status-only. Background Cursor subagents may send no subagentStop or
+null fields. OpenCode uses `tool.execute.after` on `task`, taking the agent from
+the executed arguments and the child model from task metadata; a background
+task fires it at launch and is not recorded. Pi uses `tool_result` on
+`subagent`. Hermes records each child from `subagent_stop`, keyed by its child
+session; `post_tool_call` sees a background handle or the same children, so it
+records only on a build that never fires `subagent_stop`. The guard records the
+brief's `Escalation from <tier>:` header as a tier token; on Codex the brief is
+encrypted and the field reads `unobservable`.
 
 Scripts live in scripts/ and are included in the npm package. Hook input is
 bounded; errors fail open with local diagnostics. An invalid routing.json keeps
@@ -107,6 +123,12 @@ written: the parent is then unavailable, nothing is filled in except a leo
 tier's configured model, and dispatch is allowed with a diagnostic.
 SubagentStop can likewise precede the child transcript flush; SessionEnd
 reconciles those observations without model calls.
+Claude Code gives all SessionEnd hooks one 1.5 s budget, and a plugin hook's
+`timeout` cannot raise it (only `CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS` or a
+user-settings hook can), so the SessionEnd hook only starts a detached,
+time-bounded reconciliation process and returns. SubagentStop may not fire for
+background Agent-tool subagents on some builds or in the VS Code extension;
+the report counts those dispatches as having no completion signal.
 
 ## Claude agent.spawn mod
 

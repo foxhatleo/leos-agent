@@ -77,19 +77,32 @@ operation.
 |---|---|---|---|---|
 | Claude Code | SessionStart, including forks | `agent.spawn` model setting on builds where it covers teammates too ([hooks/README.md](hooks/README.md#claude-agentspawn-mod)), else Agent/Task argument correction; native profiles | SubagentStop final message, child transcript fallback, child usage from transcript | On the Agent/Task path the first dispatch may precede parent transcript persistence; missing parent data permits dispatch with a diagnostic. Forced settings/provider substitutions also limit enforcement. |
 | Codex | Separate native SessionStart hook | Tier-enforcing explicit spawn selection; model-free native profiles | SubagentStop final message, rollout fallback, cumulative token counts | Hooks need native trust. A renamed multi-agent tool namespace is not matched. Other/customized profiles can still override spawn settings. Encrypted briefs make the escalation marker unobservable; recorded as such. |
-| Cursor | Native always-apply rule | Installed user agents; resolved subagentStart model ceiling | Status token only; no child text, so no outcome and no usage | No invented Task model argument; hook diagnostics distinguish planned models from completion. Worker no-delegation is instruction-only: no per-agent tool restriction, and no parent-agent identity at subagentStart. |
-| OpenCode | One registered rendered instruction | Native agent selection, confirmed through the SDK | `tool.execute.after` output of `task`, joined by call id; no usage | Task has no model field; a correction that cannot be applied blocks the task. A slash-command subtask's own model is not visible to the guard. Source/config paths must remain valid. |
-| Hermes | Frozen system-prompt section | Global native delegation-model ceiling when parent/model are observable | `subagent_stop` and `post_tool_call` when the installed build fires them; no usage | Native delegation has one global model, not separate per-task tiers. Older builds skip post-tool hooks for built-in tools; the report then says no completion signal was observed. |
+| Cursor | Native always-apply rule | Installed user agents; resolved subagentStart model ceiling | subagentStop summary and status, joined by call id; no usage | No invented Task model argument; hook diagnostics distinguish planned models from completion. Worker no-delegation is instruction-only: no per-agent tool restriction, and no parent-agent identity at subagentStart. |
+| OpenCode | One registered rendered instruction | Native agent selection, confirmed through the SDK | `tool.execute.after` output of a foreground `task`, joined by call id, child model from task metadata; no usage | Task has no model field; a correction that cannot be applied blocks the task. A slash-command subtask's own model is not visible to the guard. Source/config paths must remain valid. |
+| Hermes | Frozen system-prompt section | Global native delegation-model ceiling when parent/model are observable | `subagent_stop` per child (`post_tool_call` only when the build lacks it); no usage | Native delegation has one global model, not separate per-task tiers. Older builds skip post-tool hooks for built-in tools; the report then says no completion signal was observed. |
 | Pi | Extension caches rendered body per session | Advisory policy; dispatches are logged without a model check | `tool_result` text and usage for a tool named `subagent` | No native per-spawn model guarantee for third-party subagent tools. |
 
-Completion capture reads the last 4 KiB of a worker's final text for its
-`Result:` and `Verified:` lines and drops the text. The dispatch log stores the
-outcome enum, a verified tri-state, a source token, token counts, the tier, and
-the escalation source tier; never brief or result text. `dispatch_log.py report`
-joins completions to dispatches by call id, then agent id, then the nearest
-preceding same-tier dispatch, and prints outcome and verification rates per
-tier, escalation chains, summed child usage, and which harnesses supplied no
-signal.
+Completion capture reads the last 4 KiB of a worker's final text, or of the
+report a Claude child handed back through its hand-back tool, for its
+`Result:` and `Verified:` lines and drops the text. On Claude Code and Codex, a
+leo-* worker whose final message lacks those lines is asked once, at its first
+SubagentStop, to restate its report with them; guard modes `warn` and `off`
+skip the prompt. The dispatch log stores the outcome enum, a verified
+tri-state, a source token, token and turn counts, the tier, and the escalation
+source tier; never brief or result text. `dispatch_log.py report` joins
+completions to dispatches by call id; on Claude, whose SubagentStop has none,
+through a PostToolUse row linking each Agent call to the child it started;
+and only without either, by the nearest preceding same-session dispatch of
+the same tier. The report prints
+outcome and verification counts per tier beside the dispatches that sent no
+completion signal, escalation chains and tier counts over dispatches that ran,
+summed child usage and turns, reference cost per verified success from catalog
+prices (an estimate, not a bill), and which harnesses supplied no signal.
+Some hosts send none for background children: Claude Code background subagents
+on some builds and in the VS Code extension, OpenCode background tasks, and
+Cursor background subagents. Claude Code's SessionEnd hooks share a 1.5 s budget that
+plugin timeouts cannot raise, so late-transcript reconciliation runs in a
+detached process.
 
 Portable skills are registered on all six. Native capability differences are
 reported rather than presented as full enforcement parity. Policy, pricing,

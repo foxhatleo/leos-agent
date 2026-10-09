@@ -57,6 +57,18 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "LEOS_AGENT_HARNESS=claude python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/link_agent.py\"",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }
