@@ -2,7 +2,8 @@
 """Harness-aware offline dispatch guard.
 
 CLI: native command-hook output by default; --json emits the adapter protocol.
-LEOS_AGENT_DISPATCH_GUARD=on|warn|off. Errors fail open and are logged distinctly.
+LEOS_AGENT_DISPATCH_GUARD=on|warn|off; 0/false/no/disabled also mean off.
+Errors fail open and are logged distinctly.
 """
 import collections
 import json
@@ -190,25 +191,59 @@ def _log(entry):
         pass
 
 
+# Claude Code reads its boolean environment variables as one of these,
+# case-insensitive and trimmed; anything else, including unset, is false.
+CLAUDE_TRUE = frozenset(("1", "true", "yes", "on"))
+
+
+def claude_flag(name):
+    """Whether Claude Code would treat environment variable `name` as on."""
+    return os.environ.get(name, "").strip().lower() in CLAUDE_TRUE
+
+
+GUARD_OFF = frozenset(("off", "0", "false", "no", "disable", "disabled"))
+GUARD_ON = frozenset(("on", "1", "true", "yes", "enable", "enabled", ""))
+
+
+def guard_mode():
+    """(mode, diagnostic) from LEOS_AGENT_DISPATCH_GUARD.
+
+    The common falsy spellings switch the guard off. An unrecognized value
+    keeps it on, the safe reading for a cost guard, and says so in the log.
+    """
+    raw = os.environ.get("LEOS_AGENT_DISPATCH_GUARD", "on").strip().lower()
+    if raw in GUARD_OFF:
+        return "off", None
+    if raw == "warn":
+        return "warn", None
+    return "on", None if raw in GUARD_ON else "unrecognized-guard-mode"
+
+
 def process(event, name=None):
     """Shared mode handling, decision and logging for command/in-process adapters."""
-    from routing_engine import route
-    from session_models import parent_model
+    from routing_engine import dispatch_tool, route
     name = name or harness(event)
-    mode = os.environ.get("LEOS_AGENT_DISPATCH_GUARD", "on").strip().lower()
+    mode, mode_diagnostic = guard_mode()
     result = {"action": "allow", "reason": "disabled" if mode == "off" else "not-a-dispatch", "updated_input": None}
     if mode == "off" or not isinstance(event, dict):
         return result
     tool = _first_str(event, TOOL_KEYS)
     args = _first_dict(event, INPUT_KEYS)
+    # Decide whether this is a dispatch before reading up to 1 MiB of transcript.
+    if not dispatch_tool(name, tool) or args is None:
+        return result
     try:
+        from session_models import parent_model
         parent = parent_model(event, name)
         effective = event.get("effective_model")
-        if name == "claude" and os.environ.get("CLAUDE_CODE_SUBAGENT_MODEL_FORCE") == "1":
-            forced = os.environ.get("CLAUDE_CODE_SUBAGENT_MODEL") or parent
+        if name == "claude" and claude_flag("CLAUDE_CODE_SUBAGENT_MODEL_FORCE"):
+            forced = os.environ.get("CLAUDE_CODE_SUBAGENT_MODEL", "").strip() or parent
             result = route(name, tool, args, parent, effective_model=forced)
-            # Forced settings cannot be overridden by updatedInput.
-            if (result.get("price") or {}).get("status") == "over-ceiling":
+            # Forced settings cannot be overridden by updatedInput. A fork runs
+            # on the parent whatever the setting, so nothing is forced there.
+            if result["reason"] in ("not-a-dispatch", "fork-inherits-parent"):
+                pass
+            elif (result.get("price") or {}).get("status") == "over-ceiling":
                 result.update(action="block", reason="forced-model-over-ceiling", updated_input=None,
                               retry="The forced subagent model exceeds the parent. Change the force setting or do this work locally.")
             else:
@@ -229,8 +264,11 @@ def process(event, name=None):
                                     _first_str(event, ("cwd", "workspace", "directory")), triviality(dispatch))
         entry.update({k: result.get(k) for k in ("requested_model", "effective_model", "price", "proposed_action")})
         entry["call_id"] = event.get("tool_use_id") or event.get("call_id") or event.get("toolCallId")
-        if result.get("diagnostic"):
-            entry["diagnostic"] = result["diagnostic"]
+        # One token per row: an invalid routing config outranks an unrecognized
+        # guard mode, which doctor also reports.
+        diagnostic = result.get("diagnostic") or mode_diagnostic
+        if diagnostic:
+            entry["diagnostic"] = diagnostic
         _log(entry)
         return result
     except Exception as exc:
@@ -246,10 +284,10 @@ def main(argv=None):
             raise ValueError("hook input exceeded 2 MiB")
         event = json.loads(raw) if raw.strip() else {}
     except Exception as exc:
-        _breadcrumb(harness({}), exc)
+        _breadcrumb(harness({}), exc, "invalid-hook-input")
         return 0
     if not isinstance(event, dict):
-        _breadcrumb(harness({}), ValueError("hook input must be an object"))
+        _breadcrumb(harness({}), ValueError("hook input must be an object"), "invalid-hook-input")
         return 0
     name = harness(event)
     result = process(event, name)
@@ -267,7 +305,9 @@ def main(argv=None):
     return 0
 
 
-def _breadcrumb(name, exc):
+def _breadcrumb(name, exc, reason="guard-error"):
+    """An error row: an enum and the exception's type name. Never its message,
+    which can carry paths and config values the log must not keep."""
     try:
         import dispatch_log
         dispatch_log.append({
@@ -275,7 +315,8 @@ def _breadcrumb(name, exc):
             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "harness": name,
             "decision": "error",
-            "reason": "%s: %s" % (type(exc).__name__, exc),
+            "reason": reason,
+            "error_type": type(exc).__name__,
         })
     except Exception:
         pass
