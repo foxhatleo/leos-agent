@@ -1,5 +1,7 @@
 #!/bin/sh
 # Validation only. Version changes belong to explicit release preparation.
+# Git runs this only in a clone that opted in: git config core.hooksPath .githooks
+# It checks the working tree, unstaged edits included, not just what is staged.
 set -e
 export LEOS_AGENT_PRICE_REFRESH=off
 export PYTHONDONTWRITEBYTECODE=1

@@ -300,6 +300,10 @@ python3 scripts/check.py
 python3 scripts/measure_context.py --check
 ```
 
+`.githooks/pre-commit` runs the same four. Git ignores it until a clone opts
+in with `git config core.hooksPath .githooks`, and it checks the working tree,
+unstaged edits included, not just what is staged.
+
 Tests use fixtures and mock provider events; CI makes no paid model calls.
 Native live smoke tests are separate, explicitly authorized, and budgeted.
 Static/adapter tests establish contracts, not complete end-to-end parity on
@@ -322,9 +326,10 @@ pushes nothing and defers: the commit that beat it has a run of its own, and
 that run releases a tip already containing both. Pushing a `v*` tag by hand
 still publishes through the same workflow, so `scripts/bump.py` remains the way
 to prepare a release outside CI. npm publishing uses its existing
-trusted-publishing workflow, publishes a given version at most once, and an
-ordinary code commit never automatically changes versions or stages unrelated
-files.
+trusted-publishing workflow, publishes a given version at most once, and only
+moves `latest` forward: an older tag re-run after a newer release publishes
+under the `backfill` dist-tag. An ordinary code commit never automatically
+changes versions or stages unrelated files.
 
 Native references: [Claude subagents](https://code.claude.com/docs/en/sub-agents),
 [Codex subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents),

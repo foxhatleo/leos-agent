@@ -221,6 +221,29 @@ class TestALosingRunChangesNothing(ReleaseRepo):
         self.assertEqual(git("tag", "--list", cwd=loser), "")
         self.assertEqual(git("status", "--porcelain", cwd=loser), "")
 
+    def test_a_branch_moved_back_is_not_fast_forwarded_over(self):
+        # The swap has to compare against the exact commit this run built on. A
+        # plain push accepts any fast-forward, and if main was force-moved back
+        # to an ancestor, the release commit still fast-forwards it -- silently
+        # re-landing everything the force-push took out. The move back started
+        # a run of its own, so this one has nothing left to release.
+        mover = self.clone("mover")
+        ancestor = git("rev-parse", "HEAD", cwd=mover)
+        self.advance(mover, "a commit that is later withdrawn")
+        runner = self.clone("runner")
+        withdrawn = git("rev-parse", "HEAD", cwd=runner)
+        git("push", "--quiet", "--force", "origin", f"{ancestor}:refs/heads/main", cwd=mover)
+        before = self.remote_refs()
+        self.assertEqual(before["refs/heads/main"], ancestor)
+
+        result, outputs = self.tag_release(runner, "--expect-sha", withdrawn)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("deferring", result.stdout)
+        self.assertEqual(outputs, {"tag": "", "released": "false"})
+        self.assertEqual(self.remote_refs(), before)
+        self.assertEqual(git("rev-parse", "HEAD", cwd=runner), withdrawn)
+        self.assertEqual(git("tag", "--list", cwd=runner), "")
+
     def test_a_tag_already_taken_without_the_branch_moving_is_an_error(self):
         # Not a race: main is exactly where this run found it, so no other run
         # is coming, and no bump reachable from here can pick a free version.

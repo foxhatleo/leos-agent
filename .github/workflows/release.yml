@@ -17,13 +17,21 @@ on:
 permissions:
   contents: read
 
-# One release at a time across the repository. Two runs preparing a release
+# Main pushes prepare one release at a time. Two runs preparing a release
 # concurrently would derive the same version from the same package.json; the
 # atomic push in tag-release.py is what makes that safe, and this is the cheap
-# way to avoid relying on it. Queued runs are never cancelled in flight: a run
-# that has already pushed its tag still has to publish it.
+# way to avoid relying on it. A running run is never cancelled: one that has
+# already pushed its tag still has to publish it.
+#
+# A pending run is another matter. GitHub keeps at most one run waiting per
+# group, and a newer run joining the group cancels it whatever
+# cancel-in-progress says. For main that is harmless, because the newer push's
+# tip contains the older one and its run releases both. A hand-pushed tag has
+# no such successor: sharing the group, it would be cancelled by the next main
+# push while it waited, and never publish. Each tag therefore gets a group of
+# its own. A tag run prepares nothing, so it has nothing to serialise against.
 concurrency:
-  group: release
+  group: release-${{ github.ref_type == 'tag' && github.ref || 'main' }}
   cancel-in-progress: false
 
 env:
@@ -60,9 +68,10 @@ jobs:
       - name: Bump, verify, then push the release commit and its tag atomically
         id: prepare
         # --expect-sha pins this to the commit that triggered the run, so a run
-        # only ever releases the tip it was told about. If main moved on, the
-        # push is rejected whole and the script defers to the run for the newer
-        # tip rather than retrying against a tree it never verified.
+        # only ever releases the tip it was told about. If main moved at all,
+        # forward or back, the push is rejected whole and the script defers to
+        # the run for that tip rather than retrying against a tree it never
+        # verified.
         #
         # The checks are the same four the publish job repeats, run here against
         # the bumped tree before the refs move: a tag pushed for a tree that

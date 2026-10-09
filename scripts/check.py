@@ -1,9 +1,29 @@
 #!/usr/bin/env python3
 """Structural checks for the leos-agent repo. Run in CI and before a release.
 
-Asserts the version is identical across every manifest, that each harness's
-manifest carries what that harness requires, and that the injection round-trips
-idempotently and refuses to touch files whose markers are malformed. Stdlib only.
+Each numbered comment in main() states one invariant and why it holds. By topic
+(AGENTS.md's summary terms in brackets):
+
+  1, 3     manifests, marketplaces and README carry one version and name
+           [version agreement]
+  2        each harness's manifest selects its own hook file and metadata
+  4, 4a    the policy is a valid Cursor rule and keeps its load-bearing tokens
+  5        skills carry name, description, and only portable keys under
+           skills/ [skill frontmatter]
+  5a-*     installer payloads: Codex twins, provenance, legacy hashes, OpenCode
+           root recovery, agent profiles, the routing region, the install rename
+  5b       every skill is user-invoked or deliberately model-invocable
+           [invocation split]
+  5c       bodies reach plugin files only through <plugin-root>, and every
+           referenced path exists [plugin-root references]
+  6, 6a    manifest paths exist and hook files parse [manifest paths]
+  6b, 6c   hooks are wired, reach shipped scripts, and import cleanly
+  6d       the session-start emitter is byte-identical across runs [determinism]
+  7        injection is idempotent and uninstall round-trips
+           [installer idempotency]
+  8        malformed markers refuse rather than swallow content [marker safety]
+
+Stdlib only.
 """
 
 import importlib.util
@@ -45,6 +65,50 @@ def load_installer():
 	return module
 
 
+# Frontmatter keys a portable skill under skills/ may carry: exactly what the
+# skills there use today. A new key is a decision about all six harnesses, so it
+# is added here on purpose rather than picked up. Claude-only extras such as
+# allowed-tools and model belong under skills-claude/, which only Claude loads.
+PORTABLE_SKILL_KEYS = frozenset({"name", "description", "disable-model-invocation", "argument-hint"})
+
+# Bodies that reach a harness as text: skills and their references, commands,
+# and agent profiles, whose bodies the installer copies to Codex, Cursor and
+# OpenCode verbatim.
+BODY_DIRS = ("agents", "skills", "skills-claude", "commands", "commands-claude")
+
+
+def frontmatter_keys(text):
+	"""Top-level keys of a Markdown file's YAML frontmatter, in order."""
+	if not text.startswith("---\n") or text.count("---") < 2:
+		return []
+	return re.findall(r"(?m)^([A-Za-z0-9_-]+)[ \t]*:", text.split("---", 2)[1])
+
+
+def non_portable_keys(text):
+	return [key for key in frontmatter_keys(text) if key not in PORTABLE_SKILL_KEYS]
+
+
+def plugin_root_violations(text):
+	"""Ways a skill, command, or agent body reaches a plugin file non-portably.
+
+	Claude Code substitutes ${CLAUDE_PLUGIN_ROOT} when it loads such a body, but
+	Codex, Cursor, OpenCode, Hermes and Pi read it verbatim, so a path built on
+	it runs `python3 /scripts/...` there. Even Claude Code leaves the variable
+	out of the environment of commands the model runs, so the unbraced form is
+	not expanded anywhere. Every script path therefore goes through <plugin-root>,
+	which each skill resolves first and the OpenCode installer bakes into its
+	copies. Naming CLAUDE_PLUGIN_ROOT as a place to look is fine; building a path
+	from it, or from anything but the placeholder, is the bug.
+	"""
+	problems = []
+	if re.search(r"CLAUDE_PLUGIN_ROOT\}?/", text):
+		problems.append("builds a path from CLAUDE_PLUGIN_ROOT; write <plugin-root>/... and resolve it first")
+	for prefix in re.findall(r'(?m)^\s*python3\s+"?(\S*?)scripts/[\w.-]+\.py', text):
+		if prefix != "<plugin-root>/":
+			problems.append(f"runs {prefix or './'}scripts/...; every script invocation goes through <plugin-root>/scripts/")
+	return problems
+
+
 def main():
 	installer = load_installer()
 	canonical = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["version"]
@@ -79,7 +143,9 @@ def main():
 	for field in ("displayName", "shortDescription", "longDescription", "developerName", "category"):
 		check(interface.get(field), f".codex-plugin/plugin.json: interface.{field} is required")
 
-	# 3. Marketplaces parse, name this plugin, and carry no stale version.
+	# 3. Marketplaces parse, name this plugin, and carry no stale version. Claude's
+	# entry must carry one; the Codex marketplace carries none today, and one added
+	# there would have to match too (and be taught to bump.py).
 	for rel in (".claude-plugin/marketplace.json", ".agents/plugins/marketplace.json"):
 		data = json.loads((ROOT / rel).read_text(encoding="utf-8"))
 		plugins = data.get("plugins", [])
@@ -87,7 +153,7 @@ def main():
 		if plugins:
 			entry = plugins[0]
 			check(entry.get("name") == NAME, f"{rel}: plugin name != {NAME!r}")
-			if rel.startswith(".claude-plugin"):
+			if rel.startswith(".claude-plugin") or "version" in entry:
 				check(entry.get("version") == canonical, f"{rel}: plugin version {entry.get('version')!r} != {canonical!r}")
 
 	# Every version string the README hardcodes must be the current one: the
@@ -117,6 +183,12 @@ def main():
 		fm = text.split("---", 2)[1] if text.count("---") >= 2 else ""
 		check(re.search(r"^name:", fm, re.MULTILINE) is not None, f"{skill.relative_to(ROOT)}: needs name")
 		check(re.search(r"^description:", fm, re.MULTILINE) is not None, f"{skill.relative_to(ROOT)}: needs description")
+		# Every harness loads skills/; only Claude loads skills-claude/. A key one
+		# harness gives meaning to and another ignores is a silent difference.
+		if skill.parent.parent.name == "skills":
+			extra = non_portable_keys(text)
+			check(not extra, f"{skill.relative_to(ROOT)}: non-portable frontmatter {extra}; Claude-only keys "
+				"belong under skills-claude/, and a new portable key goes in PORTABLE_SKILL_KEYS on purpose")
 	commands = sorted((ROOT / "commands").glob("*.md"))
 	check(not commands, "commands/: duplicate native skill wrappers must not be reintroduced")
 
@@ -134,6 +206,7 @@ def main():
 			for declared in (value if isinstance(value, list) else [value] if value else []):
 				check((ROOT / declared).exists(), f"{rel}: {key} points at {declared}, which does not exist")
 
+	# 6a. Hook files parse in their own harness's format.
 	shared_hooks = ROOT / "hooks" / "hooks.json"
 	check(shared_hooks.is_file(), "hooks/hooks.json is missing (Claude Code reads it)")
 	if shared_hooks.is_file():
@@ -162,7 +235,10 @@ def main():
 	for entry in pre:
 		check(bool(entry.get("matcher")), "hooks/hooks.json: PreToolUse needs a matcher, or it spawns on every tool call")
 
-	# Claude injects its policy at session start; Cursor reads the native rule.
+	# 6c. Claude injects its policy at session start; Cursor reads the native
+	# rule. Below, every hook command in every native manifest, observers
+	# included, names its harness, keeps a sane timeout, and reaches a shipped
+	# script, and the modules those scripts load import cleanly.
 	session_start = (shared_data.get("hooks") or {}).get("SessionStart") or []
 	check(bool(session_start), "hooks/hooks.json: no SessionStart entry (the payload emitter is not wired)")
 	for entry in session_start:
@@ -259,9 +335,9 @@ def main():
 			f"scripts/emit_payload.py ({harness}): output is missing the routing stanza this machine's config renders",
 		)
 
-	# The one sentence the payload must keep: the guard refuses a dispatch that
-	# names no model, and a model that does not know that wastes a turn finding
-	# out. Prose elsewhere may be trimmed; this line pays for itself.
+	# 4a. The one sentence the payload must keep: the guard refuses a dispatch
+	# that names no model, and a model that does not know that wastes a turn
+	# finding out. Prose elsewhere may be trimmed; this line pays for itself.
 	payload_text = (ROOT / "rules" / "preferences.md").read_text(encoding="utf-8")
 	check(all(tier in payload_text for tier in ("Cheap:", "Standard:", "Parent-level:")), "rules/preferences.md: missing three-tier guidance")
 	# The escalation contract is two tokens the guard and the observer parse:
@@ -270,9 +346,10 @@ def main():
 	check("Escalation from" in payload_text and "Result:" in payload_text,
 		"rules/preferences.md: missing the escalation contract (Escalation from / Result:)")
 
-	# The Codex TOMLs are hand-maintained twins of agents/*.md. Nothing syncs
-	# them, so a contract edited into one body and not the other would ship two
-	# different workers under one tier name. Compare the decoded string exactly.
+	# 5a-twins. The Codex TOMLs are hand-maintained twins of agents/*.md. Nothing
+	# syncs them, so a contract edited into one body and not the other would ship
+	# two different workers under one tier name. Compare the decoded string
+	# exactly.
 	for name in installer.CODEX_AGENTS:
 		md = ROOT / "agents" / f"{name}.md"
 		toml = ROOT / "payload" / "codex-agents" / f"{name}.toml"
@@ -286,10 +363,10 @@ def main():
 			decoded = None
 		check(decoded == body, f"payload/codex-agents/{name}.toml: developer_instructions differs from agents/{name}.md body")
 
-	# Payload files copied by the installer must carry the provenance string, or
-	# it will mistake its own installed copy for a stranger's file and refuse to
-	# upgrade or remove it. The list is derived from the installer's own copy sets,
-	# so a skill added there can never slip past this check.
+	# 5a-copies. Payload files copied by the installer must carry the provenance
+	# string, or it will mistake its own installed copy for a stranger's file and
+	# refuse to upgrade or remove it. The list is derived from the installer's
+	# own copy sets, so a skill added there can never slip past this check.
 	copied = ["skills/install/SKILL.md"]
 	copied.extend(f"payload/codex-agents/{name}.toml" for name in installer.CODEX_AGENTS)
 	for name in installer.OPENCODE_SKILLS:
@@ -301,7 +378,8 @@ def main():
 		if path.is_file():
 			check(installer.PROVENANCE in path.read_text(encoding="utf-8"), f"{rel}: must contain {installer.PROVENANCE!r} so the installer recognises its own copy")
 
-	# Frozen pre-v12 ownership evidence, not an inventory of current payloads.
+	# 5a-legacy. Frozen pre-v12 ownership evidence, not an inventory of current
+	# payloads.
 	legacy = json.loads((ROOT / "payload/legacy-copy-hashes.json").read_text())
 	check(legacy.get("schema") == 1, "legacy hashes: unsupported schema")
 	check(bool(re.fullmatch(r"[0-9a-f]{40}", str(legacy.get("source_commit", "")))),
@@ -311,15 +389,16 @@ def main():
 		and all(isinstance(h, str) and re.fullmatch(r"[0-9a-f]{64}", h) for h in hashes)
 		and hashes == sorted(set(hashes)), "legacy hashes: expected sorted unique SHA-256 digests")
 
-	# An OpenCode install bakes the absolute plugin root into every copy it makes.
-	# On the next upgrade the installer has to recover <plugin-root> from that
-	# baked path to recognise its own work by hash -- and when it cannot, the copy
-	# reads as a stranger's file, the target reports a conflict, and the whole
-	# transaction aborts. That is not a hypothetical: one skill file referenced
-	# only `<plugin-root>/skills/...`, the root detector looked only for
-	# `/scripts/*.py`, and a single unrecognised file blocked the entire upgrade.
-	# So require the round trip for every copied file, under roots chosen to be
-	# awkward: one containing a plugin directory name, one containing a space.
+	# 5a-roots. An OpenCode install bakes the absolute plugin root into every
+	# copy it makes. On the next upgrade the installer has to recover
+	# <plugin-root> from that baked path to recognise its own work by hash -- and
+	# when it cannot, the copy reads as a stranger's file, the target reports a
+	# conflict, and the whole transaction aborts. That is not a hypothetical: one
+	# skill file referenced only `<plugin-root>/skills/...`, the root detector
+	# looked only for `/scripts/*.py`, and a single unrecognised file blocked the
+	# entire upgrade. So require the round trip for every copied file, under
+	# roots chosen to be awkward: one containing a plugin directory name, one
+	# containing a space.
 	for root_text in ("/home/leo/.local/share/leos-agent", "/opt/agents/leos-agent",
 		"/Users/leo/Library/Application Support/leos-agent"):
 		for rel in sorted(set(copied)):
@@ -401,18 +480,22 @@ def main():
 			f"routing: {harness}'s rendered payload is not smaller than the unrendered file",
 		)
 
-	# 5c. Plugin-root references. Skill and command text points at plugin files
-	# through the <plugin-root> placeholder, and the OpenCode installer bakes the
-	# absolute root into its copies — so every referenced path must actually
-	# exist, or an install ships a command that can only fail.
-	for base in ("skills", "skills-claude", "commands", "commands-claude"):
+	# 5c. Plugin-root references. Skill, command, and agent text points at plugin
+	# files through the <plugin-root> placeholder and nothing else (see
+	# plugin_root_violations for why ${CLAUDE_PLUGIN_ROOT} is not portable), and
+	# the OpenCode installer bakes the absolute root into its copies — so every
+	# referenced path must actually exist, or an install ships a command that can
+	# only fail.
+	for base in BODY_DIRS:
 		for doc in sorted((ROOT / base).rglob("*.md")):
 			text = doc.read_text(encoding="utf-8")
+			problems = plugin_root_violations(text)
+			check(not problems, f"{doc.relative_to(ROOT)}: " + "; ".join(problems))
 			for ref in sorted({r.rstrip(".") for r in re.findall(r"<plugin-root>/([\w./-]+)", text)}):
 				check((ROOT / ref).exists(), f"{doc.relative_to(ROOT)}: <plugin-root>/{ref} does not exist")
 
-	# The OpenCode copy of the install skill is renamed to leo-install by a
-	# targeted regex in the installer; if the source name ever changes, that
+	# 5a-rename. The OpenCode copy of the install skill is renamed to leo-install
+	# by a targeted regex in the installer; if the source name ever changes, that
 	# regex would silently no-op and ship a dir/name mismatch.
 	install_fm = (ROOT / "skills" / "install" / "SKILL.md").read_text(encoding="utf-8").split("---", 2)[1]
 	check(

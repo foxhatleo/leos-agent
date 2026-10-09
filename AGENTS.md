@@ -36,8 +36,10 @@ The repo root *is* the plugin. Six manifests sit side by side over one tree:
 
 ## Gates and when to run them
 
-The pre-commit hook in `.githooks/` runs exactly these four. CI runs the same
-four on Ubuntu (Python 3.9 and 3.14) and macOS (Python 3.14):
+The pre-commit hook in `.githooks/` runs exactly these four. Git ignores it
+until a clone opts in with `git config core.hooksPath .githooks`, and it checks
+the working tree, unstaged edits included, not just what is staged. CI runs the
+same four on Ubuntu (Python 3.9 and 3.14) and macOS (Python 3.14):
 
 ```sh
 LEOS_AGENT_PRICE_REFRESH=off PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests
@@ -156,17 +158,19 @@ The policy in `rules/preferences.md` applies to work on this repo too.
   (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `HERMES_HOME`, `PI_CODING_AGENT_DIR`,
   `OPENCODE_CONFIG_DIR`, `OPENCODE_CONFIG`, `XDG_CONFIG_HOME`,
   `LEOS_AGENT_LOCAL_PATH`) so fixtures never reach real user files.
-- Never rely on `${CLAUDE_PLUGIN_ROOT}` in skill or command body text. It is
-  only guaranteed in `hooks.json`, MCP, and LSP configs. Skills resolve the
-  plugin root from `LEOS_AGENT_ROOT`, `CLAUDE_PLUGIN_ROOT`, `PLUGIN_ROOT`, or
-  the nearest ancestor containing `rules/preferences.md`, and pass an absolute
-  path to subagents. `check.py` lints for the placeholder.
+- Never rely on `${CLAUDE_PLUGIN_ROOT}` in skill, command, or agent body text.
+  Claude Code substitutes it there, but the other five harnesses read those
+  bodies verbatim, and Claude's own Bash tool environment lacks it. Skills
+  resolve the plugin root from `LEOS_AGENT_ROOT`, `CLAUDE_PLUGIN_ROOT`,
+  `PLUGIN_ROOT`, or the nearest ancestor containing `rules/preferences.md`, and
+  pass an absolute path to subagents. `check.py` lints for the placeholder.
 - Skills are either user-invoked (`disable-model-invocation: true`) or
   model-invoked, never ambiguous. `check.py` fails a skill missing the flag
   unless it is in the explicit model-invocable set.
 - Skill frontmatter stays within the portable subset all six harnesses accept.
   Claude-only extras (`allowed-tools`, `model`) live only under
-  `skills-claude/`.
+  `skills-claude/`. `check.py` fails any key under `skills/` outside its
+  explicit portable allowlist.
 - Anything touching a user's config file: atomic write, preserve mode and
   CRLF, follow symlinks, count and pair markers, refuse malformed markers,
   never create a harness config directory, never blind-edit JSONC. Backups go
