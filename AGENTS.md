@@ -27,7 +27,7 @@ The repo root *is* the plugin. Six manifests sit side by side over one tree:
 |---|---|
 | `rules/preferences.md` | The always-loaded policy. Cursor reads it raw as an always-apply rule; every other harness renders it live through `scripts/emit_payload.py` or a native hook. |
 | `skills/` | Portable skills. `skills-claude/` holds the two Claude-only ones. `reference/` subdirectories hold deferred procedure text. |
-| `agents/` | Claude Code agent profiles (`leo-cheap`, `leo-standard`, `leo-premium`, `leo-parent`, `leo-reviewer`; `leo-runner`/`leo-executor` are legacy aliases). |
+| `agents/` | Claude Code agent profiles (`leo-cheap`, `leo-standard`, `leo-premium`, `leo-parent`, `leo-reviewer`). The retired `leo-runner`/`leo-executor` names have no profile but still map to cheap/standard in routing code. |
 | `payload/` | Codex agent TOMLs, the bundled price catalog, legacy-copy hashes. |
 | `hooks/` | Native hook manifests per harness. Scripts they call live in `scripts/` so npm installs ship them. |
 | `scripts/` | Installer, guard, routing engine, diagnostics, release tooling. Stdlib-only Python, Python 3.9 floor. |
@@ -97,18 +97,20 @@ The policy in `rules/preferences.md` applies to work on this repo too.
 - Keep the orchestrator at least as capable as its workers. If work exceeds it,
   upgrade or hand off the main task rather than pull in stronger children. This
   is Leo's engineering policy; the guard enforces reference prices, not capability.
-- The dispatch guard (`scripts/dispatch_guard.py`) blocks an agent dispatch that
-  names no model on a harness that can name one. It is a cost guardrail, fails
-  open, and is not a security boundary. Plugin installs namespace agent types
+- The dispatch guard (`scripts/dispatch_guard.py`) blocks or corrects an agent
+  dispatch that names no model on a harness that can name one (on Claude, only
+  agents that would inherit the parent, and its own tiers). It is a cost
+  guardrail, fails open, and is not a security boundary. Plugin installs namespace agent types
   as `leos-agent:leo-cheap`; the guard recognises both forms.
 - Never relay a subagent's self-report as verification. Read the diff, run the
   command, check the registry. A worker's `Result:` line is a routing signal
   for the log, not evidence.
 - The dispatch log holds enums, booleans, counts, hashes, and tier tokens. No
   brief text, no result text, no evidence strings. `outcome.py` is the one
-  parser and returns nothing else. Cursor rows are status-only; Codex escalation
-  markers are `unobservable`; Hermes and Pi completion rows depend on the
-  installed build firing the hook, and the report names silent harnesses.
+  parser and returns nothing else. Cursor rows without a subagentStop summary
+  are status-only; Codex escalation markers are `unobservable`; Hermes and Pi
+  completion rows depend on the installed build firing the hook, and the
+  report names silent harnesses.
 - Tier labels are capability choices, not a guaranteed price ordering. Unknown
   IDs, ambiguous prices, and input/output crossovers remain explicit diagnostics.
   Price aliases must never rewrite the model ID sent to a harness. Catalog
@@ -156,11 +158,13 @@ The policy in `rules/preferences.md` applies to work on this repo too.
   (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `HERMES_HOME`, `PI_CODING_AGENT_DIR`,
   `OPENCODE_CONFIG_DIR`, `OPENCODE_CONFIG`, `XDG_CONFIG_HOME`,
   `LEOS_AGENT_LOCAL_PATH`) so fixtures never reach real user files.
-- Never rely on `${CLAUDE_PLUGIN_ROOT}` in skill or command body text. It is
-  only guaranteed in `hooks.json`, MCP, and LSP configs. Skills resolve the
-  plugin root from `LEOS_AGENT_ROOT`, `CLAUDE_PLUGIN_ROOT`, `PLUGIN_ROOT`, or
-  the nearest ancestor containing `rules/preferences.md`, and pass an absolute
-  path to subagents. `check.py` lints for the placeholder.
+- Never rely on `${CLAUDE_PLUGIN_ROOT}` in skill or command body text. Claude
+  Code substitutes it inline in skill, command, and agent bodies (not in the
+  Bash tool's environment), but the other five harnesses do not, so a portable
+  body cannot depend on it. Skills resolve the plugin root from
+  `LEOS_AGENT_ROOT`, `CLAUDE_PLUGIN_ROOT`, `PLUGIN_ROOT`, or the nearest
+  ancestor containing `rules/preferences.md`, and pass an absolute path to
+  subagents. `check.py` lints for the placeholder.
 - Skills are either user-invoked (`disable-model-invocation: true`) or
   model-invoked, never ambiguous. `check.py` fails a skill missing the flag
   unless it is in the explicit model-invocable set.
@@ -187,14 +191,17 @@ The policy in `rules/preferences.md` applies to work on this repo too.
   can precede parent transcript persistence and take the unknown-parent path.
 - **Codex** uses native `/hooks` trust for changed hook definitions; do not
   bypass it or assume enabling a plugin approves hooks. Batch related releases.
-  `spawn_agent` routes by `model` and `reasoning_effort`, not by agent name. Use `fork_turns="none"` for fresh
+  `spawn_agent` selects the model by `model` and `reasoning_effort`; `agent_type`,
+  offered once roles exist, layers its role config after them. Multi-agent v2
+  hooks name the tool `collaborationspawn_agent`. Use `fork_turns="none"` for fresh
   context. Customized profiles can override spawn selection. Encrypted or absent
   rollout briefs are unavailable data, not zero-length work.
 - **Cursor** remains best-effort. It has no per-agent tool restriction and no
   parent-agent identity at `subagentStart`; worker no-delegation is prose only.
   Validate against native templates and disclose runtime coverage separately.
-- **OpenCode** cannot load skills or commands from a JS plugin, so the
-  installer copies them with the absolute plugin root baked in. Its config is
+- **OpenCode** config can add skill directories (`skills.paths`, `skills.urls`)
+  and plugins get a `config(cfg)` hook, but the installer still copies skills
+  with the absolute plugin root baked in. Its config is
   JSONC with user comments; the installer preserves them and never writes the
   `instructions` line blind. `opencode plugin <pkg> --force` can report success
   while serving a lockfile-pinned old version. Git specs install directly.
