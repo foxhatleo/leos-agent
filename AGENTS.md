@@ -305,7 +305,9 @@ these contracts when changing it or `scripts/ghreview.py`:
   routing marker region, not per-harness template placeholders in the raw rule.
 - `watch-review` is Claude Code only and streaming only. Do not restore detached
   `claude -p`, blocking re-arm modes, or model-based polling: idle ticks cost
-  zero model tokens. npm publishing remains supported alongside git installs.
+  zero model tokens. Leo's accepted exception (2026-10-09): where Monitor has
+  no `persistent`, re-arming on expiry costs about one turn per re-arm. npm
+  publishing remains supported alongside git installs.
 
 ## When unsure
 
