@@ -25,7 +25,10 @@ import routing  # noqa: E402  owns the harness list and the machine-local model 
 ROUTING_OPEN = "<!-- leos-agent:routing -->"
 ROUTING_CLOSE = "<!-- /leos-agent:routing -->"
 
-OPEN_RE = re.compile(r"^<leos-agent\b[^>]*>[ \t]*$", re.MULTILINE)
+# The opener is the bare tag or the tag with attributes. `\b` alone would also
+# accept <leos-agent-notes> or <leos-agent:x>, read a user's own tag as a
+# marker, and abort the install over a pairing error that is not there.
+OPEN_RE = re.compile(r"^<leos-agent(?:[ \t][^>\n]*)?>[ \t]*$", re.MULTILINE)
 CLOSE_RE = re.compile(r"^</leos-agent>[ \t]*$", re.MULTILINE)
 
 

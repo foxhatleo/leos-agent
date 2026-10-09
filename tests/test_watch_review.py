@@ -128,7 +128,7 @@ class FakeGitHub:
             more = start + 50 < len(hits)
             return json.dumps({"data": {"search": {"nodes": hits[start:start + 50], "pageInfo": {
                 "hasNextPage": more, "endCursor": str(start + 50) if more else None}}}})
-        m = re.fullmatch(r"repos/([^/]+/[^/]+)(?:/pulls/(\d+)(/files)?)?", args[1])
+        m = re.fullmatch(r"repos/([^/]+/[^/]+)(?:/pulls/(\d+)(/files)?)?(?:\?per_page=\d+)?", args[1])
         if not m or m.group(1).lower() != self.full_name.lower():
             raise self.error("HTTP 404: Not Found (%s)" % args[1])
         if m.group(2) is None:
@@ -886,8 +886,14 @@ class HostCase(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.state = Path(self.tmp.name) / "state.json"
         self.github = FakeGitHub(self.w.GhError)
+        # ghreview's SHA-addressed cache lives under the data root; keep it here.
+        env = mock.patch.dict(os.environ, {"LEOS_AGENT_LOCAL_PATH": str(Path(self.tmp.name) / "local")})
+        env.start()
+        self.addCleanup(env.stop)
+        # The fake models no base branch, so no .gitattributes generated rules.
         for target, name, value in ((self.w.state_mod, "state_file", lambda _name: str(self.state)),
-                                    (self.w, "gh", self.github), (self.w.ghreview, "gh", self.github)):
+                                    (self.w, "gh", self.github), (self.w.ghreview, "gh", self.github),
+                                    (self.w.ghreview, "generated_rules", lambda _repo, _pr: [])):
             patch = mock.patch.object(target, name, value)
             patch.start()
             self.addCleanup(patch.stop)
