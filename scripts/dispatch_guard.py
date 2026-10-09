@@ -52,6 +52,24 @@ OPAQUE_BRIEF_TOOLS = ("spawn_agent",)
 
 ALLOW, BLOCK = "allow", "block"
 
+# Set to the plugin root by hooks/claude-spawn.js inside the Claude Code process
+# once its agent.spawn hook is live. That hook then makes the decision and
+# writes the row, so this plugin's own command hook -- the one process that also
+# carries CLAUDE_PLUGIN_ROOT for that root -- must do neither.
+SPAWN_MOD_ENV = "LEOS_AGENT_CLAUDE_SPAWN_MOD"
+
+
+def spawn_mod_decides():
+    """Whether this is the command hook of a Claude Code process whose agent.spawn
+    mod decides dispatches. A Bash-tool child inherits the marker but not
+    CLAUDE_PLUGIN_ROOT, so tests and manual runs inside a session still decide."""
+    marker, root = os.environ.get(SPAWN_MOD_ENV), os.environ.get("CLAUDE_PLUGIN_ROOT")
+    try:
+        return bool(marker and root) and os.path.realpath(marker) == os.path.realpath(root)
+    except (OSError, ValueError):
+        return False
+
+
 # Path-ish tokens in a brief. Scanning is capped at the first 8 KiB -- the
 # feature does not improve past that and a hot path should not read a novel.
 PATH_SCAN_BYTES = 8192
@@ -235,6 +253,8 @@ def main(argv=None):
         _breadcrumb(harness({}), ValueError("hook input must be an object"))
         return 0
     name = harness(event)
+    if name == "claude" and "--json" not in argv and spawn_mod_decides():
+        return 0  # the agent.spawn mod decides and logs this dispatch
     result = process(event, name)
     if "--json" in argv:
         print(json.dumps(result))

@@ -1,4 +1,5 @@
 {
+  "modules": ["./claude-spawn.js"],
   "hooks": {
     "SessionStart": [
       {
