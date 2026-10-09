@@ -19,10 +19,15 @@ HEAD_LINES = 5
 TAIL_LINES = 40
 
 _WRAP = "*_`~ \t"
-_RESULT_RE = re.compile(r"^result[*_`]*\s*[:\-][\s*_`]*([a-z]+)\b", re.IGNORECASE)
+# The token must end the word: an echoed contract template such as
+# `Result: done|partial|blocked|escalate` is not a `done`.
+_RESULT_RE = re.compile(r"^result[*_`]*\s*[:\-][\s*_`]*([a-z]+)(?=$|[\s.,;!)*_`~])", re.IGNORECASE)
 _VERIFIED_RE = re.compile(r"^verified[*_`]*\s*[:\-](.*)$", re.IGNORECASE)
 _ESCALATION_RE = re.compile(r"^escalation\s+from\s+(cheap|standard|premium)\b[*_`]*\s*:", re.IGNORECASE)
-_NO_EVIDENCE = frozenset(("", "none", "n/a", "na", "-", "no", "nothing", "not verified", "unverified"))
+# Decided from the first word, so `none (read-only task)`, `None - no tests
+# exist` and `not run` all read as no evidence rather than as stated evidence.
+_NO_EVIDENCE = frozenset(("", "none", "n/a", "na", "no", "nothing", "not", "unverified", "untested", "skipped"))
+_FIRST_WORD_RE = re.compile(r"[^\s(\[,;:.!?\u2013\u2014-]*")
 
 
 def _normalise(line):
@@ -35,6 +40,14 @@ def _normalise(line):
 
 def _unwrap(value):
     return value.strip().strip(_WRAP).rstrip(".").strip().casefold()
+
+
+def _evidence(value):
+    """True for stated evidence, False for none, None for an unfilled `<placeholder>`."""
+    text = _unwrap(value)
+    if text.startswith("<"):
+        return None
+    return _FIRST_WORD_RE.match(text).group(0) not in _NO_EVIDENCE
 
 
 def parse(text):
@@ -60,9 +73,10 @@ def parse(text):
                 continue
         if not found_verified:
             match = _VERIFIED_RE.match(line)
-            if match:
+            stated = _evidence(match.group(1)) if match else None
+            if stated is not None:
                 found_verified = True
-                result["verified"] = _unwrap(match.group(1)) not in _NO_EVIDENCE
+                result["verified"] = stated
         if found_result and found_verified:
             break
     return result

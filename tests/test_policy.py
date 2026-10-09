@@ -11,32 +11,88 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
-class TestRouting(unittest.TestCase):
-    def test_codex_profiles_match_their_work(self):
-        runner = (ROOT / "payload" / "codex-agents" / "leo-runner.toml").read_text(encoding="utf-8")
-        executor = (ROOT / "payload" / "codex-agents" / "leo-executor.toml").read_text(encoding="utf-8")
-        for text in (runner, executor):
-            self.assertNotIn('model =', text)
-            self.assertNotIn('model_reasoning_effort =', text)
-        self.assertIn('cheap worker', runner)
-        self.assertIn('standard worker', executor)
+WORKERS = {"leo-cheap": "haiku", "leo-standard": "sonnet", "leo-premium": "opus", "leo-parent": "inherit"}
 
-    def test_claude_agents_match_their_work(self):
-        # The Claude twins bake the tier's model into the agent type, so a brief
-        # that names the profile cannot silently inherit the parent model.
-        runner = (ROOT / "agents" / "leo-runner.md").read_text(encoding="utf-8")
-        executor = (ROOT / "agents" / "leo-executor.md").read_text(encoding="utf-8")
-        self.assertIn("model: haiku", runner)
-        self.assertIn("model: sonnet", executor)
-        runner_tools = re.search(r"(?m)^tools:\s*(.+)$", runner).group(1)
-        executor_tools = re.search(r"(?m)^tools:\s*(.+)$", executor).group(1)
-        # The runner is the lens role for hostile-diff fan-outs: no Write, no Edit.
-        self.assertIn("Edit", runner_tools)
-        self.assertIn("Write", runner_tools)
-        self.assertIn("disallowedTools: Agent", runner)
-        self.assertIn("Bash", runner_tools)
-        self.assertIn("Edit", executor_tools)
-        self.assertIn("Write", executor_tools)
+# Plugin-agent frontmatter Claude Code reads (plugins reference, "Frontmatter
+# fields in plugin agents"). It ignores any other key without an error, so a
+# misspelled `max_turns` would silently ship an uncapped worker.
+CLAUDE_PLUGIN_AGENT_FIELDS = {
+    "name", "description", "model", "effort", "maxTurns", "tools", "disallowedTools", "skills",
+    "memory", "background", "omitClaudeMd", "isolation", "color", "experimental",
+}
+
+# OpenCode moves every agent key outside this set into `options`, which reach
+# the provider as model options (packages/core/src/v1/config/agent.ts).
+OPENCODE_AGENT_KEYS = {
+    "name", "model", "variant", "prompt", "description", "temperature", "top_p", "mode", "hidden",
+    "color", "steps", "maxSteps", "options", "permission", "disable", "tools",
+}
+
+
+def frontmatter_keys(text):
+    fm = text.split("---", 2)[1]
+    return {m.group(1): m.group(2).strip() for m in re.finditer(r"(?m)^([A-Za-z_][\w-]*):(.*)$", fm)}
+
+
+class TestRouting(unittest.TestCase):
+    def test_codex_profiles_leave_selection_to_the_spawn(self):
+        for name in WORKERS:
+            text = (ROOT / "payload" / "codex-agents" / f"{name}.toml").read_text(encoding="utf-8")
+            with self.subTest(profile=name):
+                self.assertNotIn('model =', text)
+                self.assertNotIn('model_reasoning_effort =', text)
+
+    def test_claude_workers_bake_their_tier_model_and_cannot_delegate(self):
+        # The Claude profiles bake the tier's model into the agent type, so a
+        # brief that names the profile cannot silently inherit the parent model.
+        for name, model in WORKERS.items():
+            fields = frontmatter_keys((ROOT / "agents" / f"{name}.md").read_text(encoding="utf-8"))
+            with self.subTest(profile=name):
+                self.assertEqual(fields["model"], model)
+                self.assertEqual(fields["disallowedTools"], "Agent")
+                tools = {t.strip() for t in fields["tools"].split(",")}
+                self.assertTrue({"Read", "Edit", "Write", "Bash"} <= tools)
+                self.assertNotIn("Agent", tools)
+
+    def test_claude_workers_cap_turns_no_lower_than_the_tier_below(self):
+        caps = []
+        for name in WORKERS:
+            value = frontmatter_keys((ROOT / "agents" / f"{name}.md").read_text(encoding="utf-8")).get("maxTurns")
+            with self.subTest(profile=name):
+                self.assertIsNotNone(value, "an absent cap means the worker can run unbounded")
+                self.assertRegex(value, r"^[1-9][0-9]*$")
+            caps.append(int(value))
+        self.assertEqual(caps, sorted(caps), "a higher tier must not get fewer turns than a lower one")
+
+    def test_claude_agent_frontmatter_uses_only_keys_claude_code_reads(self):
+        for path in sorted((ROOT / "agents").glob("*.md")):
+            with self.subTest(agent=path.stem):
+                keys = set(frontmatter_keys(path.read_text(encoding="utf-8")))
+                self.assertEqual(keys - CLAUDE_PLUGIN_AGENT_FIELDS, set())
+
+    def test_claude_only_frontmatter_never_reaches_other_harness_agents(self):
+        spec = importlib.util.spec_from_file_location("leo_install_policy_test", ROOT / "scripts" / "leo-install.py")
+        installer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(installer)
+        for name in installer.CODEX_AGENTS:
+            for harness in ("cursor", "opencode"):
+                with self.subTest(agent=name, harness=harness):
+                    keys = set(frontmatter_keys(installer.native_agent(ROOT, name, harness, {})))
+                    self.assertNotIn("maxTurns", keys)
+                    if harness == "opencode":
+                        self.assertEqual(keys - OPENCODE_AGENT_KEYS, set())
+
+    def test_retired_alias_names_still_route_without_profile_files(self):
+        # Old briefs and dispatch-log rows keep their tier after the profiles go.
+        sys.path.insert(0, str(ROOT / "scripts"))
+        try:
+            import routing_engine
+        finally:
+            sys.path.pop(0)
+        for alias, tier in (("leo-runner", "cheap"), ("leos-agent:leo-executor", "standard")):
+            with self.subTest(alias=alias):
+                self.assertFalse((ROOT / "agents" / f"{alias.split(':')[-1]}.md").exists())
+                self.assertEqual(routing_engine.tier_for(alias), tier)
 
     def test_escalation_contract_tokens_are_present_wherever_they_are_parsed_from(self):
         # The guard parses the brief header and the observer parses the worker's
@@ -86,13 +142,12 @@ class TestInvocationPolicy(unittest.TestCase):
 class TestPluginRootConvention(unittest.TestCase):
     """Every skill resolves the plugin root; none builds a path from the env var.
 
-    `${CLAUDE_PLUGIN_ROOT}` is a *hook* substitution (hooks/README.md) — the
-    harness expands it in a hook command string. It is not exported to every
-    tool a skill drives: a subagent does not inherit it, and neither does a
-    process handed to Claude Code's Monitor tool. A skill that hardcodes it into
-    a command ships one that runs `python3 /scripts/….py`, and a model that
-    tries to expand it itself has nothing to expand it from but the directory
-    the SKILL.md was read out of -- which is never the plugin root.
+    Claude Code substitutes `${CLAUDE_PLUGIN_ROOT}` inline in skill bodies, but
+    the other five harnesses read the same files literally, and Claude does not
+    export it to the Bash tool or to Monitor processes. A skill that hardcodes
+    it into a command ships one that runs `python3 /scripts/….py` there, and a
+    model that tries to expand it itself has nothing to expand it from but the
+    directory the SKILL.md was read out of -- which is never the plugin root.
     """
 
     DIRS = ("skills", "skills-claude", "commands", "commands-claude")

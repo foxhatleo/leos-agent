@@ -2,7 +2,8 @@
 """Harness-aware offline dispatch guard.
 
 CLI: native command-hook output by default; --json emits the adapter protocol.
-LEOS_AGENT_DISPATCH_GUARD=on|warn|off. Errors fail open and are logged distinctly.
+LEOS_AGENT_DISPATCH_GUARD=on|warn|off; 0/false/no/disabled also mean off.
+Errors fail open and are logged distinctly.
 """
 import collections
 import json
@@ -38,19 +39,39 @@ SKIP_PREFIXES = ("mcp__",)
 SKIP_TOOLS = frozenset()
 
 # Dispatch tools that select behaviour by model rather than by naming an agent,
-# so the agent-key rule alone would never see them. Exact names only, and only
-# ones observed in a real rollout: Codex's spawn_agent takes
-# {task_name, message, fork_turns, model, reasoning_effort} -- task_name is a
-# free-text label, so `model` is the entire routing decision there.
-DISPATCH_TOOLS = ("spawn_agent",)
+# so the agent-key rule alone would never see them. Exact names only, each one
+# observed in a rollout or in the harness's hook-name code: Codex's spawn_agent
+# takes {task_name, message, fork_turns, model, reasoning_effort} and, when roles
+# are installed, agent_type. task_name is a free-text label; agent_type selects
+# a role whose config applies after the model override. Multi-agent v2 hooks see
+# the namespaced name collaborationspawn_agent (namespace and name joined).
+DISPATCH_TOOLS = ("spawn_agent", "collaborationspawn_agent")
 
 # Tools whose brief does not arrive as readable text. Codex encrypts `message`,
 # so its length is a proxy at best and its hash changes on every re-send. Both
 # the size heuristic and the conversion hash are suppressed rather than reported
 # as if they meant something.
-OPAQUE_BRIEF_TOOLS = ("spawn_agent",)
+OPAQUE_BRIEF_TOOLS = DISPATCH_TOOLS
 
 ALLOW, BLOCK = "allow", "block"
+
+# Set to the plugin root by hooks/claude-spawn.js inside the Claude Code process
+# once its agent.spawn hook is live. That hook then makes the decision and
+# writes the row, so this plugin's own command hook -- the one process that also
+# carries CLAUDE_PLUGIN_ROOT for that root -- must do neither.
+SPAWN_MOD_ENV = "LEOS_AGENT_CLAUDE_SPAWN_MOD"
+
+
+def spawn_mod_decides():
+    """Whether this is the command hook of a Claude Code process whose agent.spawn
+    mod decides dispatches. A Bash-tool child inherits the marker but not
+    CLAUDE_PLUGIN_ROOT, so tests and manual runs inside a session still decide."""
+    marker, root = os.environ.get(SPAWN_MOD_ENV), os.environ.get("CLAUDE_PLUGIN_ROOT")
+    try:
+        return bool(marker and root) and os.path.realpath(marker) == os.path.realpath(root)
+    except (OSError, ValueError):
+        return False
+
 
 # Path-ish tokens in a brief. Scanning is capped at the first 8 KiB -- the
 # feature does not improve past that and a hot path should not read a novel.
@@ -109,10 +130,12 @@ def normalize(event, _harness=None):
 
     agent = _first_str(args, AGENT_KEYS)
     prompt = _first_str(args, PROMPT_KEYS)
-    if tool == "delegate_task" and args.get("action", "spawn") == "spawn":
-        tasks = args.get("tasks") or ([args] if args.get("goal") else [])
-        prompt = "\n".join(str(task.get("goal", "")) for task in tasks if isinstance(task, dict))
-        agent = "delegate_task"
+    if tool == "delegate_task":
+        from routing_engine import hermes_spawn
+        if hermes_spawn(args):
+            tasks = args.get("tasks") or ([args] if args.get("goal") else [])
+            prompt = "\n".join(str(task.get("goal", "")) for task in tasks if isinstance(task, dict))
+            agent = "delegate_task"
     known = tool in DISPATCH_TOOLS
     if not prompt or not (agent or known):
         return None
@@ -162,6 +185,15 @@ def triviality(dispatch):
     return min(score, 3)
 
 
+def _corrected(dispatch, updated):
+    """Log the agent that runs. An OpenCode correction swaps the agent itself,
+    and a row under the requested one would report its tier as unrouted."""
+    if dispatch is None or not isinstance(updated, dict):
+        return dispatch
+    agent = _first_str(updated, AGENT_KEYS)
+    return dispatch._replace(agent=agent) if agent else dispatch
+
+
 def render_block(result=None):
     retry = (result or {}).get("retry", "Retry with an explicit model within the parent price ceiling.")
     return "[leo routing] BLOCKED: " + (result or {}).get("reason", "model choice required") + ". " + retry
@@ -177,25 +209,59 @@ def _log(entry):
         pass
 
 
+# Claude Code reads its boolean environment variables as one of these,
+# case-insensitive and trimmed; anything else, including unset, is false.
+CLAUDE_TRUE = frozenset(("1", "true", "yes", "on"))
+
+
+def claude_flag(name):
+    """Whether Claude Code would treat environment variable `name` as on."""
+    return os.environ.get(name, "").strip().lower() in CLAUDE_TRUE
+
+
+GUARD_OFF = frozenset(("off", "0", "false", "no", "disable", "disabled"))
+GUARD_ON = frozenset(("on", "1", "true", "yes", "enable", "enabled", ""))
+
+
+def guard_mode():
+    """(mode, diagnostic) from LEOS_AGENT_DISPATCH_GUARD.
+
+    The common falsy spellings switch the guard off. An unrecognized value
+    keeps it on, the safe reading for a cost guard, and says so in the log.
+    """
+    raw = os.environ.get("LEOS_AGENT_DISPATCH_GUARD", "on").strip().lower()
+    if raw in GUARD_OFF:
+        return "off", None
+    if raw == "warn":
+        return "warn", None
+    return "on", None if raw in GUARD_ON else "unrecognized-guard-mode"
+
+
 def process(event, name=None):
     """Shared mode handling, decision and logging for command/in-process adapters."""
-    from routing_engine import route
-    from session_models import parent_model
+    from routing_engine import dispatch_tool, route
     name = name or harness(event)
-    mode = os.environ.get("LEOS_AGENT_DISPATCH_GUARD", "on").strip().lower()
+    mode, mode_diagnostic = guard_mode()
     result = {"action": "allow", "reason": "disabled" if mode == "off" else "not-a-dispatch", "updated_input": None}
     if mode == "off" or not isinstance(event, dict):
         return result
     tool = _first_str(event, TOOL_KEYS)
     args = _first_dict(event, INPUT_KEYS)
+    # Decide whether this is a dispatch before reading up to 1 MiB of transcript.
+    if not dispatch_tool(name, tool) or args is None:
+        return result
     try:
+        from session_models import parent_model
         parent = parent_model(event, name)
         effective = event.get("effective_model")
-        if name == "claude" and os.environ.get("CLAUDE_CODE_SUBAGENT_MODEL_FORCE") == "1":
-            forced = os.environ.get("CLAUDE_CODE_SUBAGENT_MODEL") or parent
+        if name == "claude" and claude_flag("CLAUDE_CODE_SUBAGENT_MODEL_FORCE"):
+            forced = os.environ.get("CLAUDE_CODE_SUBAGENT_MODEL", "").strip() or parent
             result = route(name, tool, args, parent, effective_model=forced)
-            # Forced settings cannot be overridden by updatedInput.
-            if (result.get("price") or {}).get("status") == "over-ceiling":
+            # Forced settings cannot be overridden by updatedInput. A fork runs
+            # on the parent whatever the setting, so nothing is forced there.
+            if result["reason"] in ("not-a-dispatch", "fork-inherits-parent"):
+                pass
+            elif (result.get("price") or {}).get("status") == "over-ceiling":
                 result.update(action="block", reason="forced-model-over-ceiling", updated_input=None,
                               retry="The forced subagent model exceeds the parent. Change the force setting or do this work locally.")
             else:
@@ -207,6 +273,8 @@ def process(event, name=None):
         dispatch = normalize(event, name)
         import dispatch_log
         action = result["action"]
+        if action == "correct" and mode != "warn":
+            dispatch = _corrected(dispatch, result.get("updated_input"))
         if mode == "warn" and action in ("block", "correct"):
             result.update(action="warn", proposed_action=action, updated_input=None)
         entry = dispatch_log.record(dispatch, result["action"], result["reason"], name,
@@ -214,6 +282,11 @@ def process(event, name=None):
                                     _first_str(event, ("cwd", "workspace", "directory")), triviality(dispatch))
         entry.update({k: result.get(k) for k in ("requested_model", "effective_model", "price", "proposed_action")})
         entry["call_id"] = event.get("tool_use_id") or event.get("call_id") or event.get("toolCallId")
+        # One token per row: an invalid routing config outranks an unrecognized
+        # guard mode, which doctor also reports.
+        diagnostic = result.get("diagnostic") or mode_diagnostic
+        if diagnostic:
+            entry["diagnostic"] = diagnostic
         _log(entry)
         return result
     except Exception as exc:
@@ -229,12 +302,14 @@ def main(argv=None):
             raise ValueError("hook input exceeded 2 MiB")
         event = json.loads(raw) if raw.strip() else {}
     except Exception as exc:
-        _breadcrumb(harness({}), exc)
+        _breadcrumb(harness({}), exc, "invalid-hook-input")
         return 0
     if not isinstance(event, dict):
-        _breadcrumb(harness({}), ValueError("hook input must be an object"))
+        _breadcrumb(harness({}), ValueError("hook input must be an object"), "invalid-hook-input")
         return 0
     name = harness(event)
+    if name == "claude" and "--json" not in argv and spawn_mod_decides():
+        return 0  # the agent.spawn mod decides and logs this dispatch
     result = process(event, name)
     if "--json" in argv:
         print(json.dumps(result))
@@ -250,7 +325,9 @@ def main(argv=None):
     return 0
 
 
-def _breadcrumb(name, exc):
+def _breadcrumb(name, exc, reason="guard-error"):
+    """An error row: an enum and the exception's type name. Never its message,
+    which can carry paths and config values the log must not keep."""
     try:
         import dispatch_log
         dispatch_log.append({
@@ -258,7 +335,8 @@ def _breadcrumb(name, exc):
             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "harness": name,
             "decision": "error",
-            "reason": "%s: %s" % (type(exc).__name__, exc),
+            "reason": reason,
+            "error_type": type(exc).__name__,
         })
     except Exception:
         pass

@@ -38,6 +38,23 @@ class Parse(unittest.TestCase):
         self.assertNotIn("private", repr(parsed))
         self.assertIsNone(outcome.parse("Result: done")["verified"])
 
+    def test_no_evidence_is_decided_by_the_first_word(self):
+        for value in ("none (read-only task)", "None - no tests exist", "not run", "N/A: docs only", "nothing to run",
+                      "untested", "skipped, no harness", "-", "—"):
+            self.assertIs(outcome.parse("Result: done\nVerified: " + value)["verified"], False, value)
+        for value in ("ran pytest", "`npm test` green", "✓ unittest", "nonexistent-file check passed", "notebook re-run"):
+            self.assertIs(outcome.parse("Result: done\nVerified: " + value)["verified"], True, value)
+
+    def test_an_echoed_contract_template_is_not_an_outcome(self):
+        template = ("End your reply with two lines: `Result: done|partial|blocked|escalate` and\n"
+                    "`Verified: <the command or evidence you ran, or none>`.")
+        self.assertEqual(outcome.parse(template), {"outcome": "unknown", "verified": None})
+        self.assertEqual(outcome.parse("Result: done\nVerified: pytest\n\n" + template), {"outcome": "done", "verified": True})
+        for line in ("Result: done|partial", "Result: done/blocked", "Result: doneish"):
+            self.assertEqual(outcome.parse(line)["outcome"], "unknown", line)
+        for line in ("Result: done.", "Result: `done` (green)", "Result: **done**", "Result: done, with notes"):
+            self.assertEqual(outcome.parse(line)["outcome"], "done", line)
+
     def test_only_the_tail_is_read(self):
         text = "Result: done\n" + ("x\n" * 5000) + "Result: blocked"
         self.assertEqual(outcome.parse(text)["outcome"], "blocked")
