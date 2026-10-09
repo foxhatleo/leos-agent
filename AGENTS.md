@@ -187,7 +187,9 @@ The policy in `rules/preferences.md` applies to work on this repo too.
   can precede parent transcript persistence and take the unknown-parent path.
 - **Codex** uses native `/hooks` trust for changed hook definitions; do not
   bypass it or assume enabling a plugin approves hooks. Batch related releases.
-  `spawn_agent` routes by `model` and `reasoning_effort`, not by agent name. Use `fork_turns="none"` for fresh
+  `spawn_agent` selects the model by `model` and `reasoning_effort`; `agent_type`,
+  offered once roles exist, layers its role config after them. Multi-agent v2
+  hooks name the tool `collaborationspawn_agent`. Use `fork_turns="none"` for fresh
   context. Customized profiles can override spawn selection. Encrypted or absent
   rollout briefs are unavailable data, not zero-length work.
 - **Cursor** remains best-effort. It has no per-agent tool restriction and no

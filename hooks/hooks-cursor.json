@@ -9,7 +9,7 @@
     ],
     "subagentStart": [
       {
-        "command": "python3 ./scripts/cursor_hook.py",
+        "command": "python3 ./scripts/cursor_hook.py subagentStart",
         "timeout": 10
       }
     ],
