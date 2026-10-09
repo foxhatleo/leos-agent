@@ -39,6 +39,17 @@ def pr(number=1, head="a" * 40, draft=False, requested=("leo",), reviews=()):
     }
 
 
+def stage_report(**overrides):
+    """A clean stage report as this release's ghreview.py writes it."""
+    base = {"repo": "o/r", "pr": 1, "commit": "a" * 40, "complete": True, "review_created": True,
+            "staged": 1, "carried": 0, "notes": 0, "omitted": [], "verdict": "neutral",
+            "diff_fingerprint": "d1", "coverage": {"files_changed": 1, "files_reviewed": 1,
+                                                   "files_skipped_generated": [], "unreviewed": [],
+                                                   "complete": True}}
+    base.update(overrides)
+    return base
+
+
 class TestEligibility(unittest.TestCase):
     def setUp(self):
         self.watcher = load_watcher()
@@ -350,9 +361,10 @@ class TestClaimsAndPagination(unittest.TestCase):
                 self.w.main(["record", "1", "--head", "a" * 40, "--result", str(report)])
             # The acknowledgement is the new bypass surface. It dismisses omitted
             # findings; it must not stand in for a stage that never made a review.
-            report.write_text(json.dumps({"repo": "o/r", "pr": 1, "commit": "a" * 40,
-                                          "complete": False,
-                                          "omitted": [{"path": "a.py", "reason": "malformed"}]}))
+            report.write_text(json.dumps(stage_report(
+                complete=False, review_created=False, staged=0,
+                verdict="seriously-problematic",
+                omitted=[{"path": "a.py", "reason": "malformed"}])))
             with self.assertRaisesRegex(ValueError, "no review was created"):
                 self.w.main(["record", "1", "--head", "a" * 40, "--result", str(report),
                              "--acknowledge-omitted", "not our call"])
@@ -361,17 +373,15 @@ class TestClaimsAndPagination(unittest.TestCase):
     def test_a_carried_finding_records_without_an_override(self):
         """One finding the diff could not anchor used to make a head
         permanently unrecordable. It is carried in the review body now."""
-        report = Path(self.tmp.name) / "result.json"
-        report.write_text(json.dumps({"repo": "o/r", "pr": 1, "commit": "a" * 40,
-                                      "complete": True, "review_created": True,
-                                      "staged": 1, "carried": 1, "omitted": []}))
+        path = Path(self.tmp.name) / "result.json"
+        path.write_text(json.dumps(stage_report(carried=1)))
         with mock.patch.object(self.w, "identity", return_value=("o/r", "leo")):
-            self.w.main(["record", "1", "--head", "a" * 40, "--result", str(report)])
+            self.w.main(["record", "1", "--head", "a" * 40, "--result", str(path)])
         self.assertEqual(self.w.reviewed_heads("o/r"), {1: "a" * 40})
 
     def test_an_omission_is_refused_until_it_is_acknowledged_with_reasons(self):
-        base = {"repo": "o/r", "pr": 1, "commit": "a" * 40, "complete": False,
-                "review_created": True, "staged": 1, "carried": 0}
+        base = stage_report(complete=False)
+        del base["omitted"]
         report = Path(self.tmp.name) / "result.json"
         with mock.patch.object(self.w, "identity", return_value=("o/r", "leo")):
             report.write_text(json.dumps(dict(base, omitted=[{"path": "a.py", "reason": "malformed"}])))
@@ -398,39 +408,232 @@ class TestClaimsAndPagination(unittest.TestCase):
         self.assertIn("a.py:3", err.getvalue())
 
     def test_acknowledgement_requires_a_reason_and_actual_omissions(self):
-        base = {"repo": "o/r", "pr": 1, "commit": "a" * 40, "complete": False,
-                "review_created": True, "omitted": [{"reason": "invalid finding"}]}
+        base = stage_report(complete=False, omitted=[{"reason": "invalid finding"}])
         self.assertIn("non-blank", self.w.completion_refusal(base, "o/r", 1, "a" * 40, "   "))
         complete = dict(base, complete=True, omitted=[])
         self.assertIn("nothing is omitted", self.w.completion_refusal(complete, "o/r", 1, "a" * 40, "why"))
 
-    def test_a_report_from_the_previous_release_behaves_as_before(self):
-        """No review_created and no omitted keys: complete alone decides."""
-        report = Path(self.tmp.name) / "result.json"
+    def test_a_report_without_coverage_or_verdict_is_refused(self):
+        """`complete: true` alone used to record a head. It only ever meant every
+        finding was staged, so a review that skipped files still closed it out."""
+        path = Path(self.tmp.name) / "result.json"
         with mock.patch.object(self.w, "identity", return_value=("o/r", "leo")):
-            report.write_text(json.dumps({"repo": "o/r", "pr": 1, "commit": "a" * 40, "complete": True}))
-            self.w.main(["record", "1", "--head", "a" * 40, "--result", str(report)])
-            self.assertEqual(self.w.reviewed_heads("o/r"), {1: "a" * 40})
+            path.write_text(json.dumps({"repo": "o/r", "pr": 1, "commit": "a" * 40, "complete": True}))
+            with self.assertRaisesRegex(ValueError, "coverage"):
+                self.w.main(["record", "1", "--head", "a" * 40, "--result", str(path)])
+            no_verdict = stage_report()
+            del no_verdict["verdict"]
+            path.write_text(json.dumps(no_verdict))
+            with self.assertRaisesRegex(ValueError, "no verdict"):
+                self.w.main(["record", "1", "--head", "a" * 40, "--result", str(path)])
+        self.assertEqual(self.w.reviewed_heads("o/r"), {})
 
     def test_record_binds_clean_report_to_repository_and_pr(self):
         report = Path(self.tmp.name) / "result.json"
         with mock.patch.object(self.w, "identity", return_value=("o/r", "leo")):
             for repo, number in (("other/repo", 1), ("o/r", 2)):
-                report.write_text(json.dumps({"repo": repo, "pr": number,
-                                              "commit": "a" * 40, "complete": True}))
+                report.write_text(json.dumps(stage_report(repo=repo, pr=number)))
                 with self.assertRaisesRegex(ValueError, "another repository"):
                     self.w.main(["record", "1", "--head", "a" * 40, "--result", str(report)])
             # The binding must hold with the acknowledgement flag present too.
-            report.write_text(json.dumps({"repo": "other/repo", "pr": 1, "commit": "a" * 40,
-                                          "complete": False, "review_created": True,
-                                          "omitted": [{"path": "a.py", "reason": "malformed"}]}))
+            report.write_text(json.dumps(stage_report(
+                repo="other/repo", complete=False, omitted=[{"path": "a.py", "reason": "malformed"}])))
             with self.assertRaisesRegex(ValueError, "another repository"):
                 self.w.main(["record", "1", "--head", "a" * 40, "--result", str(report),
                              "--acknowledge-omitted", "why"])
-            report.write_text(json.dumps({"repo": "o/r", "pr": 1,
-                                          "commit": "a" * 40, "complete": True}))
+            report.write_text(json.dumps(stage_report()))
             self.w.main(["record", "1", "--head", "a" * 40, "--result", str(report)])
         self.assertEqual(self.w.reviewed_heads("o/r"), {1: "a" * 40})
+
+
+class WatcherStateCase(unittest.TestCase):
+    HEAD = "a" * 40
+    NEW = "b" * 40
+
+    def setUp(self):
+        self.w = load_watcher()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        patch = mock.patch.object(self.w.state_mod, "state_file", return_value=str(Path(self.tmp.name) / "state.json"))
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def run_ticks(self, listings, settle=120, clock=None):
+        """Run monitor over one discover result (or exception) per tick; returns stdout lines."""
+        queue = list(listings)
+        clock = clock or iter(range(0, 100000, 60))
+        now = [0]
+
+        def discover(cwd):
+            item = queue.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return "o/r", "leo", item
+
+        def sleep(_seconds):
+            if not queue:
+                raise KeyboardInterrupt
+            now[0] = next(clock)
+
+        self.w.discover = discover
+        self.w.time = types.SimpleNamespace(time=lambda: now[0], sleep=sleep)
+        with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(KeyboardInterrupt):
+                self.w.monitor(types.SimpleNamespace(directory=".", settle=settle, interval=60))
+        return out.getvalue().splitlines()
+
+
+class TestFirstTick(WatcherStateCase):
+    def test_every_eligible_head_is_emitted_on_the_first_tick(self):
+        out = self.run_ticks([[pr(1), pr(2, head="c" * 40)]], settle=120)
+        self.assertEqual(sum(line.startswith("review-requested") for line in out), 2, out)
+
+    def test_a_head_that_changes_while_running_still_settles(self):
+        # tick 1 at t=0 emits #1; #1 then moves at t=60 and must wait 120s
+        out = self.run_ticks([[pr(1)], [pr(1, head=self.NEW)], [pr(1, head=self.NEW)], [pr(1, head=self.NEW)]],
+                             settle=120)
+        emitted = [line for line in out if "claim=" in line]
+        self.assertEqual(len(emitted), 2, out)
+        self.assertIn(self.HEAD, emitted[0])
+        self.assertIn(self.NEW, emitted[1])
+
+    def test_a_failed_first_tick_does_not_spend_the_immediate_emission(self):
+        out = self.run_ticks([KeyError("x"), [pr(1)]], settle=120)
+        self.assertTrue(any("claim=" in line for line in out), out)
+
+
+class TestBlock(WatcherStateCase):
+    def test_a_parked_head_is_silent_and_spends_no_attempts(self):
+        token = self.w.claim_review("o/r", 1, self.HEAD, 0)
+        self.w.block_head("o/r", 1, self.HEAD, "draft refused; user decides", token, 10)
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            for now in range(2000, 20000, 2000):
+                self.assertIsNone(self.w.claim_review("o/r", 1, self.HEAD, now))
+        self.assertEqual(out.getvalue(), "")
+        blocked = self.w.summary("o/r")["blocked"]["1"]
+        self.assertEqual((blocked["head"], blocked["reason"]), (self.HEAD, "draft refused; user decides"))
+
+    def test_unblock_emits_the_same_head_again_with_fresh_attempts(self):
+        for _ in range(2):  # two failed attempts before the refusal
+            token = self.w.claim_review("o/r", 1, self.HEAD, 0)
+            self.w.renew_claim("o/r", 1, token, 0, release=True)
+        token = self.w.claim_review("o/r", 1, self.HEAD, 0)
+        self.w.block_head("o/r", 1, self.HEAD, "draft refused", token, 0)
+        self.w.unblock("o/r", [1])
+        for now in (1, 2, 3):
+            fresh = self.w.claim_review("o/r", 1, self.HEAD, now * 2000)
+            self.assertIsNotNone(fresh)
+            self.w.renew_claim("o/r", 1, fresh, now * 2000, release=True)
+
+    def test_a_new_push_lifts_the_block(self):
+        token = self.w.claim_review("o/r", 1, self.HEAD, 0)
+        self.w.block_head("o/r", 1, self.HEAD, "draft refused", token, 0)
+        self.assertIsNotNone(self.w.claim_review("o/r", 1, self.NEW, 10))
+        self.assertEqual(self.w.summary("o/r")["blocked"], {})
+
+    def test_forget_clears_a_block(self):
+        token = self.w.claim_review("o/r", 1, self.HEAD, 0)
+        self.w.block_head("o/r", 1, self.HEAD, "draft refused", token, 0)
+        with mock.patch.object(self.w, "identity", return_value=("o/r", "leo")), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.w.main(["forget", "1"])
+        self.assertIsNotNone(self.w.claim_review("o/r", 1, self.HEAD, 10))
+
+    def test_the_documented_cli_parks_and_releases_a_head(self):
+        token = self.w.claim_review("o/r", 1, self.HEAD, 0)
+        with mock.patch.object(self.w, "identity", return_value=("o/r", "leo")), \
+             contextlib.redirect_stdout(io.StringIO()) as out:
+            self.w.main(["block", "-C", ".", "1", "--head", self.HEAD,
+                         "--reason", "draft refused; keep or discard?", "--claim", token])
+            self.w.main(["state"])
+            self.w.main(["unblock", "1"])
+        printed = [json.loads(chunk) for chunk in out.getvalue().replace("}\n{", "}\0{").split("\0")]
+        self.assertEqual(printed[1]["blocked"]["1"]["reason"], "draft refused; keep or discard?")
+        self.assertEqual(printed[2]["blocked"], {})
+        self.assertIsNotNone(self.w.claim_review("o/r", 1, self.HEAD, 10))
+
+    def test_only_the_current_claim_can_block(self):
+        token = self.w.claim_review("o/r", 1, self.HEAD, 0)
+        with self.assertRaisesRegex(ValueError, "superseded"):
+            self.w.block_head("o/r", 1, self.HEAD, "x", "not-the-token", 0)
+        with self.assertRaisesRegex(ValueError, "superseded"):
+            self.w.block_head("o/r", 1, self.NEW, "x", token, 0)
+        with self.assertRaisesRegex(ValueError, "reason"):
+            self.w.block_head("o/r", 1, self.HEAD, "  ", token, 0)
+
+
+class TestVerdicts(WatcherStateCase):
+    FILES = [{"filename": "a.py", "status": "modified", "patch": "@@ -1,1 +1,2 @@\n ctx\n+new\n"}]
+
+    def record(self, **overrides):
+        path = Path(self.tmp.name) / "result.json"
+        path.write_text(json.dumps(stage_report(**overrides)))
+        with mock.patch.object(self.w, "identity", return_value=("o/r", "leo")), \
+             mock.patch.object(self.w, "gh", return_value=json.dumps({"commit_id": overrides.get("commit", self.HEAD)})), \
+             contextlib.redirect_stdout(io.StringIO()) as out:
+            self.w.main(["record", "1", "--head", overrides.get("commit", self.HEAD), "--result", str(path)])
+        return json.loads(out.getvalue())
+
+    def ready(self):
+        return self.record(verdict="ready-to-merge", staged=0, review_created=False,
+                           diff_fingerprint=self.w.ghreview.diff_fingerprint(self.FILES))
+
+    def test_the_verdict_is_stored_with_its_head_and_shown_in_state(self):
+        state = self.ready()
+        self.assertEqual(state["heads"], {"1": self.HEAD})
+        self.assertEqual(state["verdicts"]["1"]["verdict"], "ready-to-merge")
+        self.assertEqual(state["verdicts"]["1"]["head"], self.HEAD)
+
+    def test_neutral_with_no_pending_comment_is_not_recorded(self):
+        with self.assertRaisesRegex(ValueError, "neutral needs"):
+            self.record(staged=0, carried=0, notes=0)
+
+    def test_an_unreviewed_file_is_not_recorded(self):
+        coverage = {"files_changed": 2, "files_reviewed": 1, "files_skipped_generated": [],
+                    "unreviewed": ["tests/test_a.py"], "complete": False}
+        with self.assertRaisesRegex(ValueError, "tests/test_a.py"):
+            self.record(coverage=coverage, verdict="seriously-problematic")
+        self.assertEqual(self.w.reviewed_heads("o/r"), {})
+
+    def test_a_standing_ready_verdict_needs_an_override_to_downgrade(self):
+        self.ready()
+        diff = self.w.ghreview.diff_fingerprint(self.FILES)
+        with self.assertRaisesRegex(ValueError, "verdict_override"):
+            self.record(verdict="neutral", diff_fingerprint=diff)
+        state = self.record(verdict="seriously-problematic", diff_fingerprint=diff,
+                            verdict_override="newly found: a.py:2 drops the retry")
+        self.assertEqual(state["verdicts"]["1"]["override"], "newly found: a.py:2 drops the retry")
+
+    def test_a_new_head_with_the_same_pr_diff_keeps_the_verdict_silently(self):
+        self.ready()
+        with mock.patch.object(self.w, "pr_files", return_value=self.FILES):
+            out = self.run_ticks([[pr(1, head=self.NEW)]])
+        self.assertEqual(out, [])
+        state = self.w.summary("o/r")
+        self.assertEqual(state["heads"], {"1": self.NEW})
+        self.assertEqual(state["verdicts"]["1"]["verdict"], "ready-to-merge")
+        self.assertEqual(state["verdicts"]["1"]["head"], self.HEAD)
+        self.assertEqual(state["verdicts"]["1"]["carried_to"], self.NEW)
+
+    def test_a_new_head_with_a_different_pr_diff_is_re_reviewed(self):
+        self.ready()
+        changed = [dict(self.FILES[0], patch=self.FILES[0]["patch"] + "+more\n")]
+        with mock.patch.object(self.w, "pr_files", return_value=changed):
+            out = self.run_ticks([[pr(1, head=self.NEW)]])
+        self.assertTrue(any(line.startswith("re-review") and self.NEW in line for line in out), out)
+
+    def test_a_rejected_carry_is_checked_once_per_head(self):
+        self.ready()
+        changed = [dict(self.FILES[0], patch=self.FILES[0]["patch"] + "+more\n")]
+        with mock.patch.object(self.w, "pr_files", return_value=changed) as files:
+            self.run_ticks([[pr(1, head=self.NEW)]] * 4)
+        self.assertEqual(files.call_count, 1)
+
+    def test_a_head_that_moves_while_reading_files_is_not_carried(self):
+        self.ready()
+        with mock.patch.object(self.w, "pr_files", return_value=None):
+            out = self.run_ticks([[pr(1, head=self.NEW)]])
+        self.assertTrue(any("claim=" in line for line in out), out)
 
 
 if __name__ == "__main__":

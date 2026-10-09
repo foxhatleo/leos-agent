@@ -17,9 +17,15 @@ Subcommands:
   stage          -R OWNER/REPO -n PR --commit SHA --input FILE [--replace-pending] [--dry-run]
                  validate comments against the diff, then create ONE pending review
                  (payload deliberately has NO "event" field -> review stays PENDING)
+  verdict        -R OWNER/REPO -n PR --commit SHA
+                 the recorded verdict for this PR and whether it still stands
 
-stage --input file: {"comments": [{"path", "line", "side", "body",
-                                   "start_line"?, "start_side"?}, ...]}
+stage --input file: {"verdict": "ready-to-merge"|"neutral"|"seriously-problematic",
+                     "reviewed": [changed paths actually read],
+                     "comments": [{"path", "line", "side", "body",
+                                   "start_line"?, "start_side"?}, ...],
+                     "notes": ["review-level reservation", ...]?,
+                     "verdict_override": "why a standing ready-to-merge no longer holds"?}
 line = absolute line number in the new file for side RIGHT (old file for LEFT).
 A line that is not addressable in the diff cannot be an inline comment — one
 bad line would 422 the entire review — so that finding is CARRIED in the
@@ -28,6 +34,12 @@ The body is private until the review is submitted, which is why it is the
 right carrier and a public PR comment is not. Only input with nothing
 renderable in it (a non-object, or no path or no text) is `omitted`.
 `complete` means every finding reached the author: staged inline or carried.
+`coverage` lists changed files the input did not declare reviewed.
+
+Verdict rules are enforced before anything is mutated: neutral needs at least
+one pending comment or note; ready-to-merge needs every changed non-generated
+file reviewed; a recorded ready-to-merge stands while the PR diff is unchanged
+and is only replaced with an explicit verdict_override.
 
 Exit codes: 0 success; 1 API failure after retry; 2 usage/input error;
 3 refused — a pending review being cleared (clear-pending, or stage
@@ -329,21 +341,112 @@ def prune_receipts(keep=None, now=None):
     return removed
 
 
-def comment_content(comment):
-    return {key: comment[key] for key in ("path", "line", "side", "start_line", "start_side", "body")
-            if comment.get(key) is not None}
+# Bumped whenever what a receipt hashes changes. A receipt from another scheme
+# cannot prove ownership either way, so it is refused with its own reason.
+RECEIPT_SCHEME = 2
+
+
+def _normal_text(text):
+    return (text or "").replace("\r\n", "\n").strip()
+
+
+def comment_identity(comment):
+    """The part of a draft comment that both sides of the ownership check agree on.
+
+    For a PENDING review GitHub returns line, side, start_line, original_line
+    and original_side as null; only position and original_position are set.
+    The staged input has the reverse. Anchors therefore cannot be part of the
+    fingerprint. Path, text and reply target can, and they are exactly what a
+    hand edit changes: a rewritten body, an added comment, a deleted one. A
+    pending comment cannot be moved, so nothing is lost by leaving anchors out.
+    """
+    return {"path": comment.get("path") or "", "body": _normal_text(comment.get("body")),
+            "in_reply_to_id": comment.get("in_reply_to_id")}
+
+
+def receipt_rows(comments):
+    """Per-comment path plus content hash, sorted: what the receipt stores."""
+    rows = [{"path": comment_identity(c)["path"],
+             "sha256": hashlib.sha256(json.dumps(comment_identity(c), sort_keys=True).encode()).hexdigest()}
+            for c in comments]
+    return sorted(rows, key=lambda row: (row["path"], row["sha256"]))
 
 
 def review_fingerprint(body, comments):
-    rows = sorted(json.dumps(comment_content(c), sort_keys=True) for c in comments)
-    return hashlib.sha256(json.dumps([body or "", rows]).encode()).hexdigest()
+    rows = [row["sha256"] for row in receipt_rows(comments)]
+    return hashlib.sha256(json.dumps([RECEIPT_SCHEME, _normal_text(body), rows]).encode()).hexdigest()
+
+
+def restore_anchor(comment):
+    """A backed-up draft comment as a create-review payload entry.
+
+    A pending comment re-read from GitHub has no line, only a position, so a
+    payload built from line alone would 422 and lose the restoration.
+    """
+    entry = {"path": comment.get("path"), "body": comment.get("body")}
+    if comment.get("line") is not None:
+        entry.update({key: comment[key] for key in ("line", "side", "start_line", "start_side")
+                      if comment.get(key) is not None})
+    elif comment.get("position") is not None:
+        entry["position"] = comment["position"]
+    return entry
 
 
 def remember_review(repo, pr, review, comments, body=""):
     from state import atomic_write
     path = receipt_path(repo, pr, review["id"])
-    atomic_write(str(path), {"fingerprint": review_fingerprint(body, comments), "review_id": review["id"]})
+    atomic_write(str(path), {"scheme": RECEIPT_SCHEME, "review_id": review["id"],
+                             "fingerprint": review_fingerprint(body, comments),
+                             "comments": receipt_rows(comments)})
     prune_receipts(keep=path)
+
+
+def remember_posted(repo, pr, review, fallback, body):
+    """Receipt for a review just created, from what GitHub now says it holds.
+
+    The re-read is the same view pending_snapshot will compare against later.
+    If it fails, the posted input is an equivalent stand-in because the
+    fingerprint ignores anchors, the only field the two views disagree on.
+    """
+    try:
+        comments = review_comments(repo, pr, review["id"])
+    except (OSError, ValueError, subprocess.SubprocessError):
+        comments = fallback
+    remember_review(repo, pr, review, comments, body)
+
+
+def owns(review, comments, receipt):
+    return (receipt.get("scheme") == RECEIPT_SCHEME
+            and receipt.get("fingerprint") == review_fingerprint(review.get("body"), comments))
+
+
+def read_receipt(repo, pr, review_id):
+    try:
+        receipt = json.loads(receipt_path(repo, pr, review_id).read_text())
+    except (OSError, ValueError):
+        return {}
+    return receipt if isinstance(receipt, dict) else {}
+
+
+def ownership_refusal(review, comments, receipt, owned, recoverable):
+    refusal = {"refused": True, "review_id": review["id"], "total_count": len(comments)}
+    if receipt and receipt.get("scheme") != RECEIPT_SCHEME:
+        refusal.update(legacy_receipt=True, reason=(
+            "pending review was staged before receipts matched GitHub's pending-comment shape, "
+            "so ownership cannot be checked; ask the user to inspect the draft and approve a "
+            "one-time --force; preserve it until they do"))
+    elif not receipt:
+        refusal["reason"] = "pending review has no ownership receipt (hand-drafted or staged elsewhere); preserve it"
+    elif not owned:
+        stored = {(row.get("path"), row.get("sha256")) for row in receipt.get("comments") or []
+                  if isinstance(row, dict)}
+        current = {(row["path"], row["sha256"]) for row in receipt_rows(comments)}
+        refusal["changed_paths"] = sorted({path for path, _ in stored ^ current})
+        refusal["reason"] = "pending review was edited after staging; preserve it"
+    else:
+        refusal["reason"] = ("pending review contains replies, which cannot be restored "
+                             "if replacement fails; preserve it")
+    return refusal
 
 
 def pending_snapshot(repo, pr, force=False):
@@ -351,16 +454,12 @@ def pending_snapshot(repo, pr, force=False):
     if review is None:
         return None, None
     comments = review_comments(repo, pr, review["id"])
-    try:
-        receipt = json.loads(receipt_path(repo, pr, review["id"]).read_text())
-    except (OSError, ValueError):
-        receipt = {}
-    owned = receipt.get("fingerprint") == review_fingerprint(review.get("body"), comments)
+    receipt = read_receipt(repo, pr, review["id"])
+    owned = owns(review, comments, receipt)
     # Replies cannot be reconstructed safely as new root comments on recovery.
     recoverable = not any(c.get("in_reply_to_id") for c in comments)
     if not force and (not owned or not recoverable):
-        return None, {"refused": True, "reason": "pending review is unowned, edited, or contains replies; preserve it",
-                      "review_id": review["id"], "total_count": len(comments)}
+        return None, ownership_refusal(review, comments, receipt, owned, recoverable)
     return {"review": review, "comments": comments, "forced": not owned}, None
 
 
@@ -481,6 +580,115 @@ def post_review(repo, pr, commit, staged, body=""):
     payload = json.dumps(fields)
     out = gh(["api", f"repos/{repo}/pulls/{pr}/reviews", "--method", "POST", "--input", "-"], payload)
     return json.loads(out)
+
+
+READY = "ready-to-merge"
+NEUTRAL = "neutral"
+VERDICTS = (READY, NEUTRAL, "seriously-problematic")
+# Shared with watch_review.py, so `watch_review.py state` shows every verdict,
+# whether it came from the watcher or from a manual review-pr pass.
+VERDICT_STATE = "review-watcher"
+MAX_NOTES_CHARS = 4000
+
+
+def diff_fingerprint(files):
+    """Identity of the PR's change, not of its head commit.
+
+    A merge from the base that leaves the change alone moves the head and can
+    shift every hunk's line numbers, so hunk headers are dropped. Context and
+    changed lines stay: if they differ, the PR is a different change. A file
+    with no patch (binary, or too large) falls back to its blob SHA.
+    """
+    rows = []
+    for f in sorted(files, key=lambda f: f.get("filename") or ""):
+        patch = f.get("patch")
+        if patch is None:
+            content = "blob:%s" % f.get("sha")
+        else:
+            content = "\n".join("@@" if HUNK_RE.match(line) else line for line in patch.splitlines())
+        rows.append([f.get("filename"), f.get("previous_filename"), f.get("status"), content])
+    return hashlib.sha256(json.dumps(rows).encode()).hexdigest()
+
+
+def review_coverage(files, reviewed):
+    """Which changed files the reviewer declared read, and which it did not."""
+    declared = {path for path in reviewed if isinstance(path, str)}
+    changed = [f["filename"] for f in files]
+    unreviewed = [path for path in changed if path not in declared and not is_generated(path)]
+    return {"files_changed": len(changed),
+            "files_reviewed": sum(path in declared for path in changed),
+            "files_skipped_generated": [path for path in changed if path not in declared and is_generated(path)],
+            "unreviewed": unreviewed,
+            "complete": not unreviewed}
+
+
+def load_verdict(repo, pr):
+    from state import load, state_file
+    entry = (load(state_file(VERDICT_STATE)).get(repo) or {}).get("verdicts") or {}
+    prior = entry.get(str(pr))
+    return prior if isinstance(prior, dict) else None
+
+
+def save_verdict(repo, pr, record):
+    from state import _locked, atomic_write, load, state_file
+    path = state_file(VERDICT_STATE)
+    with _locked(path):
+        data = load(path)
+        data.setdefault(repo, {}).setdefault("verdicts", {})[str(pr)] = record
+        atomic_write(path, data)
+
+
+def standing_ready(prior, diff):
+    """A recorded ready-to-merge holds until the PR diff itself changes."""
+    return bool(prior) and prior.get("verdict") == READY and bool(diff) and prior.get("diff") == diff
+
+
+def stage_request(data):
+    """(comments, notes, reviewed, verdict, override) from a stage input file."""
+    if isinstance(data, list):
+        data = {"comments": data}
+    if not isinstance(data, dict):
+        raise ValueError("stage input must be an object with a comments list")
+    comments = data.get("comments") or []
+    if not isinstance(comments, list):
+        raise ValueError("comments must be a list")
+    notes = data.get("notes") or []
+    if not isinstance(notes, list) or not all(isinstance(n, str) for n in notes):
+        raise ValueError("notes must be a list of strings")
+    notes = [n.strip() for n in notes if n.strip()]
+    if sum(len(n) for n in notes) > MAX_NOTES_CHARS:
+        raise ValueError("notes exceed %d characters; anchor findings as comments instead" % MAX_NOTES_CHARS)
+    reviewed = data.get("reviewed") or []
+    if not isinstance(reviewed, list):
+        raise ValueError("reviewed must be a list of changed paths")
+    verdict = data.get("verdict")
+    if verdict not in VERDICTS:
+        raise ValueError("stage input needs a verdict: one of %s" % ", ".join(VERDICTS))
+    override = data.get("verdict_override")
+    if override is not None and (not isinstance(override, str) or not override.strip()):
+        raise ValueError("verdict_override must state why the prior decision no longer holds")
+    return comments, notes, reviewed, verdict, override
+
+
+def verdict_refusal(verdict, pending, coverage, prior, diff, override):
+    """Why this verdict may not be staged, or None. Checked before any mutation."""
+    if verdict == NEUTRAL and pending == 0:
+        return ("neutral needs at least one pending comment or note: stage the reservation "
+                "so the author sees it, or the verdict is ready-to-merge")
+    if verdict == READY and coverage["unreviewed"]:
+        return ("ready-to-merge needs every changed non-generated file reviewed; unreviewed: %s"
+                % ", ".join(coverage["unreviewed"]))
+    if verdict != READY and standing_ready(prior, diff) and not override:
+        return ("a ready-to-merge verdict recorded at %s stands for this unchanged PR diff; keep it, "
+                "or set verdict_override to say which newly found defect overrides it"
+                % (prior.get("head") or "an earlier head"))
+    return None
+
+
+def render_notes(notes):
+    if not notes:
+        return ""
+    return "## Review notes\n\n" + "".join("- %s\n" % n.replace("\n", "\n  ") for n in notes) + "\n"
 
 
 def cmd_map(a):
@@ -618,11 +826,23 @@ def cmd_reply(a):
             ["api", f"repos/{a.repo}/pulls/{a.pr}/reviews", "--method", "POST", "--input", "-"],
             json.dumps({"commit_id": a.commit}),
         ))
-        review = {"id": created["id"], "node_id": created["node_id"]}
+        review = {"id": created["id"], "node_id": created["node_id"], "body": created.get("body") or ""}
+        owned = True
+    else:
+        owned = owns(review, review_comments(a.repo, a.pr, review["id"]),
+                     read_receipt(a.repo, a.pr, review["id"]))
     require_head(a.repo, a.pr, a.commit)
     result = graphql(REPLY_MUTATION, {
         "thread": a.thread_id, "review": review["node_id"], "body": body,
     })
+    if owned:
+        # Keep the receipt in step with our own reply, so a later refusal names
+        # the reply rather than misreporting the draft as hand-edited.
+        try:
+            remember_review(a.repo, a.pr, review, review_comments(a.repo, a.pr, review["id"]),
+                            review.get("body") or "")
+        except (OSError, ValueError, subprocess.SubprocessError):
+            print("reply staged; ownership receipt not refreshed", file=sys.stderr)
     print(json.dumps({
         "staged_reply": result["data"]["addPullRequestReviewThreadReply"]["comment"]["id"],
         "thread": a.thread_id,
@@ -630,21 +850,20 @@ def cmd_reply(a):
     }))
 
 
+def cmd_verdict(a):
+    """The recorded verdict for this PR, and whether it stands at the pinned head."""
+    files = pinned_files(a.repo, a.pr, a.commit)
+    diff = diff_fingerprint(files)
+    prior = load_verdict(a.repo, a.pr)
+    print(json.dumps({"repo": a.repo, "pr": a.pr, "commit": a.commit, "diff_fingerprint": diff,
+                      "prior": prior, "diff_unchanged": bool(prior) and prior.get("diff") == diff,
+                      "standing_ready": standing_ready(prior, diff)}, indent=1))
+
+
 def cmd_stage(a):
     with open(a.input) as fh:
         data = json.load(fh)
-    comments = data["comments"] if isinstance(data, dict) else data
-    if not comments:
-        require_head(a.repo, a.pr, a.commit)
-        if a.replace_pending and not a.dry_run:
-            _, refusal = clear_pending_guarded(a.repo, a.pr, a.force)
-            if refusal:
-                print(json.dumps(refusal, indent=1))
-                sys.exit(3)
-        print(json.dumps({"repo": a.repo, "pr": a.pr, "commit": a.commit, "complete": not a.dry_run,
-                          "review_created": False, "staged": 0, "carried": 0, "omitted": [],
-                          "note": "no findings; nothing created"}))
-        return
+    comments, notes, reviewed, verdict, override = stage_request(data)
     if len(comments) > MAX_STAGE_COMMENTS:
         print(
             f"input error: {len(comments)} comments exceeds the cap of {MAX_STAGE_COMMENTS}; "
@@ -654,15 +873,26 @@ def cmd_stage(a):
         sys.exit(2)
 
     files = pinned_files(a.repo, a.pr, a.commit)
+    diff = diff_fingerprint(files)
+    coverage = review_coverage(files, reviewed)
     staged, snapped, dropped = validate_comments(comments, build_maps(files))
     # A finding that failed to anchor is carried in the review body; only input
     # with nothing renderable in it is omitted. `complete` therefore means every
     # finding reached the author, not that every finding reached a diff line.
     body, carried, overflow = render_carried([d for d in dropped if representable(d)])
+    if notes:
+        body = (body or MARKER + "\n\n") + render_notes(notes)
     omitted = [d for d in dropped if not representable(d)] + overflow
+    prior = load_verdict(a.repo, a.pr)
+    refusal = verdict_refusal(verdict, len(staged) + len(carried) + len(notes), coverage, prior, diff, override)
+    if refusal:
+        raise ValueError(refusal)
     report = {"repo": a.repo, "pr": a.pr, "commit": a.commit, "complete": False, "review_created": False,
-              "staged": len(staged), "carried": len(carried), "omitted": omitted,
-              "snapped": snapped, "dropped": dropped}
+              "staged": len(staged), "carried": len(carried), "notes": len(notes), "omitted": omitted,
+              "snapped": snapped, "dropped": dropped, "verdict": verdict, "diff_fingerprint": diff,
+              "coverage": coverage}
+    if standing_ready(prior, diff) and verdict != READY:
+        report.update(verdict_override=override.strip(), prior_verdict=prior)
     for d in carried:
         print(f"carried in review body: {d.get('path')}:{d.get('line')} — {d['reason']}", file=sys.stderr)
     for d in omitted:
@@ -673,8 +903,18 @@ def cmd_stage(a):
         report["body"] = body
         print(json.dumps(report, indent=1))
         return
-    if not staged and not carried:
-        print(json.dumps({**report, "note": "nothing renderable in the input; no review created"}))
+    if not staged and not carried and not notes:
+        if comments:
+            print(json.dumps({**report, "note": "nothing renderable in the input; no review created"}))
+            return
+        if a.replace_pending:
+            _, refusal = clear_pending_guarded(a.repo, a.pr, a.force)
+            if refusal:
+                print(json.dumps(refusal, indent=1))
+                sys.exit(3)
+        require_head(a.repo, a.pr, a.commit)
+        save_verdict(a.repo, a.pr, verdict_record(verdict, a.commit, diff, report))
+        print(json.dumps({**report, "complete": True, "note": "no findings; nothing created"}, indent=1))
         return
 
     if a.replace_pending:
@@ -701,17 +941,26 @@ def cmd_stage(a):
                 if pending_review(a.repo, a.pr) is None:
                     old = previous["review"]
                     restored = post_review(a.repo, a.pr, old["commit_id"],
-                                           [comment_content(c) for c in previous["comments"]], old.get("body") or "")
-                    remember_review(a.repo, a.pr, restored, previous["comments"],
+                                           [restore_anchor(c) for c in previous["comments"]], old.get("body") or "")
+                    remember_posted(a.repo, a.pr, restored, previous["comments"],
                                     restored.get("body") or old.get("body") or "")
             except (OSError, ValueError, KeyError, subprocess.SubprocessError):
                 print("automatic restoration unavailable; recovery snapshot retained", file=sys.stderr)
         raise
-    remember_review(a.repo, a.pr, review, staged, review.get("body") or body)
+    remember_posted(a.repo, a.pr, review, staged, review.get("body") or body)
 
     report.update({"complete": not omitted, "review_created": True, "review_id": review["id"],
                    "state": review["state"], "staged": len(staged), "carried": len(carried)})
+    if not omitted:
+        save_verdict(a.repo, a.pr, verdict_record(verdict, a.commit, diff, report))
     print(json.dumps(report, indent=1))
+
+
+def verdict_record(verdict, head, diff, report):
+    record = {"verdict": verdict, "head": head, "diff": diff, "at": int(time.time())}
+    if report.get("verdict_override"):
+        record["override"] = report["verdict_override"]
+    return record
 
 
 COMMANDS = {
@@ -723,6 +972,7 @@ COMMANDS = {
     "resolve-thread": cmd_resolve_thread,
     "reply": cmd_reply,
     "stage": cmd_stage,
+    "verdict": cmd_verdict,
 }
 
 
@@ -736,7 +986,7 @@ def main():
         if name == "clear-pending":
             sp.add_argument("--force", action="store_true",
                              help="delete even if it holds comments not staged by this script")
-        if name in ("map", "extract", "resolve-thread", "reply"):
+        if name in ("map", "extract", "resolve-thread", "reply", "verdict"):
             sp.add_argument("--commit", required=True, help="full reviewed head SHA")
         if name == "extract":
             sp.add_argument("paths", nargs="*")

@@ -28,6 +28,8 @@ Return JSON only:
  "fix":"optional concrete fix"}]}
 ```
 
-Use `needs-context` with explicit gaps if incomplete. Severity is blocking,
+`covered_paths` lists only files whose patch and relevant surrounding code you
+actually read; the reviewer reports it as coverage. Use `needs-context` with
+explicit gaps if incomplete. Severity is blocking,
 major, minor, or nit. No findings is valid. The reviewer verifies candidates
 and owns every mutation.
