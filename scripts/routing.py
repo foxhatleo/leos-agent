@@ -28,6 +28,9 @@ ALIASES = {"runner": "cheap", "executor": "standard"}
 DEFAULTS = {"claude": {"cheap": "haiku", "standard": "sonnet", "premium": "opus"},
             "codex": {"cheap": "gpt-6-luna", "standard": "gpt-6.1-sol", "premium": "gpt-6-astra"}}
 FIELDS = ("model", "effort")
+# Claude's Agent tool takes a model from this enum and nothing else, so a full
+# or provider model ID configured for Claude could never be sent.
+CLAUDE_AGENT_MODELS = ("haiku", "sonnet", "opus", "fable")
 
 # Harnesses whose economical tier ships with models already baked in: Claude
 # Code reads agents/*.md, Codex reads the installed profile TOMLs. Everything
@@ -108,6 +111,9 @@ def validate(data, harnesses=HARNESSES):
                 _bad(f"{harness}.{role}: model must be a single-line identifier of at most 256 characters")
             if effort is not None and effort.strip() not in ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"):
                 _bad(f"{harness}.{role}: unsupported reasoning effort")
+            if harness == "claude" and model.strip() not in CLAUDE_AGENT_MODELS:
+                _bad(f"{harness}.{role}: Claude's Agent tool accepts only {', '.join(CLAUDE_AGENT_MODELS)}; "
+                     f"set the family alias instead of {model.strip()!r}")
             canonical = ALIASES.get(role, role)
             if canonical in roles:
                 _bad(f"{harness}.{role}: duplicate tier via an alias")

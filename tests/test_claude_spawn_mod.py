@@ -75,7 +75,7 @@ class SpawnModPrecedence(unittest.TestCase):
     @staticmethod
     def agent_call(**args):
         return {"hook_event_name": "PreToolUse", "tool_name": "Agent", "tool_use_id": "toolu_1",
-                "session_id": "s", "tool_input": dict({"subagent_type": "general-purpose", "prompt": "do it"}, **args)}
+                "session_id": "s", "tool_input": dict({"subagent_type": "leo-cheap", "prompt": "do it"}, **args)}
 
     def assert_decided(self, result):
         code, out, _ = result
@@ -119,7 +119,7 @@ class SpawnModPrecedence(unittest.TestCase):
         self.assertEqual([row["call_id"] for row in self.rows()], ["toolu_1"])
 
     def test_the_marker_never_silences_another_harness(self):
-        event = {"tool_name": "spawn_agent", "tool_input": {"task_name": "x", "message": "do it"}}
+        event = {"tool_name": "spawn_agent", "tool_input": {"task_name": "x", "message": "do it"}, "model": "gpt-6-astra"}
         code, _, err = self.run_hook(event, **self.live(LEOS_AGENT_HARNESS="codex"))
         self.assertEqual(code, 2)
         self.assertTrue(err.strip())

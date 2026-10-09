@@ -96,11 +96,69 @@ class ModelPrices(unittest.TestCase):
                      "sonnet 5", "haiku 4.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra"):
             self.assertIsNotNone(pricing.resolve(name, data).model, name)
 
+    def test_bundled_provenance_accounts_for_every_late_row(self):
+        """fetched_at dates the full fetch, and doctor reports its age. A row
+        added by hand later must be listed with the time it was added, so the
+        snapshot never claims a fetch it did not make."""
+        data = json.loads(pricing.BUNDLED.read_text())
+        ids = {row["id"] for row in data["models"]}
+        amended = set(data.get("amended_models", ()))
+        self.assertLessEqual(amended, ids)
+        if amended:
+            self.assertGreaterEqual(data["amended_at"], data["fetched_at"])
+        for row in data["models"]:
+            if (row.get("created") or 0) > data["fetched_at"]:
+                self.assertIn(row["id"], amended)
+                self.assertLessEqual(row["created"], data["amended_at"])
+
     def test_matching_conditional_schedules_compare_corresponding_rates(self):
         data = catalog(("openai/gpt-5.6-sol", 2, 10), ("openai/gpt-5.6-terra", 2, 12))
         for row in data["models"]:
             row["pricing"]["overrides"] = [{"min_prompt_tokens": 272000, "prompt": "4",
                                               "completion": str(int(row["pricing"]["completion"]) * 2)}]
         self.assertEqual(pricing.compare("gpt-5.6-terra", "gpt-5.6-sol", data)["status"], "over-ceiling")
+        # Different thresholds are compared for the same request size: Terra is
+        # dearer below 100k, between 100k and 272k, and above 272k alike.
         data["models"][1]["pricing"]["overrides"][0]["min_prompt_tokens"] = 100000
+        self.assertEqual(pricing.compare("gpt-5.6-terra", "gpt-5.6-sol", data)["status"], "over-ceiling")
+        self.assertEqual(pricing.compare("gpt-5.6-sol", "gpt-5.6-terra", data)["status"], "allowed")
+
+    def test_a_long_prompt_discount_does_not_hide_a_dearer_base_rate(self):
+        """The bundled long-prompt Sonnet tier overlaps flat Opus. Ranges called
+        that unknown, so an Opus child under a Sonnet parent passed the ceiling."""
+        data = json.loads(pricing.BUNDLED.read_text())
+        over = pricing.compare("opus", "claude-sonnet-4-5-20250929", data)
+        self.assertEqual(over["status"], "over-ceiling")
+        self.assertEqual(over["basis"], "base-rate")
+        self.assertEqual(pricing.compare("opus", "claude-sonnet-4-20250514", data)["status"], "over-ceiling")
+        # Cheaper at the base rate but dearer above 200k prompt tokens: a real
+        # crossover, so it stays an explicit unknown rather than a block.
+        self.assertEqual(pricing.compare("claude-sonnet-4-5", "opus", data)["status"], "unknown")
+
+    def test_equal_base_rates_defer_to_the_long_prompt_tier(self):
+        data = catalog(("openai/gpt-5.6-sol", 2, 10), ("openai/gpt-5.6-terra", 2, 10))
+        data["models"][1]["pricing"]["overrides"] = [{"min_prompt_tokens": 200000, "prompt": "4", "completion": "20"}]
+        self.assertEqual(pricing.compare("gpt-5.6-terra", "gpt-5.6-sol", data)["status"], "over-ceiling")
+        data["models"][1]["pricing"]["overrides"] = [{"min_prompt_tokens": 200000, "prompt": "1", "completion": "5"}]
+        self.assertEqual(pricing.compare("gpt-5.6-terra", "gpt-5.6-sol", data)["status"], "allowed")
+
+    def test_conditions_other_than_prompt_size_are_compared_as_ranges(self):
+        data = catalog(("openai/gpt-5.6-sol", 2, 10), ("openai/gpt-5.6-terra", 3, 12))
+        data["models"][1]["pricing"]["overrides"] = [{"utc_days": ["saturday"], "prompt": "1", "completion": "5"}]
         self.assertEqual(pricing.compare("gpt-5.6-terra", "gpt-5.6-sol", data)["status"], "unknown")
+
+    def test_nearby_versions_use_the_numerically_closest_neighbour(self):
+        data = json.loads(pricing.BUNDLED.read_text())
+        for name, expected in (("gpt-6.5-luna", "openai/gpt-6-luna"), ("claude-haiku-5", "anthropic/claude-haiku-5.5"),
+                               ("claude-opus-6", "anthropic/claude-opus-5.5"), ("claude-sonnet-5-1", "anthropic/claude-sonnet-5")):
+            match = pricing.resolve(name, data)
+            self.assertEqual((match.status, match.report()["reference_model"]), ("estimated", expected), name)
+
+    def test_one_gap_caps_estimates_across_and_within_major_versions(self):
+        data = catalog(("openai/gpt-6-luna", 1, 2), ("openai/gpt-5.2-luna", 1, 2), ("deepseek/deepseek-v4-pro", 1, 2))
+        self.assertEqual(pricing.resolve("gpt-6.9-luna", data).report()["reference_model"], "openai/gpt-6-luna")
+        self.assertEqual(pricing.resolve("deepseek-v5-pro", data).status, "estimated")
+        for name in ("gpt-7.1-luna", "gpt-5.2-luna-pro", "gpt-6-luna:free", "deepseek-v6-pro"):
+            self.assertEqual(pricing.resolve(name, data).status, "unknown", name)
+        # 5.6 is 0.4 from both 5.2 and 6; an equal gap prefers the same major version.
+        self.assertEqual(pricing.resolve("gpt-5.6-luna", data).report()["reference_model"], "openai/gpt-5.2-luna")

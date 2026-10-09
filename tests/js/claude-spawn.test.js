@@ -213,7 +213,7 @@ test('a process the session\'s Bash tool starts still gets the guard\'s own deci
   const run = spawnSync('python3', [join(root, 'scripts/dispatch_guard.py')], { encoding: 'utf8',
     env: { ...cc.processEnv, LEOS_AGENT_HARNESS: 'claude' },
     input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_use_id: 'toolu_bash',
-      tool_input: { subagent_type: 'general-purpose', prompt: 'x' } }) });
+      tool_input: { subagent_type: 'leos-agent:leo-cheap', prompt: 'x' } }) });
   assert.equal(run.status, 0);
   assert.ok(JSON.parse(run.stdout).hookSpecificOutput.updatedInput.model);
   assert.equal(cc.rows().length, 1);
