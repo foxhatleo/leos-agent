@@ -51,8 +51,8 @@ work justifies a separate worker. Otherwise do that work in the parent.
 The existing price ceiling applies to every tier; premium does not bypass it.
 
 The tier name is not a price ordering. For example, the bundled reference
-catalog prices GPT-5.6 Terra output above GPT-5.6 Sol output, so a Terra
-selection under a Sol parent is replaced with the parent where supported. Input/output crossover
+catalog prices GPT-6 Astra above GPT-6.1 Sol, so a premium Astra selection
+under a GPT-6.1 Sol parent is replaced with the parent where supported. Input/output crossover
 rates, unknown IDs, and ambiguous catalog matches are allowed with diagnostics,
 as configured by this project's policy. Thus the ceiling prevents **known**
 overselection, not every possible billing outcome.
@@ -214,7 +214,9 @@ PI_CODING_AGENT_DIR, OPENCODE_CONFIG_DIR, OPENCODE_CONFIG, and XDG_CONFIG_HOME.
 
 Data lives in `~/.leos-agent-local`, or LEOS_AGENT_LOCAL_PATH, outside versioned
 plugin caches. Configure concrete provider/harness IDs rather than assuming
-that a familiar alias exists everywhere:
+that a familiar alias exists everywhere. Claude is the exception: its Agent
+tool accepts only `haiku`, `sonnet`, `opus`, or `fable`, so `routing.py`
+refuses any other Claude model:
 
 ```sh
 python3 scripts/routing.py set --harness claude --cheap haiku --standard sonnet
@@ -229,7 +231,9 @@ Unknown model identifiers are retained and diagnosed, not silently corrected
 to a different dispatch ID. Parent-level always means the current parent.
 
 Guard modes are `LEOS_AGENT_DISPATCH_GUARD=on` (default), `warn` (log proposed
-corrections/blocks), and `off`. Unrelated tools and third-party MCP tools are
+corrections/blocks), and `off`; `0`, `false`, `no`, and `disabled` also mean
+off. Any other value keeps the guard on and marks each logged dispatch with an
+`unrecognized-guard-mode` diagnostic. Unrelated tools and third-party MCP tools are
 not routed. Failures are logged distinctly and fail open; this is not a
 security boundary. Native or organization-level model substitutions may still
 require investigation of actual execution.

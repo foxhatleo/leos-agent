@@ -113,6 +113,22 @@ class TestValidation(RoutingCase):
             self.load_config()["opencode"]["cheap"]["model"], "some-vendor/an_odd.model:v3"
         )
 
+    def test_claude_tiers_must_be_agent_aliases(self):
+        # Agent's `model` takes only these four; a full ID could never be sent,
+        # and translating it to its family alias would change the model.
+        for model in ("claude-haiku-4-5-20251001", "us.anthropic.claude-haiku-4-5-v1:0", "inherit", "Haiku"):
+            with self.subTest(model=model):
+                self.assert_rejects({"claude": {"cheap": model}}, "accepts only haiku, sonnet, opus, fable")
+        self.write_config({"claude": {"cheap": "haiku", "standard": "sonnet", "premium": "opus"}})
+        self.assertEqual(self.load_config()["claude"]["premium"]["model"], "opus")
+
+    def test_claude_set_refuses_a_full_id_and_writes_nothing(self):
+        with mock.patch.dict(os.environ, {"LEOS_AGENT_LOCAL_PATH": str(self.data)}), \
+                contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(self.routing.RoutingError):
+                self.routing.main(["set", "--harness", "claude", "--cheap", "claude-haiku-4-5-20251001"])
+        self.assertFalse((self.data / "routing.json").exists())
+
     def test_bare_string_is_shorthand_for_a_model(self):
         self.write_config({"cursor": {"cheap": "fast-1"}})
         self.assertEqual(self.load_config()["cursor"]["cheap"], {"model": "fast-1", "effort": None})
@@ -362,10 +378,12 @@ class TestWriting(WriteCase):
     def test_every_harness_round_trips_from_the_writer_to_the_reader(self):
         for harness in self.routing.HARNESSES:
             with self.subTest(harness=harness):
-                self.run_cli("set", "--harness", harness, "--runner", f"{harness}-m",
+                # Claude's Agent tool takes only its aliases.
+                model = "haiku" if harness == "claude" else f"{harness}-m"
+                self.run_cli("set", "--harness", harness, "--runner", model,
                              "--runner-effort", "low")
                 entry = self.load_config()[harness]["cheap"]
-                self.assertEqual(entry, {"model": f"{harness}-m", "effort": "low"})
+                self.assertEqual(entry, {"model": model, "effort": "low"})
 
     def test_a_written_config_reaches_the_installed_payload(self):
         # The whole feature in one test: set, install, and the model is in the

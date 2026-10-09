@@ -97,9 +97,10 @@ The policy in `rules/preferences.md` applies to work on this repo too.
 - Keep the orchestrator at least as capable as its workers. If work exceeds it,
   upgrade or hand off the main task rather than pull in stronger children. This
   is Leo's engineering policy; the guard enforces reference prices, not capability.
-- The dispatch guard (`scripts/dispatch_guard.py`) blocks an agent dispatch that
-  names no model on a harness that can name one. It is a cost guardrail, fails
-  open, and is not a security boundary. Plugin installs namespace agent types
+- The dispatch guard (`scripts/dispatch_guard.py`) blocks or corrects an agent
+  dispatch that names no model on a harness that can name one (on Claude, only
+  agents that would inherit the parent, and its own tiers). It is a cost
+  guardrail, fails open, and is not a security boundary. Plugin installs namespace agent types
   as `leos-agent:leo-cheap`; the guard recognises both forms.
 - Never relay a subagent's self-report as verification. Read the diff, run the
   command, check the registry. A worker's `Result:` line is a routing signal

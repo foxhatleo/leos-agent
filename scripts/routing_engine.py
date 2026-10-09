@@ -19,6 +19,17 @@ CAPABILITIES = {
 PROFILE_TIERS = {"leo-cheap": "cheap", "leo-standard": "standard", "leo-premium": "premium", "leo-parent": "parent",
                  "leo-runner": "cheap", "leo-executor": "standard", "leo-reviewer": "standard"}
 
+# Claude's Agent `model` enum. A family alias under a parent of that family
+# runs on the parent's exact model, so a parent's own alias is its ceiling.
+CLAUDE_ALIASES = routing.CLAUDE_AGENT_MODELS
+# Built-in Claude agent types whose definition names no model or `inherit`,
+# so an omitted `model` runs them on the parent. Any other agent may pin a
+# model in a definition the guard cannot see, and the guard leaves it alone.
+CLAUDE_INHERITING = frozenset(("general-purpose", "claude", "Explore", "Plan"))
+# A fork always runs on the parent's model and shares its prompt cache;
+# Claude ignores `model` for it.
+CLAUDE_FORK = "fork"
+
 
 def tier_for(agent):
     if not isinstance(agent, str):
@@ -27,6 +38,98 @@ def tier_for(agent):
     if agent.startswith("leos-agent:"):
         agent = agent[len("leos-agent:"):]
     return PROFILE_TIERS.get(agent)
+
+
+def dispatch_tool(harness, tool):
+    """Whether `tool` is this harness's dispatch tool. Adapters ask first, so an
+    ordinary tool call never pays for a transcript read or the price catalog."""
+    cap = CAPABILITIES.get(harness)
+    return cap is not None and tool in cap["tools"]
+
+
+def _claude_alias(parent):
+    """The parent's own family alias, or None when its ID names no family.
+
+    Claude runs a family alias on the parent's exact model when the parent is
+    of that family, so this alias is the parent itself, not the newest release.
+    """
+    identity = pricing.identity(parent)
+    alias = identity[1] if identity and identity[0] == "claude" else None
+    return alias if alias in CLAUDE_ALIASES else None
+
+
+def _claude(result, args, agent, tier, requested, parent, config, catalog, effective_model):
+    """Claude's native order: the call's `model`, then the agent definition,
+    then the default subagent model, then the parent. The guard fills `model`
+    only where the definition would inherit or is ours, and caps it at the parent."""
+    if agent == CLAUDE_FORK:
+        result.update(reason="fork-inherits-parent", effective_model=parent)
+        return result
+    if effective_model:
+        # A forced setting decides the child; only its price is reported.
+        selected = parent if effective_model == "inherit" else effective_model
+        result["effective_model"] = selected
+        result["price"] = pricing.compare(selected, parent, catalog) if selected and parent else None
+        status = (result["price"] or {}).get("status")
+        result["reason"] = ("parent-model-unavailable" if not parent else "over-ceiling" if status == "over-ceiling"
+                            else "within-ceiling" if status == "allowed" else "price-unknown")
+        return result
+    inherits = agent is None or (isinstance(agent, str) and agent in CLAUDE_INHERITING) or tier == "parent"
+    if requested:
+        selected = requested
+    elif tier and tier != "parent":
+        selected = routing.tier_model("claude", tier, config, parent)
+    elif inherits and tier != "parent" and parent:
+        # Standard is the default for unspecified nontrivial work. A hook
+        # cannot infer complexity from the brief or safely choose cheap.
+        selected = routing.tier_model("claude", "standard", config, parent)
+    else:
+        selected = None
+    if selected == "inherit":
+        selected, inherits = None, True
+    if not selected:
+        # Parent-level, an unknown parent, or an agent that picks its own model:
+        # the definition decides, and for these it is the parent or unknowable.
+        reason = ("inherits-parent" if inherits and parent else
+                  "parent-model-unavailable" if inherits else "agent-defined-model")
+        result.update(reason=reason, effective_model=parent if inherits else None)
+        return result
+    result["effective_model"] = selected
+    result["price"] = pricing.compare(selected, parent, catalog) if parent else None
+    status = (result["price"] or {}).get("status")
+    if status == "over-ceiling":
+        alias = _claude_alias(parent)
+        updated = copy.deepcopy(args)
+        if alias:
+            updated["model"] = alias
+        elif inherits:
+            # Omitting the model inherits the parent exactly, whatever its ID.
+            updated.pop("model", None)
+        else:
+            # Omitting the model here would fall back to the agent's own
+            # definition, not the parent, so the ceiling cannot be applied.
+            result.update(action="block", reason="unsupported-native-model",
+                          retry="The selected model is over the parent, and the parent's model has no Agent alias to cap it at. "
+                                "Use leos-agent:leo-parent, which inherits the parent, or do the work locally.")
+            return result
+        result["effective_model"] = parent
+        if updated == args:
+            result["reason"] = "inherits-parent"
+        else:
+            result.update(action="correct", reason="over-ceiling", updated_input=updated)
+        return result
+    if requested:
+        result["reason"] = ("parent-model-unavailable" if not parent else
+                            "within-ceiling" if status == "allowed" else "price-unknown")
+        return result
+    if selected not in CLAUDE_ALIASES:
+        # routing.py refuses these; never send Agent a value outside its enum.
+        result.update(reason="unsupported-native-model", effective_model=None)
+        return result
+    updated = copy.deepcopy(args)
+    updated["model"] = selected
+    result.update(action="correct", reason="explicit-tier-default", updated_input=updated)
+    return result
 
 
 def route(harness, tool, args, parent=None, config=None, catalog=None, effective_model=None, native_profiles=None):
@@ -64,6 +167,8 @@ or global settings determine the actual requested child model.
     requested = args.get(field) if field else None
     requested = requested if isinstance(requested, str) and requested.strip() else None
     result["requested_model"] = requested
+    if harness == "claude":
+        return _claude(result, args, agent, tier, requested, parent, config, catalog, effective_model)
     if harness == "codex" and tier and not effective_model:
         expected = routing.tier_model(harness, tier, config, parent)
         comparison = pricing.compare(expected, parent, catalog) if expected and parent else None
@@ -83,10 +188,15 @@ or global settings determine the actual requested child model.
     if tier and not selected and harness not in ("cursor", "opencode", "hermes", "pi"):
         selected = routing.tier_model(harness, tier, config, parent)
     if not selected:
-        if field:
+        if field and parent:
             # Standard is the default for unspecified nontrivial work. A hook
             # cannot infer complexity from the brief or safely choose cheap.
             selected = routing.tier_model(harness, "standard", config, parent)
+        elif field:
+            # The child inherits a parent this hook cannot see; naming a tier
+            # here could only upgrade it.
+            result["reason"] = "parent-model-unavailable"
+            return result
         elif harness in ("hermes", "pi", "cursor"):
             result["reason"] = "per-dispatch-routing-unavailable"
             return result
@@ -110,18 +220,6 @@ or global settings determine the actual requested child model.
                       retry="Use a model-routed spawn without the overriding native profile, at the current parent model.")
         return result
     if needs_model:
-        if harness == "claude" and selected not in ("haiku", "sonnet", "opus", "fable"):
-            # Agent's model enum accepts aliases, not transcript/provider IDs.
-            # Translate only an observed parent ceiling, never a configured ID.
-            identity = pricing.identity(selected) if selected == parent else None
-            alias = identity[1] if identity and identity[0] == "claude" else None
-            if alias in ("haiku", "sonnet", "opus", "fable") and pricing.compare(alias, parent, catalog)["status"] == "allowed":
-                selected = alias
-                result["effective_model"] = alias
-            else:
-                result.update(action="block", reason="unsupported-native-model",
-                              retry="Claude Agent accepts haiku, sonnet, opus, or fable. Use a supported alias within the parent ceiling, or do the work locally.")
-                return result
         if cap["rewrite"]:
             updated = copy.deepcopy(args)
             updated[field] = selected
