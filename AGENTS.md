@@ -193,8 +193,9 @@ The policy in `rules/preferences.md` applies to work on this repo too.
 - **Cursor** remains best-effort. It has no per-agent tool restriction and no
   parent-agent identity at `subagentStart`; worker no-delegation is prose only.
   Validate against native templates and disclose runtime coverage separately.
-- **OpenCode** cannot load skills or commands from a JS plugin, so the
-  installer copies them with the absolute plugin root baked in. Its config is
+- **OpenCode** config can add skill directories (`skills.paths`, `skills.urls`)
+  and plugins get a `config(cfg)` hook, but the installer still copies skills
+  with the absolute plugin root baked in. Its config is
   JSONC with user comments; the installer preserves them and never writes the
   `instructions` line blind. `opencode plugin <pkg> --force` can report success
   while serving a lockfile-pinned old version. Git specs install directly.
