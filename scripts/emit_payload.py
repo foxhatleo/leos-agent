@@ -104,7 +104,13 @@ def main(argv=None):
         if not (root / "rules" / "preferences.md").is_file():
             _breadcrumb(f"no payload under {root}; set LEOS_AGENT_ROOT")
             return 0
-        body = payload.payload_body(root, harness, routing.load())
+        # A typo in routing.json must not cost every session its policy: render
+        # with the sections that still validate and defaults for the rest.
+        import routing_engine
+        config, error = routing_engine.load_config()
+        if error is not None:
+            _breadcrumb(f"{routing_engine.CONFIG_INVALID}: {error}")
+        body = payload.payload_body(root, harness, config)
     except SystemExit as exc:
         # payload.py exits on a malformed payload or config. A hook must not.
         _breadcrumb(f"render refused: {exc}")

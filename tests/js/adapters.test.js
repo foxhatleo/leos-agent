@@ -22,11 +22,12 @@ test('OpenCode corrects native profile selection without adding a model field', 
   await hooks.event({ event: { type: 'message.updated', properties: { info: {
     sessionID: 's', model: { providerID: 'openai', id: 'gpt-5.6-sol' },
   } } } });
-  const output = { args: { subagent_type: 'general', prompt: 'Investigate the regression', description: 'Investigate' } };
-  await hooks['tool.execute.before']({ tool: 'task', sessionID: 's', callID: 'c' }, output);
-  assert.equal(output.args.subagent_type, 'leo-parent');
-  assert.equal(output.args.prompt, 'Investigate the regression');
-  assert.equal('model' in output.args, false);
+  // OpenCode triggers the hook with `{ args }` and then executes its own `args`.
+  const args = { subagent_type: 'general', prompt: 'Investigate the regression', description: 'Investigate' };
+  await hooks['tool.execute.before']({ tool: 'task', sessionID: 's', callID: 'c' }, { args });
+  assert.equal(args.subagent_type, 'leo-parent');
+  assert.equal(args.prompt, 'Investigate the regression');
+  assert.equal('model' in args, false);
 });
 
 test('OpenCode leaves unrelated tools untouched without querying agents', async () => {
