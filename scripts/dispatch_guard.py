@@ -38,17 +38,19 @@ SKIP_PREFIXES = ("mcp__",)
 SKIP_TOOLS = frozenset()
 
 # Dispatch tools that select behaviour by model rather than by naming an agent,
-# so the agent-key rule alone would never see them. Exact names only, and only
-# ones observed in a real rollout: Codex's spawn_agent takes
-# {task_name, message, fork_turns, model, reasoning_effort} -- task_name is a
-# free-text label, so `model` is the entire routing decision there.
-DISPATCH_TOOLS = ("spawn_agent",)
+# so the agent-key rule alone would never see them. Exact names only, each one
+# observed in a rollout or in the harness's hook-name code: Codex's spawn_agent
+# takes {task_name, message, fork_turns, model, reasoning_effort} and, when roles
+# are installed, agent_type. task_name is a free-text label; agent_type selects
+# a role whose config applies after the model override. Multi-agent v2 hooks see
+# the namespaced name collaborationspawn_agent (namespace and name joined).
+DISPATCH_TOOLS = ("spawn_agent", "collaborationspawn_agent")
 
 # Tools whose brief does not arrive as readable text. Codex encrypts `message`,
 # so its length is a proxy at best and its hash changes on every re-send. Both
 # the size heuristic and the conversion hash are suppressed rather than reported
 # as if they meant something.
-OPAQUE_BRIEF_TOOLS = ("spawn_agent",)
+OPAQUE_BRIEF_TOOLS = DISPATCH_TOOLS
 
 ALLOW, BLOCK = "allow", "block"
 
@@ -127,10 +129,12 @@ def normalize(event, _harness=None):
 
     agent = _first_str(args, AGENT_KEYS)
     prompt = _first_str(args, PROMPT_KEYS)
-    if tool == "delegate_task" and args.get("action", "spawn") == "spawn":
-        tasks = args.get("tasks") or ([args] if args.get("goal") else [])
-        prompt = "\n".join(str(task.get("goal", "")) for task in tasks if isinstance(task, dict))
-        agent = "delegate_task"
+    if tool == "delegate_task":
+        from routing_engine import hermes_spawn
+        if hermes_spawn(args):
+            tasks = args.get("tasks") or ([args] if args.get("goal") else [])
+            prompt = "\n".join(str(task.get("goal", "")) for task in tasks if isinstance(task, dict))
+            agent = "delegate_task"
     known = tool in DISPATCH_TOOLS
     if not prompt or not (agent or known):
         return None
@@ -180,6 +184,15 @@ def triviality(dispatch):
     return min(score, 3)
 
 
+def _corrected(dispatch, updated):
+    """Log the agent that runs. An OpenCode correction swaps the agent itself,
+    and a row under the requested one would report its tier as unrouted."""
+    if dispatch is None or not isinstance(updated, dict):
+        return dispatch
+    agent = _first_str(updated, AGENT_KEYS)
+    return dispatch._replace(agent=agent) if agent else dispatch
+
+
 def render_block(result=None):
     retry = (result or {}).get("retry", "Retry with an explicit model within the parent price ceiling.")
     return "[leo routing] BLOCKED: " + (result or {}).get("reason", "model choice required") + ". " + retry
@@ -225,6 +238,8 @@ def process(event, name=None):
         dispatch = normalize(event, name)
         import dispatch_log
         action = result["action"]
+        if action == "correct" and mode != "warn":
+            dispatch = _corrected(dispatch, result.get("updated_input"))
         if mode == "warn" and action in ("block", "correct"):
             result.update(action="warn", proposed_action=action, updated_input=None)
         entry = dispatch_log.record(dispatch, result["action"], result["reason"], name,
@@ -232,6 +247,8 @@ def process(event, name=None):
                                     _first_str(event, ("cwd", "workspace", "directory")), triviality(dispatch))
         entry.update({k: result.get(k) for k in ("requested_model", "effective_model", "price", "proposed_action")})
         entry["call_id"] = event.get("tool_use_id") or event.get("call_id") or event.get("toolCallId")
+        if result.get("diagnostic"):
+            entry["diagnostic"] = result["diagnostic"]
         _log(entry)
         return result
     except Exception as exc:

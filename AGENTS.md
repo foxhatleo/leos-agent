@@ -187,14 +187,17 @@ The policy in `rules/preferences.md` applies to work on this repo too.
   can precede parent transcript persistence and take the unknown-parent path.
 - **Codex** uses native `/hooks` trust for changed hook definitions; do not
   bypass it or assume enabling a plugin approves hooks. Batch related releases.
-  `spawn_agent` routes by `model` and `reasoning_effort`, not by agent name. Use `fork_turns="none"` for fresh
+  `spawn_agent` selects the model by `model` and `reasoning_effort`; `agent_type`,
+  offered once roles exist, layers its role config after them. Multi-agent v2
+  hooks name the tool `collaborationspawn_agent`. Use `fork_turns="none"` for fresh
   context. Customized profiles can override spawn selection. Encrypted or absent
   rollout briefs are unavailable data, not zero-length work.
 - **Cursor** remains best-effort. It has no per-agent tool restriction and no
   parent-agent identity at `subagentStart`; worker no-delegation is prose only.
   Validate against native templates and disclose runtime coverage separately.
-- **OpenCode** cannot load skills or commands from a JS plugin, so the
-  installer copies them with the absolute plugin root baked in. Its config is
+- **OpenCode** config can add skill directories (`skills.paths`, `skills.urls`)
+  and plugins get a `config(cfg)` hook, but the installer still copies skills
+  with the absolute plugin root baked in. Its config is
   JSONC with user comments; the installer preserves them and never writes the
   `instructions` line blind. `opencode plugin <pkg> --force` can report success
   while serving a lockfile-pinned old version. Git specs install directly.

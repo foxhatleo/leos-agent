@@ -8,7 +8,7 @@
 | hooks-cursor.json | Cursor | Explicit manifest override with Cursor event names. |
 
 Claude/Codex commands set LEOS_AGENT_HARNESS explicitly. Their SessionStart
-hooks emit the compact deterministic policy; Claude also covers fork starts.
+hooks emit the compact deterministic policy; both also cover fork starts.
 Cursor loads its native rule directly, so its lifecycle hook emits no policy.
 
 Claude PreToolUse can supply updatedInput without granting tool permission.
@@ -18,10 +18,15 @@ README.md for the scope and cold-session limitation.
 Codex's documented rewrite format requires an allow decision; this cost guard
 uses rejection with a precise retry instead of granting permission. Native
 profile precedence must also be respected. These are cost guardrails, not a
-sandbox or proof that every specialized tool path is intercepted.
+sandbox or proof that every specialized tool path is intercepted. Codex hook
+input names a multi-agent v2 spawn `collaborationspawn_agent` (namespace and
+tool joined with no separator); the matcher and guard accept it alongside
+`spawn_agent`. A custom `features.multi_agent_v2.tool_namespace` is not matched.
 
-Cursor checks the resolved subagent_model at subagentStart and returns a native
-deny only when needed. Missing prices are allowed with a log diagnostic. It
+Cursor checks the resolved subagent_model at subagentStart and always answers:
+`allow`, or `deny` with an `agent_message` the model reads. Cursor blocks a
+permission hook on invalid JSON or an invalid response, so failures also
+answer `allow`. Missing prices are allowed with a log diagnostic. It
 never invents a model argument for Task. SubagentStop records lifecycle
 completion separately from actual model observation.
 
@@ -55,7 +60,9 @@ build that refuses either. The guard records the brief's `Escalation from
 reads `unobservable`.
 
 Scripts live in scripts/ and are included in the npm package. Hook input is
-bounded; errors fail open with local diagnostics. No ordinary dispatch makes a
+bounded; errors fail open with local diagnostics. An invalid routing.json keeps
+its valid harness sections, uses defaults for the rest, and is recorded as
+`routing-config-invalid` in the dispatch and emit logs. No ordinary dispatch makes a
 network or model call. Price refresh is a separate bounded background process.
 Codex hook changes require the user's native /hooks trust review; installation
 does not silently approve them.
@@ -63,6 +70,22 @@ does not silently approve them.
 Hermes uses Python callbacks in __init__.py. OpenCode and Pi use their native
 JavaScript plugin/extension APIs. All decisions share routing_engine.py;
 adapters only supply observations and translate supported actions.
+
+Hermes blocks a tool when a `pre_tool_call` callback raises or outlives
+`plugins.hook_callback_timeout`, so the callback catches every error and bounds
+the guard at 10 s. Hermes spawns whenever `delegate_task`'s action, trimmed and
+lowercased, is empty or `spawn`; the guard reads it the same way.
+
+OpenCode executes the `args` object it passes to `tool.execute.before`, so a
+correction edits that object in place, and one that cannot be applied blocks the
+task. Slash-command subtasks pass through the same hook, but the hook input
+omits the command's model, which the task runs on when its agent pins none; the
+guard then prices it as the parent. A block there ends the command with an
+error instead of a task result.
+
+Pi rows carry the session id. Pi's subagent tools take `{agent, task}` or
+`{task}` and never the child's model, so Pi dispatches are logged without a
+price check.
 
 References:
 
