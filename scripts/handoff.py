@@ -135,7 +135,9 @@ def cmd_new(argv):
     if len(argv) != 1:
         sys.exit("handoff: usage: handoff.py new <slug>")
     slug = argv[0]
-    if not SLUG.match(slug) or not 3 <= len(slug) <= 60:
+    # fullmatch, never match: `$` also matches before a trailing newline, which
+    # would reserve "abc\n.md" -- a file list and rm can never name again.
+    if not SLUG.fullmatch(slug) or not 3 <= len(slug) <= 60:
         sys.exit(f"handoff: {slug!r} is not a valid slug (lowercase, digits and hyphens, 3-60 chars)")
     name, suffix = slug, 2
     while True:

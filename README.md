@@ -313,7 +313,7 @@ require investigation of actual execution.
 |---|---|
 | install | Configure this harness's native artifacts; preview/check/uninstall/rollback. |
 | doctor | Check installation, pricing, model references, and runtime evidence without paid calls. |
-| tune-routing | Configure tiers and diagnose actual native model selection. |
+| tune-routing | Configure tiers and diagnose actual native model selection; opt into Claude Code's advisor. |
 | review-usage | Mechanical usage scan with reference-cost estimates and explicit gaps. |
 | review-pr | Review a pinned GitHub PR; stage comments/replies as pending. |
 | handoff / handon | Save concise context pointers and resume after checking drift. |

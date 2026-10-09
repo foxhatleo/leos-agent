@@ -8,7 +8,8 @@ argument-hint: "[a time window like 7d, or what to diagnose]"
 # Review usage — leos-agent
 
 Resolve the absolute plugin root from `LEOS_AGENT_ROOT`, `CLAUDE_PLUGIN_ROOT`,
-`PLUGIN_ROOT`, or the nearest ancestor containing `rules/preferences.md`.
+`PLUGIN_ROOT`, or, when those are unset in the shell, the nearest ancestor of
+this skill file containing `rules/preferences.md`.
 Run the mechanical scanner; do not read transcripts into your context:
 
 ```
@@ -31,6 +32,9 @@ Report the useful conclusions concisely:
   profile or missing model argument does not establish the executed model.
 - Actual errors and accounting gaps. Unsupported schema, no data, and no guard
   records do not prove installation or enforcement failure.
+- `output_compression`: with rtk or a similar compressor configured, shell
+  output was counted after compression, so compare costs only with sessions
+  under the same setup. Advisor consultations appear under the advisor's model.
 - Plausible over/under-delegation only as hypotheses. A small brief can describe
   substantial work; a busy main thread can be appropriate. Neither a high
   delegation share nor fewer tokens proves lower cost or preserved quality.
