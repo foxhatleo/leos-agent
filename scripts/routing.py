@@ -26,7 +26,7 @@ CONFIG_NAME = "routing.json"
 ROLES = ("cheap", "standard", "premium", "runner", "executor")
 ALIASES = {"runner": "cheap", "executor": "standard"}
 DEFAULTS = {"claude": {"cheap": "haiku", "standard": "sonnet", "premium": "opus"},
-            "codex": {"cheap": "gpt-5.6-luna", "standard": "gpt-5.6-terra", "premium": "gpt-5.6-sol"}}
+            "codex": {"cheap": "gpt-6-luna", "standard": "gpt-6.1-sol", "premium": "gpt-6-astra"}}
 FIELDS = ("model", "effort")
 
 # Harnesses whose economical tier ships with models already baked in: Claude

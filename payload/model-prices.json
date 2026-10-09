@@ -4,6 +4,462 @@
   "fetched_at": 1788844660.435694,
   "models": [
     {
+      "id": "anthropic/claude-haiku-5.5",
+      "canonical_slug": "anthropic/claude-haiku-5.5-20261007",
+      "name": "Anthropic: Claude Haiku 5.5",
+      "created": 1791397883,
+      "pricing": {
+        "prompt": "0.0000001",
+        "completion": "0.0000005",
+        "web_search": "0.01",
+        "input_cache_read": "0.00000001",
+        "input_cache_write": "0.000000125",
+        "input_cache_write_1h": "0.0000002",
+        "overrides": [
+          {
+            "min_prompt_tokens": 100000,
+            "prompt": "0.0000005",
+            "completion": "0.0000025",
+            "input_cache_read": "0.00000005",
+            "input_cache_write": "0.000000625",
+            "input_cache_write_1h": "0.000001"
+          }
+        ]
+      }
+    },
+    {
+      "id": "anthropic/claude-haiku-5.5:batch",
+      "canonical_slug": "anthropic/claude-haiku-5.5-20261007",
+      "name": "Anthropic: Claude Haiku 5.5 (batch)",
+      "created": 1791397883,
+      "pricing": {
+        "prompt": "0.00000005",
+        "completion": "0.00000025",
+        "web_search": "0.01",
+        "input_cache_read": "0.000000005",
+        "input_cache_write": "0.0000000625",
+        "input_cache_write_1h": "0.0000001",
+        "overrides": [
+          {
+            "min_prompt_tokens": 100000,
+            "prompt": "0.00000025",
+            "completion": "0.00000125",
+            "input_cache_read": "0.000000025",
+            "input_cache_write": "0.0000003125",
+            "input_cache_write_1h": "0.0000005"
+          }
+        ]
+      }
+    },
+    {
+      "id": "openai/gpt-6.1-sol-pro",
+      "canonical_slug": "openai/gpt-6.1-sol-pro-20260929",
+      "name": "OpenAI: GPT-6.1 Sol Pro",
+      "created": 1790702886,
+      "pricing": {
+        "prompt": "0.000002",
+        "completion": "0.00001",
+        "web_search": "0.01",
+        "input_cache_read": "0.0000001",
+        "input_cache_write": "0.0000025",
+        "overrides": [
+          {
+            "min_prompt_tokens": 272000,
+            "prompt": "0.000004",
+            "completion": "0.000015",
+            "input_cache_read": "0.0000002",
+            "input_cache_write": "0.000005"
+          }
+        ]
+      }
+    },
+    {
+      "id": "openai/gpt-6.1-sol-pro:batch",
+      "canonical_slug": "openai/gpt-6.1-sol-pro-20260929",
+      "name": "OpenAI: GPT-6.1 Sol Pro (batch)",
+      "created": 1790702886,
+      "pricing": {
+        "prompt": "0.000001",
+        "completion": "0.000005",
+        "web_search": "0.01",
+        "input_cache_read": "0.00000005",
+        "input_cache_write": "0.00000125",
+        "overrides": [
+          {
+            "min_prompt_tokens": 272000,
+            "prompt": "0.000002",
+            "completion": "0.0000075",
+            "input_cache_read": "0.0000001",
+            "input_cache_write": "0.0000025"
+          }
+        ]
+      }
+    },
+    {
+      "id": "openai/gpt-6.1-sol",
+      "canonical_slug": "openai/gpt-6.1-sol-20260929",
+      "name": "OpenAI: GPT-6.1 Sol",
+      "created": 1790702882,
+      "pricing": {
+        "prompt": "0.000002",
+        "completion": "0.00001",
+        "web_search": "0.01",
+        "input_cache_read": "0.0000001",
+        "input_cache_write": "0.0000025",
+        "overrides": [
+          {
+            "min_prompt_tokens": 272000,
+            "prompt": "0.000004",
+            "completion": "0.000015",
+            "input_cache_read": "0.0000002",
+            "input_cache_write": "0.000005"
+          }
+        ]
+      }
+    },
+    {
+      "id": "openai/gpt-6.1-sol:batch",
+      "canonical_slug": "openai/gpt-6.1-sol-20260929",
+      "name": "OpenAI: GPT-6.1 Sol (batch)",
+      "created": 1790702882,
+      "pricing": {
+        "prompt": "0.000001",
+        "completion": "0.000005",
+        "web_search": "0.01",
+        "input_cache_read": "0.00000005",
+        "input_cache_write": "0.00000125",
+        "overrides": [
+          {
+            "min_prompt_tokens": 272000,
+            "prompt": "0.000002",
+            "completion": "0.0000075",
+            "input_cache_read": "0.0000001",
+            "input_cache_write": "0.0000025"
+          }
+        ]
+      }
+    },
+    {
+      "id": "anthropic/claude-sonnet-5.5",
+      "canonical_slug": "anthropic/claude-sonnet-5.5-20260928",
+      "name": "Anthropic: Claude Sonnet 5.5",
+      "created": 1790618686,
+      "pricing": {
+        "prompt": "0.000002",
+        "completion": "0.00001",
+        "web_search": "0.01",
+        "input_cache_read": "0.0000001",
+        "input_cache_write": "0.0000025",
+        "input_cache_write_1h": "0.000004"
+      }
+    },
+    {
+      "id": "anthropic/claude-sonnet-5.5:batch",
+      "canonical_slug": "anthropic/claude-sonnet-5.5-20260928",
+      "name": "Anthropic: Claude Sonnet 5.5 (batch)",
+      "created": 1790618686,
+      "pricing": {
+        "prompt": "0.000001",
+        "completion": "0.000005",
+        "web_search": "0.01",
+        "input_cache_read": "0.00000005",
+        "input_cache_write": "0.00000125",
+        "input_cache_write_1h": "0.000002"
+      }
+    },
+    {
+      "id": "openai/gpt-6-luna-pro",
+      "canonical_slug": "openai/gpt-6-luna-pro-20260922",
+      "name": "OpenAI: GPT-6 Luna Pro",
+      "created": 1790100791,
+      "pricing": {
+        "prompt": "0.0000001",
+        "completion": "0.0000005",
+        "web_search": "0.01",
+        "input_cache_read": "0.00000001",
+        "input_cache_write": "0.000000125",
+        "overrides": [
+          {
+            "min_prompt_tokens": 272000,
+            "prompt": "0.0000002",
+            "completion": "0.00000075",
+            "input_cache_read": "0.00000002",
+            "input_cache_write": "0.00000025"
+          }
+        ]
+      }
+    },
+    {
+      "id": "openai/gpt-6-luna-pro:batch",
+      "canonical_slug": "openai/gpt-6-luna-pro-20260922",
+      "name": "OpenAI: GPT-6 Luna Pro (batch)",
+      "created": 1790100791,
+      "pricing": {
+        "prompt": "0.00000005",
+        "completion": "0.00000025",
+        "web_search": "0.01",
+        "input_cache_read": "0.000000005",
+        "input_cache_write": "0.0000000625",
+        "overrides": [
+          {
+            "min_prompt_tokens": 272000,
+            "prompt": "0.0000001",
+            "completion": "0.000000375",
+            "input_cache_read": "0.00000001",
+            "input_cache_write": "0.000000125"
+          }
+        ]
+      }
+    },
+    {
+      "id": "openai/gpt-6-luna",
+      "canonical_slug": "openai/gpt-6-luna-20260922",
+      "name": "OpenAI: GPT-6 Luna",
+      "created": 1790100786,
+      "pricing": {
+        "prompt": "0.0000001",
+        "completion": "0.0000005",
+        "web_search": "0.01",
+        "input_cache_read": "0.00000001",
+        "input_cache_write": "0.000000125",
+        "overrides": [
+          {
+            "min_prompt_tokens": 272000,
+            "prompt": "0.0000002",
+            "completion": "0.00000075",
+            "input_cache_read": "0.00000002",
+            "input_cache_write": "0.00000025"
+          }
+        ]
+      }
+    },
+    {
+      "id": "openai/gpt-6-luna:batch",
+      "canonical_slug": "openai/gpt-6-luna-20260922",
+      "name": "OpenAI: GPT-6 Luna (batch)",
+      "created": 1790100786,
+      "pricing": {
+        "prompt": "0.00000005",
+        "completion": "0.00000025",
+        "web_search": "0.01",
+        "input_cache_read": "0.000000005",
+        "input_cache_write": "0.0000000625",
+        "overrides": [
+          {
+            "min_prompt_tokens": 272000,
+            "prompt": "0.0000001",
+            "completion": "0.000000375",
+            "input_cache_read": "0.00000001",
+            "input_cache_write": "0.000000125"
+          }
+        ]
+      }
+    },
+    {
+      "id": "openai/gpt-6-sol-pro",
+      "canonical_slug": "openai/gpt-6-sol-pro-20260922",
+      "name": "OpenAI: GPT-6 Sol Pro",
+      "created": 1790100781,
+      "pricing": {
+        "prompt": "0.000002",
+        "completion": "0.00001",
+        "web_search": "0.01",
+        "input_cache_read": "0.0000002",
+        "input_cache_write": "0.0000025",
+        "overrides": [
+          {
+            "min_prompt_tokens": 272000,
+            "prompt": "0.000004",
+            "completion": "0.000015",
+            "input_cache_read": "0.0000004",
+            "input_cache_write": "0.000005"
+          }
+        ]
+      }
+    },
+    {
+      "id": "openai/gpt-6-sol-pro:batch",
+      "canonical_slug": "openai/gpt-6-sol-pro-20260922",
+      "name": "OpenAI: GPT-6 Sol Pro (batch)",
+      "created": 1790100781,
+      "pricing": {
+        "prompt": "0.000001",
+        "completion": "0.000005",
+        "web_search": "0.01",
+        "input_cache_read": "0.0000001",
+        "input_cache_write": "0.00000125",
+        "overrides": [
+          {
+            "min_prompt_tokens": 272000,
+            "prompt": "0.000002",
+            "completion": "0.0000075",
+            "input_cache_read": "0.0000002",
+            "input_cache_write": "0.0000025"
+          }
+        ]
+      }
+    },
+    {
+      "id": "openai/gpt-6-sol",
+      "canonical_slug": "openai/gpt-6-sol-20260922",
+      "name": "OpenAI: GPT-6 Sol",
+      "created": 1790100775,
+      "pricing": {
+        "prompt": "0.000002",
+        "completion": "0.00001",
+        "web_search": "0.01",
+        "input_cache_read": "0.0000002",
+        "input_cache_write": "0.0000025",
+        "overrides": [
+          {
+            "min_prompt_tokens": 272000,
+            "prompt": "0.000004",
+            "completion": "0.000015",
+            "input_cache_read": "0.0000004",
+            "input_cache_write": "0.000005"
+          }
+        ]
+      }
+    },
+    {
+      "id": "openai/gpt-6-sol:batch",
+      "canonical_slug": "openai/gpt-6-sol-20260922",
+      "name": "OpenAI: GPT-6 Sol (batch)",
+      "created": 1790100775,
+      "pricing": {
+        "prompt": "0.000001",
+        "completion": "0.000005",
+        "web_search": "0.01",
+        "input_cache_read": "0.0000001",
+        "input_cache_write": "0.00000125",
+        "overrides": [
+          {
+            "min_prompt_tokens": 272000,
+            "prompt": "0.000002",
+            "completion": "0.0000075",
+            "input_cache_read": "0.0000002",
+            "input_cache_write": "0.0000025"
+          }
+        ]
+      }
+    },
+    {
+      "id": "anthropic/claude-opus-5.5",
+      "canonical_slug": "anthropic/claude-opus-5.5-20260921",
+      "name": "Anthropic: Claude Opus 5.5",
+      "created": 1790094732,
+      "pricing": {
+        "prompt": "0.000004",
+        "completion": "0.00002",
+        "web_search": "0.01",
+        "input_cache_read": "0.0000002",
+        "input_cache_write": "0.000005",
+        "input_cache_write_1h": "0.000008"
+      }
+    },
+    {
+      "id": "anthropic/claude-opus-5.5:batch",
+      "canonical_slug": "anthropic/claude-opus-5.5-20260921",
+      "name": "Anthropic: Claude Opus 5.5 (batch)",
+      "created": 1790094732,
+      "pricing": {
+        "prompt": "0.000002",
+        "completion": "0.00001",
+        "web_search": "0.01",
+        "input_cache_read": "0.0000001",
+        "input_cache_write": "0.0000025",
+        "input_cache_write_1h": "0.000004"
+      }
+    },
+    {
+      "id": "~openai/gpt-astra-latest",
+      "canonical_slug": "~openai/gpt-astra-latest",
+      "name": "OpenAI: GPT Astra Latest",
+      "created": 1789130932,
+      "pricing": {
+        "prompt": "0.00001",
+        "completion": "0.00005",
+        "web_search": "0.01",
+        "input_cache_read": "0.000001",
+        "input_cache_write": "0.0000125",
+        "overrides": [
+          {
+            "min_prompt_tokens": 272000,
+            "prompt": "0.00002",
+            "completion": "0.000075",
+            "input_cache_read": "0.000002",
+            "input_cache_write": "0.000025"
+          }
+        ]
+      }
+    },
+    {
+      "id": "~openai/gpt-sol-latest",
+      "canonical_slug": "~openai/gpt-sol-latest",
+      "name": "OpenAI: GPT Sol Latest",
+      "created": 1789130928,
+      "pricing": {
+        "prompt": "0.000002",
+        "completion": "0.00001",
+        "web_search": "0.01",
+        "input_cache_read": "0.0000001",
+        "input_cache_write": "0.0000025",
+        "overrides": [
+          {
+            "min_prompt_tokens": 272000,
+            "prompt": "0.000004",
+            "completion": "0.000015",
+            "input_cache_read": "0.0000002",
+            "input_cache_write": "0.000005"
+          }
+        ]
+      }
+    },
+    {
+      "id": "~openai/gpt-terra-latest",
+      "canonical_slug": "~openai/gpt-terra-latest",
+      "name": "OpenAI: GPT Terra Latest",
+      "created": 1789130925,
+      "pricing": {
+        "prompt": "0.000002",
+        "completion": "0.000012",
+        "web_search": "0.01",
+        "input_cache_read": "0.0000002",
+        "input_cache_write": "0.0000025",
+        "overrides": [
+          {
+            "min_prompt_tokens": 272000,
+            "prompt": "0.000004",
+            "completion": "0.000018",
+            "input_cache_read": "0.0000004",
+            "input_cache_write": "0.000005"
+          }
+        ]
+      }
+    },
+    {
+      "id": "~openai/gpt-luna-latest",
+      "canonical_slug": "~openai/gpt-luna-latest",
+      "name": "OpenAI: GPT Luna Latest",
+      "created": 1789130922,
+      "pricing": {
+        "prompt": "0.0000001",
+        "completion": "0.0000005",
+        "web_search": "0.01",
+        "input_cache_read": "0.00000001",
+        "input_cache_write": "0.000000125",
+        "overrides": [
+          {
+            "min_prompt_tokens": 272000,
+            "prompt": "0.0000002",
+            "completion": "0.00000075",
+            "input_cache_read": "0.00000002",
+            "input_cache_write": "0.00000025"
+          }
+        ]
+      }
+    },
+    {
       "id": "openai/gpt-6-astra",
       "canonical_slug": "openai/gpt-6-astra-20260903",
       "name": "OpenAI: GPT-6 Astra",
@@ -880,15 +1336,25 @@
     {
       "id": "~anthropic/claude-haiku-latest",
       "canonical_slug": "~anthropic/claude-haiku-latest",
-      "name": "Anthropic Claude Haiku Latest",
+      "name": "Anthropic: Claude Haiku Latest",
       "created": 1777318492,
       "pricing": {
-        "prompt": "0.000001",
-        "completion": "0.000005",
+        "prompt": "0.0000001",
+        "completion": "0.0000005",
         "web_search": "0.01",
-        "input_cache_read": "0.0000001",
-        "input_cache_write": "0.00000125",
-        "input_cache_write_1h": "0.000002"
+        "input_cache_read": "0.00000001",
+        "input_cache_write": "0.000000125",
+        "input_cache_write_1h": "0.0000002",
+        "overrides": [
+          {
+            "min_prompt_tokens": 100000,
+            "prompt": "0.0000005",
+            "completion": "0.0000025",
+            "input_cache_read": "0.00000005",
+            "input_cache_write": "0.000000625",
+            "input_cache_write_1h": "0.000001"
+          }
+        ]
       }
     },
     {
@@ -917,13 +1383,13 @@
     {
       "id": "~anthropic/claude-sonnet-latest",
       "canonical_slug": "~anthropic/claude-sonnet-latest",
-      "name": "Anthropic Claude Sonnet Latest",
+      "name": "Anthropic: Claude Sonnet Latest",
       "created": 1777318368,
       "pricing": {
         "prompt": "0.000002",
         "completion": "0.00001",
         "web_search": "0.01",
-        "input_cache_read": "0.0000002",
+        "input_cache_read": "0.0000001",
         "input_cache_write": "0.0000025",
         "input_cache_write_1h": "0.000004"
       }
@@ -1146,12 +1612,12 @@
       "name": "Anthropic: Claude Opus Latest",
       "created": 1776795361,
       "pricing": {
-        "prompt": "0.000005",
-        "completion": "0.000025",
+        "prompt": "0.000004",
+        "completion": "0.00002",
         "web_search": "0.01",
-        "input_cache_read": "0.0000005",
-        "input_cache_write": "0.00000625",
-        "input_cache_write_1h": "0.00001"
+        "input_cache_read": "0.0000002",
+        "input_cache_write": "0.000005",
+        "input_cache_write_1h": "0.000008"
       }
     },
     {

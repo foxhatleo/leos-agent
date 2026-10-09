@@ -25,7 +25,7 @@ brief that begins `Escalation from <tier>:` and states the failure; never retry
 the same tier.
 
 <!-- leos-agent:routing -->
-Claude defaults: Haiku/Sonnet/Opus/current parent. Codex defaults: Luna/Terra/Sol/current
+Claude defaults: Haiku/Sonnet/Opus/current parent. Codex defaults: Luna/Sol/Astra/current
 parent. Other harnesses require configured cheap/standard/premium tiers. Select a model
 or native tier profile only through supported fields.
 <!-- /leos-agent:routing -->
