@@ -16,7 +16,7 @@ class HandoffSafety(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        self.env = dict(os.environ, LEOS_AGENT_LOCAL_PATH=str(self.root / "state"))
+        self.env = dict(os.environ, HOME=str(self.root / "home"), LEOS_AGENT_LOCAL_PATH=str(self.root / "state"))
 
     def run_cli(self, *args):
         return subprocess.run([sys.executable, str(SCRIPT), *args], env=self.env,
@@ -47,6 +47,20 @@ class HandoffSafety(unittest.TestCase):
         paths = [Path(r.stdout.splitlines()[1]) for r in results]
         self.assertEqual(len(set(paths)), 16)
         self.assertTrue(all(p.is_file() and p.stat().st_mode & 0o777 == 0o600 for p in paths))
+
+    def test_a_trailing_newline_never_reserves_an_unlistable_file(self):
+        """`$` matches before a final newline, so `match` let "abc\\n" through:
+        it reserved "abc\\n.md", then "abc\\n-2.md", which list and rm cannot see."""
+        for _ in range(2):
+            self.assertNotEqual(self.run_cli("new", "abc\n").returncode, 0)
+        handoffs = self.root / "state/handoffs"
+        self.assertEqual(list(handoffs.iterdir()) if handoffs.exists() else [], [])
+        created = self.run_cli("new", "abc")
+        self.assertEqual(created.returncode, 0)
+        self.assertEqual(created.stdout.splitlines()[0], "abc")
+        for name in ("abc\n", "ab\nc"):
+            self.assertNotEqual(self.run_cli("rm", name).returncode, 0)
+        self.assertIn("abc", self.run_cli("list", "--all").stdout)
 
     def test_symlink_directory_is_refused(self):
         (self.root / "state").mkdir()

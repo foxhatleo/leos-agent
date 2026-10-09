@@ -9,14 +9,20 @@ description: Read-only diagnosis of this harness's installation, routing capabil
 Inspect only the harness the user named or the one currently running. Do not
 infer the harness from repository configuration files or install other ones.
 Resolve the absolute plugin root from `LEOS_AGENT_ROOT`, `CLAUDE_PLUGIN_ROOT`,
-`PLUGIN_ROOT`, or the nearest ancestor containing `rules/preferences.md`.
+`PLUGIN_ROOT`, or, when those are unset in the shell, the nearest ancestor of
+this skill file containing `rules/preferences.md`.
 
 ```
 python3 "<plugin-root>/scripts/doctor.py" --harness <harness> --json
 ```
 
-The helper checks installed artifacts, policy rendering, tier references, and
-price freshness. These are disk checks, **not proof of runtime activation**.
+The helper checks installed artifacts, routing.json (invalid sections are
+reported as not applied), the effective dispatch-guard mode, policy rendering,
+tier references, and price freshness of the catalog actually in use, with any
+hand amendments. It reads settings key-scoped to report forced subagent models
+and the advisor on Claude, and Bash-rewriting output compressors such as rtk
+on every harness, with how they interact with dispatch. These are disk checks,
+**not proof of runtime activation**.
 A named model can still be unavailable to the user's provider or organization.
 A configured native agent can be shadowed by a higher-priority project agent.
 

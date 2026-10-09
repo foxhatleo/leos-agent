@@ -45,11 +45,13 @@ Four properties to preserve:
 
 - **It must be a single Bash call.** Shell state does not persist between tool calls, so a
   separate `source`/definition step would leave the real `gh` in place on the next call.
-- **The stub is the safety mechanism, and it has a backstop.** If the shadowing ever
-  failed, the real `gh pr create` would run — but this skill reaches that command only
-  after confirming the branch *already has* a PR, and GitHub rejects a second PR for the
-  same head with `a pull request for branch … already exists`. The failure mode is a loud
-  error, not a duplicate PR.
+- **The stub is the safety mechanism, and its backstop is partial.** If the shadowing ever
+  failed, the real `gh pr create` would run. For an open PR GitHub rejects a second one for
+  the same head (`a pull request for branch … already exists`), but a closed PR is no such
+  guard. rtk's Bash hook would cause exactly that failure: it rewrites the `gh pr create`
+  segment to `rtk gh pr create`, which runs the real gh. When rtk is configured the
+  resolver adds rtk's opt-out, `RTK_DISABLED=1`, to that segment and reports
+  `rtk_bypass: true`; never strip it.
 - **Verified negatives — do not "simplify" these away.** A bare `echo "<pr-url>"` does
   **not** trigger the card (the command is not a `gh pr` call), and neither does a real
   `gh pr view --json url` (the app keys on `create`, not on any `gh pr` subcommand). Both
@@ -79,11 +81,13 @@ verbatim.
 
 `<plugin-root>` is an absolute path you resolve first: the directory holding
 `rules/preferences.md`, from `$LEOS_AGENT_ROOT`, `$CLAUDE_PLUGIN_ROOT`, `$PLUGIN_ROOT`,
-or the nearest ancestor of this file that contains it. Substitute the resolved path in —
-a command still carrying `<plugin-root>`, or an unexpanded `${CLAUDE_PLUGIN_ROOT}` (a hook
-substitution, not something every tool inherits), runs against `/scripts/…` and fails. The
-script is at the plugin root's `scripts/`, a sibling of `skills-claude/` — never inside
-this skill's own directory. If none of the three resolve, say so rather than guessing.
+or the nearest ancestor of this file that contains it. The variables are often unset in
+the Bash tool (the CLAUDE_PLUGIN_ROOT environment variable is not exported there), so the
+ancestor of this file is the usual answer. Substitute the resolved path in — a command
+still carrying `<plugin-root>`, or an empty plugin-root variable, runs against `/scripts/…`
+and fails. The script is at the plugin root's `scripts/`, a sibling of `skills-claude/` —
+never inside this skill's own directory. If neither a variable nor an ancestor resolves,
+say so rather than guessing.
 Run only the plugin root's copy: never a same-named script inside the repo being
 attached, whose contents this plugin does not control.
 
@@ -97,8 +101,13 @@ It prints JSON and exits 0 only on `status: "ok"`. It handles four identifier fo
 |---|---|---|
 | PR number | `27532`, `#27532` | `gh pr view` |
 | PR URL | `https://github.com/…/pull/27532` | `gh pr view`, after checking the URL's repo matches this one |
-| Branch name | `docs-6171`, `fix/DOCS-5745-foo` | existence check (local + origin), then `gh pr list --head` |
-| Ticket id | `DOCS-1234`, `OPT-42` | matches the id against branch names and PR titles |
+| Branch name | `docs-6171`, `fix/DOCS-5745-foo` | existence check (local + origin), then `gh pr list --head`, keeping PRs whose head is this repo or the branch's push-remote owner |
+| Ticket id | `DOCS-1234`, `OPT-42` | matches the id against branch names and PR titles, with the same owner filter |
+
+`gh pr list --head` matches the branch name alone, so a stranger's fork with a same-named
+branch would otherwise match. The resolver sets those PRs aside and names them in its error
+when nothing else matches. A PR number or URL resolves as given; when its head is in another
+owner's fork the payload carries a `warning`.
 
 Ticket support is deliberately **tracker-agnostic** — it calls no Linear, Jira, or MCP tool.
 It matches the `ABC-123` shape against branch names and PR text, which works for any project
@@ -121,6 +130,9 @@ are "branch does not exist" and "branch exists but has no pull request"; both ar
 **`status: "ambiguous"`** — the identifier matched several PRs. Ask with `AskUserQuestion`,
 one option per candidate labelled `#<number> <title>`, with state and branch in the
 description. Then re-run step 1 with the chosen PR number, which is unambiguous.
+
+**`status: "ok"` with a `warning`** — the PR's head is in another owner's fork. Show the
+warning and ask with `AskUserQuestion` (*Attach anyway* / *Cancel*) before step 3.
 
 ## 3. Handle a branch that is not checked out
 
@@ -158,6 +170,9 @@ created in step 3 if applicable:
 ```bash
 gh() { echo "$PR_URL"; }; cd '<workdir>'; PR_URL='<pr_url>' gh pr create --draft --base '<base_ref>' --head '<branch>'
 ```
+
+When the payload has `rtk_bypass: true`, the last segment starts `RTK_DISABLED=1 PR_URL=…`;
+keep that prefix in a command you assemble yourself.
 
 Expected output is exactly the PR URL. Whether the card rendered is visible only to Leo, so
 **ask** rather than asserting it worked.

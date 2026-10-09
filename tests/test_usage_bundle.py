@@ -36,10 +36,19 @@ class BundleCase(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         env = mock.patch.dict(os.environ, {"LEOS_AGENT_LOCAL_PATH": str(self.root / "data"),
-                                           "LEOS_AGENT_PRICE_REFRESH": "off"})
+                                           "LEOS_AGENT_PRICE_REFRESH": "off", "HOME": str(self.root / "home")})
         env.start()
         self.addCleanup(env.stop)
+        for name in ("CLAUDE_CONFIG_DIR", "CODEX_HOME", "HERMES_HOME", "PI_CODING_AGENT_DIR", "OPENCODE_CONFIG_DIR",
+                     "OPENCODE_CONFIG", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "OPENCODE_DB"):
+            os.environ.pop(name, None)
         self.bundle = load("usage_bundle_test", "usage_bundle.py")
+        managed = mock.patch.object(self.bundle.usage_scan.settings_probe, "MANAGED_DIRS", (str(self.root / "managed"),))
+        managed.start()
+        self.addCleanup(managed.stop)
+        (self.root / "work").mkdir()
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(str(self.root / "work"))
         absent = {k: str(self.root / "absent" / k) for k in self.bundle.usage_scan.SOURCES}
         sources = mock.patch.dict(self.bundle.usage_scan.SOURCES, absent)
         sources.start()
@@ -71,7 +80,8 @@ class TestContents(BundleCase):
         names = set(self.build("--since", "7d").namelist())
         for expected in ("README.md", "usage-7d.json", "usage-7d.txt", "environment.txt", "plugin.json",
                          "sources.md", "routing-show.txt", "guard-report.txt", "model-prices.json",
-                         "scanner/usage_scan.py", "scanner/dispatch_log.py", "scanner/pricing.py"):
+                         "scanner/usage_scan.py", "scanner/settings_probe.py", "scanner/dispatch_log.py",
+                         "scanner/pricing.py"):
             self.assertIn(expected, names)
         for harness in self.bundle.routing.HARNESSES:
             self.assertIn("doctor-%s.json" % harness, names)
