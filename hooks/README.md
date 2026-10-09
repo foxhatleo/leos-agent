@@ -48,8 +48,13 @@ Completion signals share one contract. Every adapter sends the observer a
 SubagentStop-shaped event carrying at most the last 4 KiB of the child's final
 text under the harness's own key (`last_assistant_message` on Claude and Codex,
 `child_summary` on Hermes, `result_text` from the JavaScript adapters) plus a
-call id where the harness has one. `scripts/outcome.py` reduces that text to
-`Result:`/`Verified:` tokens and the text is discarded; `usage` is taken from the
+call id where the harness has one. Claude's SubagentStop has no call id, so a
+Claude PostToolUse hook on `Agent|Task` runs `scripts/link_agent.py`: it writes
+one row tying the call's `tool_use_id` to `tool_response.agentId`, for a
+foreground result and for a background launch, and reads nothing else. The
+report joins Claude completions through that row and guesses the nearest
+preceding dispatch only when no link exists. `scripts/outcome.py` reduces the
+child's text to `Result:`/`Verified:` tokens and the text is discarded; `usage` is taken from the
 event or, on Claude and Codex, summed from the child transcript by the usage
 scan's rules, with a turn count. A Claude child that reports through its
 hand-back tool is read from that report. Cursor's subagentStop carries the

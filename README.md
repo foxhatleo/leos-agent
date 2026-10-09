@@ -90,9 +90,10 @@ SubagentStop, to restate its report with them; guard modes `warn` and `off`
 skip the prompt. The dispatch log stores the outcome enum, a verified
 tri-state, a source token, token and turn counts, the tier, and the escalation
 source tier; never brief or result text. `dispatch_log.py report` joins
-completions to dispatches by call id, else by the nearest preceding
-same-session dispatch of the same tier. Claude's SubagentStop carries no call
-id, so Claude joins are that nearest-preceding match. The report prints
+completions to dispatches by call id; on Claude, whose SubagentStop has none,
+through a PostToolUse row linking each Agent call to the child it started;
+and only without either, by the nearest preceding same-session dispatch of
+the same tier. The report prints
 outcome and verification counts per tier beside the dispatches that sent no
 completion signal, escalation chains and tier counts over dispatches that ran,
 summed child usage and turns, reference cost per verified success from catalog

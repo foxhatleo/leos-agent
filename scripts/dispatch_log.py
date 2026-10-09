@@ -200,6 +200,9 @@ def read(limit=None, target=None):
 
 
 COMPLETION = ("executed", "completed")
+# A link row ties a dispatch's call id to the child it started; it is
+# neither a dispatch nor a completion (scripts/link_agent.py writes it).
+LINK = "linked"
 _TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 _ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.]{0,63}")
 
@@ -223,7 +226,7 @@ def _ts(row):
 
 def _ran(entry):
     """A dispatch the guard let through. Blocks and guard errors spent nothing."""
-    return (entry.get("decision") not in COMPLETION + ("block", "error")
+    return (entry.get("decision") not in COMPLETION + (LINK, "block", "error")
             and bool(entry.get("agent") or entry.get("tool")))
 
 
@@ -265,17 +268,23 @@ def _children(entries):
     return children
 
 
+def _bare(agent_id):
+    """A child id without the `agent-` prefix its transcript file name adds."""
+    return agent_id[len("agent-"):] if isinstance(agent_id, str) and agent_id.startswith("agent-") else agent_id
+
+
 def join(entries):
     """Pair each completion with the dispatch it finished. Read time only.
 
-    Order of evidence: call_id; else, for a completion that carries no call
-    id, the nearest preceding same-session dispatch that ran, of the same tier
-    (an untiered completion takes only an untiered dispatch or one naming the
-    same agent); else unmatched. Each dispatch is claimed once, except that
-    children sharing one call id are one batched dispatch. A tie at the
-    nearest step is `ambiguous`, and an ambiguous outcome is never credited to
-    a real tier. Claude's SubagentStop carries no call id, so Claude joins are
-    always the nearest-preceding guess.
+    Order of evidence: the completion's call id; else a link row that ties
+    its child id to the call that started it (Claude's PostToolUse on the
+    Agent tool); else, only when neither exists, the nearest preceding
+    same-session dispatch that ran, of the same tier (an untiered completion
+    takes only an untiered dispatch or one naming the same agent) and not
+    linked to another child; else unmatched. Each dispatch is claimed once,
+    except that children sharing one call id are one batched dispatch. A tie
+    at the nearest step is `ambiguous`, and an ambiguous outcome is never
+    credited to a real tier.
     """
     dispatches = [e for e in entries if _ran(e)]
     completions = _children(entries)
@@ -283,22 +292,31 @@ def join(entries):
     for d in dispatches:
         if d.get("call_id"):
             by_call[(d.get("harness"), d.get("session"), d["call_id"])].append(d)
+    links = {}
+    for e in entries:
+        if e.get("decision") == LINK and e.get("call_id") and e.get("agent_id"):
+            links[(e.get("harness"), e.get("session"), _bare(e["agent_id"]))] = e["call_id"]
+    linked_calls = {(harness, session, call) for (harness, session, _child), call in links.items()}
     claimed = set()
     pairs = {}
     stats = collections.Counter()
     for row in completions:
-        named = by_call.get((row.get("harness"), row.get("session"), row.get("call_id")), []) if row.get("call_id") else []
+        call, how = row.get("call_id"), "call_id"
+        if not call and row.get("agent_id"):
+            call = links.get((row.get("harness"), row.get("session"), _bare(row["agent_id"])))
+            how = "linked"
+        named = by_call.get((row.get("harness"), row.get("session"), call), []) if call else []
         candidates = [d for d in named if id(d) not in claimed]
-        how = "call_id" if candidates else None
         if named and not candidates:
             # A sibling from the same call already claimed it: one batch.
-            stats["call_id"] += 1
-            pairs[id(row)] = (named[-1], _tier_of(named[-1]) or "unrouted", "call_id")
+            stats[how] += 1
+            pairs[id(row)] = (named[-1], _tier_of(named[-1]) or "unrouted", how)
             continue
-        if not candidates and not row.get("call_id"):
+        if not candidates and not call:
             want = _tier_of(row)
             preceding = [d for d in dispatches if id(d) not in claimed and d.get("harness") == row.get("harness")
                          and d.get("session") == row.get("session") and _ts(d) <= _ts(row)
+                         and (d.get("harness"), d.get("session"), d.get("call_id")) not in linked_calls
                          and (_tier_of(d) == want if want is not None
                               else _tier_of(d) is None or (bool(row.get("agent")) and d.get("agent") == row.get("agent")))]
             if preceding:
@@ -378,6 +396,9 @@ def _costs(completions, pairs, catalog):
 
 def summarise(entries, catalog=None):
     """The read-time judgment: burst collapse, tiers, and block conversion."""
+    retained = entries
+    linked = [e for e in entries if e.get("decision") == LINK]
+    entries = [e for e in entries if e.get("decision") != LINK]
     # A child reported twice -- the SubagentStop "completed" row and the
     # SessionEnd "executed" row that supersedes it -- is counted once, in its
     # final state, so decisions and agents describe children rather than
@@ -427,7 +448,7 @@ def summarise(entries, catalog=None):
     blocked = [e for e in entries if e.get("decision") == "block"]
     confirmed = [e for e in current if e.get("decision") == "executed"]
 
-    completions, pairs, joins = join(entries)
+    completions, pairs, joins = join(entries + linked)
     outcomes = {}
     verified = {}
     usage = {}
@@ -490,7 +511,8 @@ def summarise(entries, catalog=None):
     pre_instrumentation = sum(1 for e in entries if (e.get("v") or 0) < 3)
 
     return {
-        "records": len(entries),
+        "records": len(retained),
+        "links": len(linked),
         "outcomes": {tier: dict(c) for tier, c in sorted(outcomes.items())},
         "verified": {tier: dict(c) for tier, c in sorted(verified.items())},
         "usage": {tier: {**u, "rows": usage_rows[tier]} for tier, u in sorted(usage.items())},
@@ -507,7 +529,7 @@ def summarise(entries, catalog=None):
         "joins": joins,
         "pre_instrumentation": pre_instrumentation,
         "dispatch_attempts": len([e for e in dispatches if e.get("decision") != "error"]),
-        "window": [entries[0].get("ts"), entries[-1].get("ts")] if entries else [],
+        "window": [retained[0].get("ts"), retained[-1].get("ts")] if retained else [],
         "harnesses": dict(collections.Counter(e.get("harness") for e in entries)),
         "decisions": dict(collections.Counter(e.get("decision") for e in current)),
         "superseded": len(superseded),
