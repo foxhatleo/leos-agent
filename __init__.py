@@ -108,21 +108,47 @@ def _completion(event):
         logger.warning("leos-agent completion bridge failed open")
 
 
+# subagent_stop is the outcome source: Hermes fires it once per child, before
+# a synchronous delegate_task returns and as each background unit finishes.
+# Once this process has seen it, post_tool_call never records a child again.
+_SUBAGENT_STOP_SEEN = threading.Event()
+
+
 def _on_post_tool_call(tool_name="", args=None, result=None, task_id=None, session_id=None, tool_call_id=None,
                        status=None, **_):
-    if tool_name != "delegate_task":
+    """Fallback completion rows for a build that never fires subagent_stop.
+
+    Hermes passes the tool result as its JSON string. A background delegation
+    returns a dispatch handle at once, so there is no child text to read; a
+    synchronous one returns {"results": [{"task_index", "summary", ...}]}.
+    """
+    if tool_name != "delegate_task" or _SUBAGENT_STOP_SEEN.is_set():
         return None
-    if isinstance(result, dict):
-        result = next((v for k in ("result", "summary", "output", "content", "text") if isinstance((v := result.get(k)), str)), "")
-    text = result if isinstance(result, str) else ""
-    _completion({"tool_name": tool_name, "session_id": session_id or task_id or "", "call_id": tool_call_id,
-                 "agent": "delegate_task", "result_text": text[-4096:], "status": status if isinstance(status, str) else None,
-                 "reason": "hermes-post-tool-call"})
+    try:
+        parsed = json.loads(result) if isinstance(result, str) else result
+    except ValueError:
+        parsed = result  # a plain-text result from an older build
+    if isinstance(parsed, str):
+        children = [{"summary": parsed}]
+    elif isinstance(parsed, dict) and isinstance(parsed.get("results"), list):
+        children = [entry for entry in parsed["results"] if isinstance(entry, dict)]
+    else:
+        return None  # a background handle, an error, or a control action
+    for position, entry in enumerate(children):
+        summary = entry.get("summary") if isinstance(entry.get("summary"), str) else ""
+        index = entry.get("task_index") if isinstance(entry.get("task_index"), int) else position
+        _completion({"tool_name": tool_name, "session_id": session_id or task_id or "", "call_id": tool_call_id or None,
+                     "agent_id": "%s#%d" % (tool_call_id, index) if tool_call_id and len(children) > 1 else None,
+                     "agent": "delegate_task", "result_text": summary[-4096:],
+                     "status": entry.get("status") if isinstance(entry.get("status"), str) else (status if isinstance(status, str) else None),
+                     "reason": "hermes-post-tool-call"})
     return None
 
 
-def _on_subagent_stop(parent_session_id=None, child_role=None, child_summary=None, child_status=None, **_):
-    _completion({"session_id": parent_session_id or "", "agent": child_role if isinstance(child_role, str) else "delegate_task",
+def _on_subagent_stop(parent_session_id=None, child_session_id=None, child_summary=None, child_status=None, **_):
+    _SUBAGENT_STOP_SEEN.set()
+    _completion({"session_id": parent_session_id or "", "agent": "delegate_task",
+                 "agent_id": child_session_id if isinstance(child_session_id, str) and child_session_id else None,
                  "child_summary": (child_summary if isinstance(child_summary, str) else "")[-4096:],
                  "status": child_status if isinstance(child_status, str) else None, "reason": "hermes-subagent-stop"})
     return None

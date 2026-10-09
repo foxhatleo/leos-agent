@@ -29,6 +29,7 @@ import collections
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 
@@ -48,7 +49,8 @@ LOG_NAME = "dispatch.jsonl"
 # report and assuming it covers the whole period.
 MAX_BYTES = 1 << 20
 
-# v3 added tier, escalation_from, outcome, verified, outcome_source, usage.
+# v3 added tier, escalation_from, outcome, verified, outcome_source, usage;
+# completion rows may also carry turns, a count of the child's model requests.
 # The reader branches on this so "predates instrumentation" is never confused
 # with "the worker emitted no Result line".
 RECORD_VERSION = 3
@@ -140,34 +142,73 @@ def append(entry):
             fh.write(json.dumps(entry, sort_keys=True) + "\n")
 
 
+def _lines(candidate):
+    """(lines, (device, inode)) of one file; ([], None) when it does not exist."""
+    try:
+        with open(candidate, encoding="utf-8", errors="replace") as fh:
+            stat = os.fstat(fh.fileno())
+            return fh.read().splitlines(), (stat.st_dev, stat.st_ino)
+    except FileNotFoundError:
+        return [], None
+    except OSError as exc:
+        # Raise, don't exit: read() serves hooks and scanners that must file
+        # an unreadable log as a finding and carry on. A SystemExit here
+        # skipped a Codex lifecycle hook's mandatory JSON reply and took the
+        # diagnosis bundle down before it wrote anything. The CLI exits in main().
+        raise OSError("%s: %s" % (candidate, exc.strerror or exc)) from exc
+
+
+def _identity(candidate):
+    try:
+        stat = os.stat(candidate)
+    except OSError:
+        return None
+    return stat.st_dev, stat.st_ino
+
+
 def read(limit=None, target=None):
-    """Records, oldest first. Tolerates a truncated final line from a crash."""
+    """Records, oldest first. Tolerates a truncated final line from a crash.
+
+    Lock-free, so a hook never waits on a reader. A rotation that lands between
+    reading the old generation and the current one would drop the generation
+    in between; the current file's identity is compared before and after, and
+    the pair is read again when it changed.
+    """
+    if target:
+        lines = _lines(target)[0]
+    else:
+        current = path()
+        for _attempt in range(3):
+            before = _identity(current)
+            older = _lines(current + ".1")[0]
+            newer, after = _lines(current)
+            if after == before:
+                break
+        lines = older + newer
     out = []
-    for candidate in ((target,) if target else (path() + ".1", path())):
-        try:
-            with open(candidate, encoding="utf-8", errors="replace") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        entry = json.loads(line)
-                    except ValueError:
-                        continue  # a half-written last line, or a foreign line
-                    if isinstance(entry, dict):
-                        out.append(entry)
-        except FileNotFoundError:
+    for line in lines:
+        line = line.strip()
+        if not line:
             continue
-        except OSError as exc:
-            # Raise, don't exit: read() serves hooks and scanners that must file
-            # an unreadable log as a finding and carry on. A SystemExit here
-            # skipped a Codex lifecycle hook's mandatory JSON reply and took the
-            # diagnosis bundle down before it wrote anything. The CLI exits in main().
-            raise OSError("%s: %s" % (candidate, exc.strerror or exc)) from exc
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue  # a half-written last line, or a foreign line
+        if isinstance(entry, dict):
+            out.append(entry)
     return out[-limit:] if limit else out
 
 
 COMPLETION = ("executed", "completed")
+_TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
+_ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.]{0,63}")
+
+
+def _token(value):
+    """An enum-shaped log value as it is; anything else, free text included, as `other`."""
+    if value is None:
+        return "none"
+    return value if isinstance(value, str) and _TOKEN_RE.fullmatch(value) else "other"
 
 
 def _tier_of(row):
@@ -180,36 +221,64 @@ def _ts(row):
     return row.get("ts") or ""
 
 
-def join(entries):
-    """Pair each completion row with the dispatch it finished. Read time only.
+def _ran(entry):
+    """A dispatch the guard let through. Blocks and guard errors spent nothing."""
+    return (entry.get("decision") not in COMPLETION + ("block", "error")
+            and bool(entry.get("agent") or entry.get("tool")))
 
-    Order of evidence, each dispatch claimed at most once: call_id; (session,
-    agent_id); nearest preceding same-session same-tier dispatch that actually
-    ran; else unmatched. A tie or a second candidate at the same strength is
-    `ambiguous`, and an ambiguous outcome is never credited to a real tier.
-    Hermes may report one delegation twice (post_tool_call and subagent_stop);
-    those collapse here, preferring the row that carries an outcome.
+
+def _child_key(row):
+    """One child's identity across its reports; None when it has none.
+
+    Only a call id or the child's own id identifies a child. Agent name plus
+    a timestamp bucket does not: siblings of one agent finishing in the same
+    ten seconds are different children, not one child reported twice.
     """
-    dispatches = [e for e in entries if e.get("decision") not in COMPLETION and e.get("decision") not in ("block", "error")
-                  and (e.get("agent") or e.get("tool"))]
-    completions = []
-    seen = {}
+    if not (row.get("call_id") or row.get("agent_id")):
+        return None
+    return row.get("harness"), row.get("session"), row.get("call_id"), row.get("agent_id")
+
+
+def _children(entries):
+    """Completion rows, one per child, oldest first.
+
+    A child reported more than once -- a SubagentStop row and the SessionEnd
+    row that backfilled it, or a stop that another hook kept running -- is
+    merged in log order, so later known values win and an `unknown` never
+    erases an earlier outcome.
+    """
+    children, index = [], {}
     for row in sorted((e for e in entries if e.get("decision") in COMPLETION), key=_ts):
-        key = (row.get("harness"), row.get("session"), row.get("call_id")) if row.get("call_id") else None
-        if key is None and row.get("agent_id"):
-            key = (row.get("harness"), row.get("session"), "agent", row.get("agent_id"))
-        if key is None:
-            key = (row.get("harness"), row.get("session"), row.get("agent"), _ts(row)[:18])
-        prior = seen.get(key)
-        if prior is None:
-            seen[key] = row
-            completions.append(row)
-        elif (prior.get("outcome") in (None, "unknown")) and row.get("outcome") not in (None, "unknown"):
-            completions[completions.index(prior)] = row
-            seen[key] = row
-        elif prior.get("decision") == "completed" and row.get("decision") == "executed":
-            completions[completions.index(prior)] = row
-            seen[key] = row
+        key = _child_key(row)
+        if key is None or key not in index:
+            if key is not None:
+                index[key] = len(children)
+            children.append(row)
+            continue
+        prior = children[index[key]]
+        merged = dict(prior)
+        merged.update({k: v for k, v in row.items() if v not in (None, "unknown")})
+        if "executed" in (prior.get("decision"), row.get("decision")):
+            merged["decision"] = "executed"
+        merged["ts"] = _ts(prior) or _ts(row)  # the first stop is when the child finished
+        children[index[key]] = merged
+    return children
+
+
+def join(entries):
+    """Pair each completion with the dispatch it finished. Read time only.
+
+    Order of evidence: call_id; else, for a completion that carries no call
+    id, the nearest preceding same-session dispatch that ran, of the same tier
+    (an untiered completion takes only an untiered dispatch or one naming the
+    same agent); else unmatched. Each dispatch is claimed once, except that
+    children sharing one call id are one batched dispatch. A tie at the
+    nearest step is `ambiguous`, and an ambiguous outcome is never credited to
+    a real tier. Claude's SubagentStop carries no call id, so Claude joins are
+    always the nearest-preceding guess.
+    """
+    dispatches = [e for e in entries if _ran(e)]
+    completions = _children(entries)
     by_call = collections.defaultdict(list)
     for d in dispatches:
         if d.get("call_id"):
@@ -218,27 +287,27 @@ def join(entries):
     pairs = {}
     stats = collections.Counter()
     for row in completions:
-        tier = None
-        candidates = [d for d in by_call.get((row.get("harness"), row.get("session"), row.get("call_id")), []) if id(d) not in claimed] if row.get("call_id") else []
+        named = by_call.get((row.get("harness"), row.get("session"), row.get("call_id")), []) if row.get("call_id") else []
+        candidates = [d for d in named if id(d) not in claimed]
         how = "call_id" if candidates else None
-        if not candidates and row.get("session") and row.get("agent_id"):
-            # Dispatch rows never know the child's agent_id, so this key only
-            # ever matches a dispatch that a later adapter learns to stamp.
-            candidates = [d for d in dispatches if id(d) not in claimed and d.get("session") == row.get("session")
-                          and d.get("agent_id") == row.get("agent_id")]
-            how = "agent_id" if candidates else None
-        if not candidates:
+        if named and not candidates:
+            # A sibling from the same call already claimed it: one batch.
+            stats["call_id"] += 1
+            pairs[id(row)] = (named[-1], _tier_of(named[-1]) or "unrouted", "call_id")
+            continue
+        if not candidates and not row.get("call_id"):
             want = _tier_of(row)
             preceding = [d for d in dispatches if id(d) not in claimed and d.get("harness") == row.get("harness")
                          and d.get("session") == row.get("session") and _ts(d) <= _ts(row)
-                         and (want is None or _tier_of(d) == want)]
+                         and (_tier_of(d) == want if want is not None
+                              else _tier_of(d) is None or (bool(row.get("agent")) and d.get("agent") == row.get("agent")))]
             if preceding:
                 latest = max(_ts(d) for d in preceding)
                 candidates = [d for d in preceding if _ts(d) == latest]
                 how = "nearest"
         if not candidates:
             stats["unmatched"] += 1
-            pairs[id(row)] = (None, "unrouted" if _tier_of(row) is None else _tier_of(row), "unmatched")
+            pairs[id(row)] = (None, _tier_of(row) or "unrouted", "unmatched")
             continue
         chosen = candidates[-1]
         claimed.add(id(chosen))
@@ -252,38 +321,93 @@ def join(entries):
     return completions, pairs, dict(stats)
 
 
-def summarise(entries):
+def _reference_usd(model, usage, catalog):
+    """(low, high) reference USD for one child's tokens, or None when unpriced.
+
+    The same rates and conditional-rate range the usage scan applies. A
+    reference estimate from public catalog prices, never a bill.
+    """
+    import pricing
+    if not isinstance(model, str) or not model:
+        return None
+    match = pricing.resolve(model, catalog)
+    if match.model is None:
+        return None
+    rows = [match.pricing] + list(match.pricing.get("overrides", []))
+    low = high = 0
+    for field, rate_key in (("input", "prompt"), ("cache_read", "input_cache_read"),
+                            ("cache_write", "input_cache_write"), ("output", "completion")):
+        amount = usage.get(field) or 0
+        if not amount:
+            continue
+        rates = [pricing.decimal(row.get(rate_key, match.pricing.get(rate_key))) for row in rows]
+        if None in rates:
+            return None
+        low += amount * min(rates)
+        high += amount * max(rates)
+    return float(low), float(high)
+
+
+def _costs(completions, pairs, catalog):
+    """Reference cost per verified success, per tier, over the children that can be priced."""
+    out = {}
+    for row in completions:
+        usage = row.get("usage")
+        if not isinstance(usage, dict):
+            continue
+        if catalog is None:
+            import pricing
+            catalog = pricing.load()
+        tier = pairs[id(row)][1]
+        bucket = out.setdefault(tier, {"reference_usd": [0.0, 0.0], "priced_runs": 0, "unpriced_runs": 0,
+                                       "verified_successes": 0, "per_verified_success_usd": None})
+        price = _reference_usd(row.get("effective_model"), usage, catalog)
+        if price is None:
+            bucket["unpriced_runs"] += 1
+            continue
+        bucket["priced_runs"] += 1
+        bucket["reference_usd"] = [bucket["reference_usd"][0] + price[0], bucket["reference_usd"][1] + price[1]]
+        if row.get("outcome") == "done" and row.get("verified") is True:
+            bucket["verified_successes"] += 1
+    for bucket in out.values():
+        wins = bucket["verified_successes"]
+        if wins:
+            bucket["per_verified_success_usd"] = [bucket["reference_usd"][0] / wins, bucket["reference_usd"][1] / wins]
+    return out
+
+
+def summarise(entries, catalog=None):
     """The read-time judgment: burst collapse, tiers, and block conversion."""
-    # A child whose model arrived late has two rows: the SubagentStop
-    # "completed" and the SessionEnd "executed" that supersedes it. Count each
-    # child once, in its final state, so decisions and agents describe agents
-    # rather than rows. records stays the raw retained count.
-    executed_children = {
-        (e.get("session"), e.get("agent_id")) for e in entries
-        if e.get("decision") == "executed" and e.get("session") and e.get("agent_id")
-    }
+    # A child reported twice -- the SubagentStop "completed" row and the
+    # SessionEnd "executed" row that supersedes it -- is counted once, in its
+    # final state, so decisions and agents describe children rather than
+    # rows. records stays the raw retained count.
+    last_report = {}
+    for e in entries:
+        if e.get("decision") in COMPLETION and e.get("session") and _child_key(e):
+            last_report[_child_key(e)] = id(e)
     superseded = {
         id(e) for e in entries
-        if e.get("decision") == "completed" and (e.get("session"), e.get("agent_id")) in executed_children
+        if e.get("decision") in COMPLETION and e.get("session") and _child_key(e)
+        and last_report[_child_key(e)] != id(e)
     }
     current = [e for e in entries if id(e) not in superseded]
     dispatches = [e for e in entries if e.get("decision") not in ("executed", "completed")]
+    ran = [e for e in dispatches if e.get("decision") not in ("block", "error")]
     # Allowed attempts count toward a burst; execution is not established. A block and the
     # re-dispatch it forced land in the same two-second bucket, and counting
     # both would let every blocked retry pose as a fan-out of two.
-    bursts = collections.Counter(
-        e.get("burst") for e in dispatches if e.get("burst") and e.get("decision") not in ("block", "error")
-    )
+    bursts = collections.Counter(e.get("burst") for e in ran if e.get("burst"))
 
+    # Tiers and escalations count dispatches that ran. A block and the retry
+    # it forced are one piece of work; blocks are reported on their own line.
     tiers = collections.Counter()
-    for entry in dispatches:
+    for entry in ran:
         agent = entry.get("agent") or ""
         if is_tier(agent):
             tiers[agent] += 1
         elif entry.get("model"):
             tiers["explicit model"] += 1
-        elif entry.get("decision") == "block":
-            tiers["blocked"] += 1
         else:
             tiers["model unspecified"] += 1
 
@@ -301,13 +425,14 @@ def summarise(entries):
     # A prompt hash is evidence of similar text, not of successful execution,
     # lower spend, or a causal retry. Count blocks even when no hash is available.
     blocked = [e for e in entries if e.get("decision") == "block"]
-    confirmed = [e for e in entries if e.get("decision") == "executed"]
+    confirmed = [e for e in current if e.get("decision") == "executed"]
 
     completions, pairs, joins = join(entries)
     outcomes = {}
     verified = {}
     usage = {}
     usage_rows = collections.Counter()
+    turns = {}
     sources = collections.defaultdict(collections.Counter)
     for row in completions:
         _, tier, _how = pairs[id(row)]
@@ -320,14 +445,45 @@ def summarise(entries):
             import outcome as _outcome
             usage[tier] = _outcome.add_usage(usage.get(tier), row["usage"])
             usage_rows[tier] += 1
+        if isinstance(row.get("turns"), int) and not isinstance(row.get("turns"), bool) and row["turns"] > 0:
+            bucket = turns.setdefault(tier, {"total": 0, "rows": 0})
+            bucket["total"] += row["turns"]
+            bucket["rows"] += 1
+    # A dispatch that ran but that no completion claimed has no completion
+    # signal: a background child whose stop event never fired, a harness that
+    # reports nothing, or a child still running. Counted per tier beside the
+    # outcomes rather than silently left out of them.
+    claimed = {id(chosen) for chosen, _tier, _how in pairs.values() if chosen is not None}
+    coverage = {}
+    for entry in dispatches:
+        if not _ran(entry) or (entry.get("v") or 0) < 3:
+            continue
+        bucket = coverage.setdefault(_tier_of(entry) or "unrouted", {"ran": 0, "no_signal": 0})
+        bucket["ran"] += 1
+        bucket["no_signal"] += id(entry) not in claimed
     escalations = collections.Counter()
     unobservable = 0
-    for entry in dispatches:
+    for entry in ran:
         source = entry.get("escalation_from")
         if source == "unobservable":
             unobservable += 1
         elif source:
             escalations["%s->%s" % (source, _tier_of(entry) or "unrouted")] += 1
+    # Diagnostic tokens the guard stamps on a dispatch, such as a routing
+    # config that failed validation. Enum-shaped values are counted as they
+    # are; anything else is counted without being echoed.
+    diagnostics = collections.Counter(
+        _token(e["diagnostic"]) for e in dispatches if isinstance(e.get("diagnostic"), str) and e["diagnostic"]
+    )
+    # Why the guard decided as it did, per decision. Older error rows put the
+    # exception text in `reason`; that groups as `other`, never echoed.
+    reasons = collections.defaultdict(collections.Counter)
+    for e in dispatches:
+        reasons[_token(e.get("decision"))][_token(e.get("reason"))] += 1
+    error_types = collections.Counter(
+        e["error_type"] if isinstance(e.get("error_type"), str) and _ERROR_TYPE_RE.fullmatch(e["error_type"]) else "other"
+        for e in dispatches if e.get("decision") == "error" and e.get("error_type") is not None
+    )
     # Harnesses that dispatched but never reported a completion: the report
     # states the absence rather than guessing at a cause.
     silent = sorted({e.get("harness") for e in dispatches} - {c.get("harness") for c in completions} - {None})
@@ -338,6 +494,12 @@ def summarise(entries):
         "outcomes": {tier: dict(c) for tier, c in sorted(outcomes.items())},
         "verified": {tier: dict(c) for tier, c in sorted(verified.items())},
         "usage": {tier: {**u, "rows": usage_rows[tier]} for tier, u in sorted(usage.items())},
+        "turns": dict(sorted(turns.items())),
+        "cost": dict(sorted(_costs(completions, pairs, catalog).items())),
+        "coverage": dict(sorted(coverage.items())),
+        "diagnostics": dict(sorted(diagnostics.items())),
+        "reasons": {decision: dict(sorted(c.items())) for decision, c in sorted(reasons.items())},
+        "error_types": dict(sorted(error_types.items())),
         "escalations": dict(escalations),
         "escalation_unobservable": unobservable,
         "outcome_sources": {h: dict(c) for h, c in sorted(sources.items()) if h},
@@ -376,10 +538,20 @@ def render(summary):
     lines.append("  dispatch attempts  %d; child model observations  %d" % (summary["dispatch_attempts"], summary["confirmed_executions"]))
     if summary.get("superseded"):
         lines.append("  reconciled  %d child(ren) counted once, in their final state" % summary["superseded"])
-    lines.append("  harnesses   " + ", ".join("%s %d" % kv for kv in sorted(summary["harnesses"].items())))
+    # A row from before harness tagging has no harness; it must not break the sort.
+    lines.append("  harnesses   " + ", ".join("%s %d" % kv for kv in sorted(summary["harnesses"].items(), key=lambda kv: str(kv[0]))))
     lines.append("  tiers       " + ", ".join("%s %d" % kv for kv in sorted(summary["tiers"].items())))
     if summary["blocked"]:
         lines.append("  blocks      %d (execution/savings not inferred from retries)" % summary["blocked"])
+    if summary.get("diagnostics"):
+        lines.append("  diagnostics " + ", ".join("%s %d" % kv for kv in summary["diagnostics"].items()))
+    first = True
+    for decision, counts in (summary.get("reasons") or {}).items():
+        body = ", ".join("%s %d" % kv for kv in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+        lines.append("  %-11s %s: %s" % ("reasons" if first else "", decision, body))
+        first = False
+    if summary.get("error_types"):
+        lines.append("  error types " + ", ".join("%s %d" % kv for kv in summary["error_types"].items()))
     lines.append("  short-brief signals  %d  (heuristic only; not evidence of wasted spend)" % summary["trivial_lone_spawns"])
     lines.extend(_render_outcomes(summary))
     lines.append("  agent @ model:")
@@ -388,16 +560,24 @@ def render(summary):
     return "\n".join(lines)
 
 
+def _usd(pair):
+    low, high = pair
+    return "$%.4f" % low if round(low, 4) == round(high, 4) else "$%.4f-$%.4f" % (low, high)
+
+
 def _render_outcomes(summary):
     """Outcome, verification, escalation and usage sections; empty when there is nothing to say."""
     lines = []
     outcomes = summary.get("outcomes") or {}
-    if outcomes:
-        first = True
-        for tier, counts in outcomes.items():
-            body = "  ".join("%s %d" % kv for kv in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
-            lines.append("  %-11s %-9s %s" % ("outcomes" if first else "", tier, body))
-            first = False
+    silent_tiers = {tier: c["no_signal"] for tier, c in (summary.get("coverage") or {}).items() if c.get("no_signal")}
+    first = True
+    for tier in sorted(set(outcomes) | set(silent_tiers)):
+        counts = outcomes.get(tier, {})
+        body = "  ".join("%s %d" % kv for kv in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+        if silent_tiers.get(tier):
+            body = (body + "  | " if body else "| ") + "no completion signal %d" % silent_tiers[tier]
+        lines.append("  %-11s %-9s %s" % ("outcomes" if first else "", tier, body))
+        first = False
     verified = summary.get("verified") or {}
     if verified:
         parts = []
@@ -412,6 +592,29 @@ def _render_outcomes(summary):
             parts.append("%s in %d out %d cache-read %d (%d row%s)" % (
                 tier, u.get("input", 0), u.get("output", 0), u.get("cache_read", 0), u["rows"], "" if u["rows"] == 1 else "s"))
         lines.append("  child usage " + "; ".join(parts) + "  (tokens summed from observed children only)")
+    turns = summary.get("turns") or {}
+    if turns:
+        lines.append("  turns       " + "; ".join("%s %d over %d run%s (mean %.1f)" % (
+            tier, t["total"], t["rows"], "" if t["rows"] == 1 else "s", t["total"] / t["rows"]) for tier, t in turns.items()))
+    cost = summary.get("cost") or {}
+    if cost:
+        parts = []
+        for tier, c in cost.items():
+            spent = _usd(c["reference_usd"])
+            if c["per_verified_success_usd"]:
+                part = "%s %s per verified success (%s over %d priced run%s, %d verified)" % (
+                    tier, _usd(c["per_verified_success_usd"]), spent, c["priced_runs"],
+                    "" if c["priced_runs"] == 1 else "s", c["verified_successes"])
+            elif c["priced_runs"]:
+                part = "%s no verified success (%s over %d priced run%s)" % (
+                    tier, spent, c["priced_runs"], "" if c["priced_runs"] == 1 else "s")
+            else:
+                part = "%s unpriced" % tier
+            if c["unpriced_runs"]:
+                part += ", %d unpriced" % c["unpriced_runs"]
+            parts.append(part)
+        lines.append("  cost        " + "; ".join(parts))
+        lines.append("              (reference estimate from catalog prices, not a bill)")
     escalations = summary.get("escalations") or {}
     if escalations or summary.get("escalation_unobservable"):
         body = "; ".join("%s %d" % (k.replace("->", " -> "), v) for k, v in sorted(escalations.items())) or "none observed"

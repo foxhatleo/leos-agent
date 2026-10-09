@@ -43,6 +43,27 @@ class CursorHooks(unittest.TestCase):
         self.assertEqual((rows[-1]["outcome"], rows[-1]["outcome_source"], rows[-1]["status"]), ("unknown", "status-only", "completed"))
         self.assertIsNone(rows[-1]["verified"])
 
+    def test_parallel_children_join_by_call_id_and_carry_their_summary(self):
+        # subagentStop as current Cursor sends it: the Task call id, the child
+        # conversation id, a status token, and the child's summary.
+        for call in ("t1", "t2"):
+            event = self.event("claude-haiku-4-5", "claude-opus-5")
+            event.update(subagent_type="leo-cheap", tool_call_id=call)
+            self.module.handle(event)
+        for call, result in (("t2", "blocked"), ("t1", "done")):
+            self.module.handle({"hook_event_name": "subagentStop", "subagent_type": "leo-cheap", "parent_conversation_id": "c",
+                                "tool_call_id": call, "child_conversation_id": "child-" + call, "status": "completed",
+                                "description": "Inspect", "summary": "PRIVATE_SUMMARY\nResult: %s\nVerified: none" % result,
+                                "modified_files": [], "agent_transcript_path": None})
+        rows = self.module.dispatch_log.read()
+        stops = [r for r in rows if r["decision"] == "completed"]
+        self.assertEqual([(r["call_id"], r["agent_id"], r["outcome"], r["outcome_source"]) for r in stops],
+                         [("t2", "child-t2", "blocked", "message"), ("t1", "child-t1", "done", "message")])
+        summary = self.module.dispatch_log.summarise(rows)
+        self.assertEqual(summary["joins"], {"call_id": 2})
+        self.assertEqual(summary["outcomes"], {"cheap": {"blocked": 1, "done": 1}})
+        self.assertNotIn("PRIVATE_SUMMARY", (Path(self.tmp.name) / "dispatch.jsonl").read_text())
+
     def test_unknown_resolved_model_does_not_use_config_as_observation(self):
         event = self.event(None, "claude-haiku-4-5")
         event["subagent_type"] = "leo-standard"

@@ -28,14 +28,19 @@ def handle(event):
         if result["action"] == "block":
             return {"permission": "deny", "user_message": dispatch_guard.render_block(result)}
     elif kind == "subagentStop":
-        # This event proves lifecycle completion, not which model was billed and
-        # not how the work ended: Cursor exposes a status token and no child text,
-        # so the row says status-only rather than inventing an outcome.
+        # This event proves lifecycle completion, not which model was billed.
+        # Current builds add the child's summary, which carries its Result and
+        # Verified lines; without it the row says status-only rather than
+        # inventing an outcome. The child transcript is not read: its format
+        # is Cursor's own and the path is often null.
         import observe_agent
+        summary = event.get("summary") if isinstance(event.get("summary"), str) else ""
+        child = event.get("child_conversation_id")
         observe_agent.observe({"hook_event_name": "SubagentStop", "session_id": session,
                                "subagent_type": event.get("subagent_type"), "tool_call_id": event.get("tool_call_id"),
+                               "agent_id": child if isinstance(child, str) else None, "summary": summary[-4096:],
                                "status": event.get("status") if isinstance(event.get("status"), str) else "unknown",
-                               "reason": "cursor-lifecycle-status"}, "cursor")
+                               "reason": "cursor-subagent-summary" if summary.strip() else "cursor-lifecycle-status"}, "cursor")
     return None
 
 

@@ -41,22 +41,45 @@ const logRows = () => {
   return existsSync(path) ? readFileSync(path, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
 };
 
+// The task tool's result as packages/opencode/src/tool/task.ts builds it: the
+// executed args reach the after-hook as input.args, and metadata names the
+// parent and child sessions and the model the child ran on -- no agent field.
+const taskResult = (text, extra = {}) => ({
+  title: 'x',
+  metadata: { parentSessionId: 's', sessionId: 'ses_child7', model: { modelID: 'gpt-5.6-luna', providerID: 'openai' }, ...extra },
+  output: ['<task id="ses_child7" state="completed">', '<task_result>', text, '</task_result>', '</task>'].join('\n'),
+});
+
 test('OpenCode records the task outcome by callID and stores none of the text', async () => {
   const hooks = await LeosAgent({ directory: storage, client: {} });
   const before = logRows().length;
-  await hooks['tool.execute.after']({ tool: 'task', sessionID: 's', callID: 'call-7' },
-    { title: 'x', output: 'Edited files PRIVATE_OUTPUT.\n\nResult: done\nVerified: node --test green', metadata: {} });
+  await hooks['tool.execute.after']({ tool: 'task', sessionID: 's', callID: 'call-7',
+    args: { subagent_type: 'leo-cheap', prompt: 'PRIVATE_BRIEF', description: 'd' } },
+  taskResult('Edited files PRIVATE_OUTPUT.\n\nResult: done\nVerified: node --test green'));
   const rows = logRows();
   assert.equal(rows.length, before + 1);
   const row = rows.at(-1);
   assert.equal(row.harness, 'opencode');
   assert.equal(row.call_id, 'call-7');
+  assert.equal(row.agent, 'leo-cheap');
+  assert.equal(row.agent_id, 'ses_child7');
+  assert.equal(row.effective_model, 'openai/gpt-5.6-luna');
+  assert.equal(row.decision, 'executed');
   assert.equal(row.outcome, 'done');
   assert.equal(row.verified, true);
   assert.equal(row.outcome_source, 'tool-output');
-  assert.equal(readFileSync(join(storage, 'dispatch.jsonl'), 'utf8').includes('PRIVATE_OUTPUT'), false);
+  const raw = readFileSync(join(storage, 'dispatch.jsonl'), 'utf8');
+  assert.equal(raw.includes('PRIVATE_OUTPUT') || raw.includes('PRIVATE_BRIEF'), false);
   await hooks['tool.execute.after']({ tool: 'bash', sessionID: 's', callID: 'c2' }, { output: 'Result: done' });
   assert.equal(logRows().length, before + 1);
+});
+
+test('OpenCode records nothing when a background task fires the after-hook at launch', async () => {
+  const hooks = await LeosAgent({ directory: storage, client: {} });
+  const before = logRows().length;
+  await hooks['tool.execute.after']({ tool: 'task', sessionID: 's', callID: 'call-8', args: { subagent_type: 'leo-cheap' } },
+    taskResult('The task is working in the background.', { background: true, jobId: 'ses_child7' }));
+  assert.equal(logRows().length, before);
 });
 
 test('Pi records the subagent result with usage and returns nothing', async () => {

@@ -438,11 +438,13 @@ class TestOutcomeReport(GuardCase):
         self.assertIn("cheap -> standard 1", text)
         self.assertIn("unobservable escalation marker", text)
 
-    def test_hermes_duplicates_collapse_and_silent_harnesses_are_named(self):
+    def test_hermes_children_join_and_silent_harnesses_are_named(self):
+        # Hermes's subagent_stop carries the child's session id and no tool
+        # call id, so the row joins by the nearest preceding untiered dispatch.
         summary = self.log.summarise([
             self.d("2026-09-21T10:00:00Z", "delegate_task", call="h1", harness="hermes", tier=None),
-            self.c("2026-09-21T10:01:00Z", "delegate_task", call="h1", harness="hermes", outcome="unknown", verified=None, reason="hermes-post-tool-call"),
-            self.c("2026-09-21T10:01:01Z", "delegate_task", call="h1", harness="hermes", outcome="done", reason="hermes-subagent-stop"),
+            self.c("2026-09-21T10:01:01Z", "delegate_task", harness="hermes", outcome="done", reason="hermes-subagent-stop",
+                   agent_id="child-session"),
             self.d("2026-09-21T10:02:00Z", "subagent", harness="pi", tier=None),
             self.d("2026-09-21T10:03:00Z", "leo-cheap", harness="cursor"),
             self.c("2026-09-21T10:04:00Z", "leo-cheap", harness="cursor", outcome="unknown", verified=None, outcome_source="status-only", status="completed"),

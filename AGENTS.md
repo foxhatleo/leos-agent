@@ -106,9 +106,10 @@ The policy in `rules/preferences.md` applies to work on this repo too.
   for the log, not evidence.
 - The dispatch log holds enums, booleans, counts, hashes, and tier tokens. No
   brief text, no result text, no evidence strings. `outcome.py` is the one
-  parser and returns nothing else. Cursor rows are status-only; Codex escalation
-  markers are `unobservable`; Hermes and Pi completion rows depend on the
-  installed build firing the hook, and the report names silent harnesses.
+  parser and returns nothing else. Cursor rows without a subagentStop summary
+  are status-only; Codex escalation markers are `unobservable`; Hermes and Pi
+  completion rows depend on the installed build firing the hook, and the
+  report names silent harnesses.
 - Tier labels are capability choices, not a guaranteed price ordering. Unknown
   IDs, ambiguous prices, and input/output crossovers remain explicit diagnostics.
   Price aliases must never rewrite the model ID sent to a harness. Catalog
