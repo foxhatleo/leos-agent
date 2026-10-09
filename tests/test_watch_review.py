@@ -477,11 +477,42 @@ class TestClaimsAndPagination(unittest.TestCase):
         self.assertIsNone(self.w.claim_review("o/r", 1, head, 10))
         second = self.w.claim_review("o/r", 1, head, 1801)
         self.assertNotEqual(first, second)
-        with self.assertRaises(ValueError):
+        # Once another worker has started the replacement, the older one cannot finish.
+        self.w.start_claim("o/r", 1, second, 1802, head)
+        with self.assertRaisesRegex(ValueError, "superseded"):
             self.w.record("o/r", 1, head, first)
+        with self.assertRaisesRegex(ValueError, "superseded"):
+            self.w.block_head("o/r", 1, head, "why", first, 1803)
         self.w.record("o/r", 1, head, second)
         self.assertIsNone(self.w.claim_review("o/r", 1, head, 4000))
         self.assertIsNotNone(self.w.claim_review("o/r", 1, "b" * 40, 4000))
+
+    def test_an_older_line_finishes_while_its_replacement_waits(self):
+        head = "a" * 40
+        first = self.w.claim_review("o/r", 1, head, 0)
+        self.w.start_claim("o/r", 1, first, 0, head)
+        second = self.w.claim_review("o/r", 1, head, 1801)  # lapsed mid-review, re-emitted
+        # The older worker may finish or park; the new line then has nothing to start.
+        self.w.record("o/r", 1, head, first)
+        self.assertEqual(self.w.reviewed_heads("o/r"), {1: head})
+        with self.assertRaisesRegex(ValueError, "superseded"):
+            self.w.start_claim("o/r", 1, second, 1802, head)
+        third = self.w.claim_review("o/r", 1, "b" * 40, 1900)
+        fourth = self.w.claim_review("o/r", 1, "b" * 40, 1900 + 1801)
+        self.w.block_head("o/r", 1, "b" * 40, "draft refused", third, 3800)
+        with self.assertRaisesRegex(ValueError, "superseded"):
+            self.w.start_claim("o/r", 1, fourth, 3801, "b" * 40)
+        # Only tokens issued for the same head count.
+        other = self.w.claim_review("o/r", 2, head, 0)
+        self.w.claim_review("o/r", 2, "b" * 40, 1)
+        with self.assertRaisesRegex(ValueError, "superseded"):
+            self.w.record("o/r", 2, "b" * 40, other)
+
+    def test_only_a_few_older_tokens_are_kept(self):
+        head = "a" * 40
+        for now in range(0, 6 * 2000, 2000):
+            self.w.claim_review("o/r", 1, head, now)
+        self.assertEqual(len(self.w.load_entry("o/r")["claims"]["1"]["superseded"]), 3)
 
     def test_renew_release_and_attempt_bound(self):
         head = "a" * 40
@@ -963,6 +994,30 @@ class TestQueuedClaims(HostCase):
         with self.assertRaisesRegex(ValueError, "superseded"):
             self.cli("start", "1", "--head", H1, "--claim", old["claim"])
         self.assertEqual(json.loads(self.cli("start", "1", "--head", H1, "--claim", new["claim"]))["attempt"], 1)
+
+    def test_a_re_armed_monitor_leaves_live_claims_alone(self):
+        # Without a persistent Monitor the watch is killed at its deadline and re-armed.
+        for number in (1, 2):
+            self.github.add(number, H1)
+        reader = SequentialReader(self, review_seconds=60 * 60)
+        first, _ = self.drive(30, reader)
+        self.assertEqual([parse(line)["pr"] for line in first], [1, 2])
+        rearmed, _ = self.drive(1, reader, start=30 * 60)
+        self.assertEqual(rearmed, [])  # #1 is under review and #2 waits in the reader's queue
+
+    def test_a_review_that_outlives_a_re_armed_monitor_still_records(self):
+        for number in (1, 2):
+            self.github.add(number, H1)
+        reader = SequentialReader(self, review_seconds=36 * 60)
+        first, _ = self.drive(30, reader)  # killed at its 30-minute deadline mid-review
+        # Re-armed once #1 finishes. #2 then starts under the first watch's line,
+        # outlives its lease, and the new watch notifies it again.
+        rearmed, _ = self.drive(40, reader, start=36 * 60)
+        self.assertEqual([parse(line)["pr"] for line in first + rearmed], [1, 2, 2])
+        self.assertEqual(reader.recorded, [1, 2])
+        self.assertEqual(reader.skipped, [2])  # the duplicate costs a refused start, not a review
+        self.assertEqual(reader.started, [1, 2])
+        self.assertEqual(self.w.reviewed_heads("o/r"), {1: H1, 2: H1})
 
     def test_an_abandoned_started_review_is_retried_after_the_hold_cap(self):
         self.github.add(1, H1)

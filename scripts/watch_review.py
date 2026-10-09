@@ -49,7 +49,10 @@ new push is eligible again. Drafts, team-only requests, and PRs already
 approved by another user are excluded.
 
 Intended for Claude Code's Monitor tool, which turns each stdout line into a
-session notification. Any `read`-driven shell loop works the same way. A
+session notification. Any `read`-driven shell loop works the same way. Where
+Monitor cannot run for the whole session, the reader re-arms it on expiry; the
+new process may emit a waiting head once more, and a review finished under
+the older line still records while the new claim is unstarted. A
 failed tick is reported on stdout too -- once, again when the reason changes,
 and every ten consecutive failures -- with a recovery line when discovery
 works again. stderr is the log: every tick's detail, carried verdicts, and
@@ -302,9 +305,11 @@ def record(repo, number, head, claim_token=None, result=None):
 	with state_mod._locked(path):
 		data = state_mod.load(path)
 		entry = data.get(repo, {})
-		claim = entry.get("claims", {}).get(str(number))
-		if claim_token and (not claim or claim.get("token") != claim_token or claim.get("head") != head):
-			raise ValueError("review claim was superseded; refusing stale completion")
+		if claim_token:
+			try:
+				current_claim(entry, number, claim_token, head, finishing=True)
+			except ValueError:
+				raise ValueError("review claim was superseded; refusing stale completion") from None
 		patch = {"heads": {str(number): head}}
 		if result is not None:
 			prior = verdicts_of(entry).get(number)
@@ -491,17 +496,31 @@ def claim_review(repo, number, head, now, monitor="", hold=LEASE):
 			return None
 		token = uuid.uuid4().hex
 		blocked.pop(str(number), None)  # a block names one head; a new push lifts it
+		# Earlier tokens for this head, so a review still running under one can
+		# finish while this claim waits (current_claim).
+		superseded = ([old["token"]] + list(old.get("superseded") or []))[:3] \
+			if old.get("head") == head and old.get("token") else []
 		claims[str(number)] = {"head": head, "token": token, "attempts": attempts, "state": "queued",
-			"monitor": monitor, "expires": now + hold}
+			"monitor": monitor, "expires": now + hold, "superseded": superseded}
 		state_mod.atomic_write(path, data)
 		return token
 
 
-def current_claim(entry, number, token, head=None):
+def current_claim(entry, number, token, head=None, finishing=False):
+	"""The claim `token` may act on, or ValueError.
+
+	A worker finishing (record, block) under an older line for the same head
+	is still accepted while the claim that replaced it is unstarted: no other
+	worker has begun, so nothing is overwritten. That is the re-armed watch's
+	case, where a new monitor re-emits a head whose review outlived its lease.
+	"""
 	claim = (entry.get("claims") or {}).get(str(number))
-	if not claim or claim.get("token") != token or (head is not None and claim.get("head") != head):
-		raise ValueError("review claim is missing or superseded")
-	return claim
+	if claim and claim.get("token") == token and (head is None or claim.get("head") == head):
+		return claim
+	if (finishing and claim and claim.get("state") == "queued" and claim.get("head") == head
+			and token in (claim.get("superseded") or [])):
+		return claim
+	raise ValueError("review claim is missing or superseded")
 
 
 def start_claim(repo, number, token, now, head=None, lease=LEASE):
@@ -579,7 +598,7 @@ def block_head(repo, number, head, reason, token, now):
 	with state_mod._locked(path):
 		data = state_mod.load(path)
 		entry = data.setdefault(repo, {})
-		current_claim(entry, number, token, head)
+		current_claim(entry, number, token, head, finishing=True)
 		entry["claims"].pop(str(number))
 		entry.setdefault("blocked", {})[str(number)] = {"head": head, "reason": reason.strip(), "at": int(now)}
 		state_mod.atomic_write(path, data)
