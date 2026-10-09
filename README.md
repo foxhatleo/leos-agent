@@ -104,9 +104,13 @@ No OpenAI or Anthropic marketplace submission is needed: use this repository
 as your own plugin source or a local checkout.
 
 Install **only the harness you intend to configure**. Native plugin discovery
-and the integration installer are separate steps. Run the installer again
-after upgrades or model-mapping changes, because native profiles and copied
-OpenCode resources may need refreshing.
+and the integration installer are separate steps. The installer writes files
+only for Codex, Cursor and OpenCode; on Claude Code, Hermes and Pi it only
+removes a `<leos-agent>` block an older release left in the harness's global
+instruction file, so on a fresh machine it has nothing to do there. Where it
+writes files, run it again after upgrades or model-mapping changes. It needs
+the harness's config directory to exist already (run the harness once), and
+never creates one.
 
 ### Claude Code
 
@@ -115,10 +119,11 @@ claude plugin marketplace add foxhatleo/leos-agent
 claude plugin install leos-agent@leos-agent --scope user
 ```
 
-Then invoke the plugin's `install` skill in Claude. To upgrade, refresh the
-marketplace and plugin through Claude's plugin manager, then run `install`
-again and start a new session. Third-party marketplace auto-update settings may
-be disabled; do not assume every client updates itself.
+Start a new session; the plugin supplies agents, hooks and skills. If an older
+release wrote a policy block into `~/.claude/CLAUDE.md`, run `/leos-agent:install`
+once to take it out. To upgrade, refresh the marketplace and plugin through
+Claude's plugin manager and start a new session. Third-party marketplace
+auto-update settings may be disabled; do not assume every client updates itself.
 
 ### Codex
 
@@ -127,11 +132,13 @@ codex plugin marketplace add foxhatleo/leos-agent
 codex plugin add leos-agent@leos-agent
 ```
 
-Invoke the plugin's `install` skill to install native agent TOMLs. Review the
-current hook definitions in `/hooks`; enabling a plugin does not trust its
-hooks automatically. On upgrade, refresh the marketplace/plugin, rerun
-`install`, and review any changed hook definition. The project does not bypass
-that native trust boundary.
+Then run the install skill in a Codex session by mentioning `$leos-agent:install`
+(or pick it from `/skills`). It is required here: it writes the cheap,
+standard, premium, parent and reviewer agent TOMLs into `~/.codex/agents`.
+Review the current hook definitions in `/hooks`; enabling a plugin does not
+trust its hooks automatically. On upgrade, refresh the marketplace/plugin,
+rerun `$leos-agent:install`, and review any changed hook definition. The
+project does not bypass that native trust boundary.
 
 ### Cursor
 
@@ -157,23 +164,44 @@ git clone https://github.com/foxhatleo/leos-agent ~/.local/share/leos-agent
 python3 ~/.local/share/leos-agent/scripts/leo-install.py opencode
 ```
 
-The installer registers the checkout's plugin URI, one rendered instruction,
-native agent profiles, and skill/reference copies. It preserves JSONC comments
-and unrelated configuration. Upgrade that checkout with `git pull --ff-only`
-and rerun the same command. The npm package is also published as `leos-agent`;
-if using a package cache, resolve its actual root and rerun the installer when
-that path changes. Do not assume a fixed cache directory layout.
+Then restart OpenCode. The installer registers the checkout's plugin URI and
+one rendered instruction in the active config (`OPENCODE_CONFIG`, else
+`opencode.jsonc`, else `opencode.json`), and copies native agent profiles and
+skill/reference copies with the checkout's absolute path baked in. It preserves
+JSONC comments and unrelated configuration, and uninstall edits the same file
+the install did. Inside OpenCode the install skill is `/leo-install`. Upgrade the
+checkout with `git pull --ff-only`, rerun the same command, and restart.
+
+The npm package is also published as `leos-agent`:
+
+```sh
+opencode plugin leos-agent --global
+root="${XDG_CACHE_HOME:-$HOME/.cache}/opencode/packages/leos-agent/node_modules/leos-agent"
+python3 "$root/scripts/leo-install.py" opencode
+```
+
+Run from OpenCode's package cache, the installer keeps the `leos-agent`
+package entry rather than linking into the cache, so OpenCode can fetch the
+package again after cleaning it. The skill copies still point into the cache:
+rerun the installer whenever that directory changes (a pinned
+`leos-agent@<version>` spec gets its own directory).
 
 ### Hermes
 
-Use Hermes's local-plugin directory under your active HERMES_HOME/profile to
-install this repository as `plugins/leos-agent`, then enable it through Hermes's
-plugin manager. Run the registered `leo-install` command. The native plugin
-registers portable skills, one frozen policy section, and dispatch diagnostics.
-Hermes supports the policy for deciding whether to delegate, but not per-task
-model tiers. The installer preserves its native delegation-model setting;
-saved cheap/standard/premium mappings are not applied. The guard can still check known
-child/parent prices when both models are observable.
+```sh
+hermes plugins install foxhatleo/leos-agent --enable
+```
+
+This installs into `$HERMES_HOME/plugins/leos-agent` (default
+`~/.hermes/plugins/leos-agent`). For a local checkout instead, clone it there and
+run `hermes plugins enable leos-agent`. Start a new session. The native plugin
+registers portable skills, one frozen policy section, dispatch diagnostics, and
+the `/leo-install` command; that command only removes a block an older release
+left in `SOUL.md`. Hermes supports the policy for deciding whether to delegate,
+but not per-task model tiers. The installer preserves its native
+delegation-model setting; saved cheap/standard/premium mappings are not applied.
+The guard can still check known child/parent prices when both models are
+observable.
 
 ### Pi
 
@@ -181,11 +209,12 @@ child/parent prices when both models are observable.
 pi install git:github.com/foxhatleo/leos-agent
 ```
 
-Invoke the installed `install` skill for `pi`, then start a new session.
-Package metadata provides skill discovery once; the extension does not register
-the same skills a second time. Upgrade through Pi's package manager and rerun
-`install`. A subagent extension is required for delegation; this project does
-not pretend that every such extension accepts model overrides.
+Start a new session. Package metadata provides skill discovery once; the
+extension does not register the same skills a second time. If an older release
+wrote a policy block into `~/.pi/agent/AGENTS.md`, run `/skill:install` once to
+take it out. Upgrade through Pi's package manager. A subagent extension is
+required for delegation; this project does not pretend that every such
+extension accepts model overrides.
 
 ### Installer controls
 
@@ -199,16 +228,29 @@ python3 scripts/leo-install.py <harness> --uninstall
 ```
 
 Normal installation stages and validates all changes first, writes a private
-backup, and rolls back earlier writes if an operation fails. Rollback refuses
-intervening edits and can recover a partially applied installation. Only owned
-entries/files are managed. Unchanged legacy copies are recognized by complete
-content hashes; edited or unrelated files are preserved. `--force` is for a
-specific conflict you explicitly intend to replace.
+backup to `~/.leos-agent-local/install-backups/<harness>.json`, and rolls back
+earlier writes if an operation fails; a failed run leaves the previous backup in
+place. `--rollback` undoes the last install or uninstall, refuses intervening
+edits, and can recover a partially applied installation.
+
+Ownership is by content, not by the "Managed by leos-agent" header. Each install
+records the sha256 of every file it writes in `leos-agent-paths.json` in the
+harness config directory, and a file is replaced or removed only while it
+still matches that receipt, this release's copy, or a copy an earlier release
+wrote. On install, an edited copy or a file leos-agent never wrote is a
+conflict that stops the run (`--force` replaces that file); an edited copy from
+a release older than v12 is reported as `preserved` and the rest continues. On
+uninstall, anything not provably ours is `preserved`, and `--force` does not
+change that. Copies of the retired `leo-runner` and `leo-executor` profiles are
+removed when unchanged and preserved otherwise.
 
 Run `--uninstall` before removing the native plugin/source. It removes owned
-integration artifacts, not routing preferences, handoffs, or logs. Supported
-config overrides include CODEX_HOME, CLAUDE_CONFIG_DIR, HERMES_HOME,
-PI_CODING_AGENT_DIR, OPENCODE_CONFIG_DIR, OPENCODE_CONFIG, and XDG_CONFIG_HOME.
+integration artifacts and registrations, and deletes an OpenCode config file
+only if the install created it and nothing else is left in it. It keeps
+routing preferences, handoffs, logs, and its backup. Supported config overrides
+are CODEX_HOME, CLAUDE_CONFIG_DIR, HERMES_HOME, PI_CODING_AGENT_DIR,
+OPENCODE_CONFIG_DIR, OPENCODE_CONFIG, and XDG_CONFIG_HOME; each must be an
+absolute path, and an empty one counts as unset.
 
 ## Per-machine model routing
 

@@ -131,11 +131,13 @@ class Transaction:
         os.replace(pending, self.backup)
 
 
-def rollback(backup, boundary=None):
+def rollback(backup, boundary=None, redo=None):
     """Undo an installation. `boundary` bounds the empty-directory cleanup.
 
     A pending backup beside `backup` belongs to a commit that was interrupted
     part-way; it is undone first, and the last completed backup is kept.
+    `redo` is where the rollback's own transient record goes (default: beside
+    `backup`).
     """
     backup = Path(backup)
     if pending_path(backup).is_file():
@@ -143,8 +145,8 @@ def rollback(backup, boundary=None):
     data = json.loads(backup.read_text())
     if data.get("schema") not in (1, 2) or not isinstance(data.get("files"), list):
         raise ValueError("invalid installation backup")
-    tx = Transaction(backup.with_name(backup.name.split(".")[0] + "-redo.json"),
-                     None if boundary is None else (boundary, backup.parent))
+    redo = Path(redo) if redo is not None else backup.with_name(backup.name.split(".")[0] + "-redo.json")
+    tx = Transaction(redo, None if boundary is None else (boundary, backup.parent, redo.parent))
     for entry in data["files"]:
         path = Path(entry["path"])
         current = snapshot(path)

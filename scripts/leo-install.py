@@ -777,7 +777,8 @@ def opencode_cache_spec(root):
 	while the spec itself makes OpenCode reinstall the package there.
 	"""
 	parts = Path(root).parts
-	if len(parts) >= 5 and parts[-2] == "node_modules" and parts[-4] == "packages" and parts[-5] == "opencode":
+	if len(parts) >= 5 and parts[-1] == PROVENANCE and parts[-2] == "node_modules" and parts[-4] == "packages" \
+		and parts[-5] == "opencode":
 		spec = parts[-3]
 		if spec == PROVENANCE or spec.startswith(PROVENANCE + "@"):
 			return spec
@@ -890,7 +891,9 @@ def finish_receipt(receipt, args, results):
 	out = []
 	for rel, recorded in sorted(receipt.files.items()):
 		path = receipt.cfg / rel
-		if rel in receipt.covered or rel.startswith("../") or os.path.isabs(rel) or not path.is_file():
+		normal = os.path.normpath(rel)
+		# A receipt is a file in the user's config dir: never let it name a path outside it.
+		if rel in receipt.covered or os.path.isabs(normal) or normal.split(os.sep)[0] == ".." or not path.is_file():
 			continue
 		if digest(path.read_bytes()) != recorded:
 			out.append(Result(display(path), "preserved", "no longer shipped; edited since leos-agent wrote it"))
@@ -1104,7 +1107,11 @@ def main(argv=None):
 					f"{display(backup_path(args.harness))}", file=sys.stderr)
 				return 1
 			boundary = config_dir(args.harness)
-			print(f"restored {rollback(source, boundary)} files")
+			# Its own redo record goes beside the data-dir backups, even when the
+			# source is a backup an older release left in the config dir.
+			redo = backup_path(args.harness).with_name(f"{args.harness}-redo.json")
+			prepare_backup_dir(redo)
+			print(f"restored {rollback(source, boundary, redo=redo)} files")
 			return 0
 		except (ValueError, OSError) as exc:
 			print(f"rollback refused: {exc}", file=sys.stderr)

@@ -399,6 +399,19 @@ class TestPreReceiptUpgrade(InstallerCase):
         self.assertTrue(kept.exists())
         self.assertNotIn("agents/old-gone.toml", json.loads(receipt_path.read_text())["files"])
 
+    def test_a_receipt_cannot_name_a_file_outside_the_config_dir(self):
+        self.run_harness("codex")
+        outside = self.home / "outside.txt"
+        outside.write_text("not yours\n")
+        receipt_path = self.cfg("codex") / "leos-agent-paths.json"
+        receipt = json.loads(receipt_path.read_text())
+        for rel in ("../outside.txt", "agents/../../outside.txt", str(outside)):
+            receipt["files"][rel] = hashlib.sha256(outside.read_bytes()).hexdigest()
+        receipt_path.write_text(json.dumps(receipt))
+        for options in ({}, {"uninstall": True}):
+            self.assertClean(self.run_harness("codex", **options), str(options))
+            self.assertTrue(outside.exists())
+
 
 class TestOpenCodePayload(InstallerCase):
     harnesses = ("opencode",)
@@ -698,8 +711,7 @@ class TestBackupsAndRollback(InstallerCase):
         backup.rename(legacy)
         result = self.cli("codex", "--rollback", env={"CODEX_HOME": str(self.cfg("codex"))})
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertFalse(legacy.exists())
-        self.assertFalse((self.cfg("codex") / "agents").exists())
+        self.assertEqual(list(self.cfg("codex").iterdir()), [], "rollback left a file in the config dir")
 
         self.run_harness("codex")
         self.backup("codex").rename(legacy)
