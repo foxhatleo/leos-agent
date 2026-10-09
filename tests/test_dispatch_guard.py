@@ -73,6 +73,13 @@ class GuardCase(unittest.TestCase):
             code = self.guard.main([])
         return code, out.getvalue(), err.getvalue()
 
+    def with_parent(self, event, model="claude-opus-5-5"):
+        """The event as Claude sends it once the parent turn is on disk: the
+        guard reads the parent model from the transcript the event names."""
+        transcript = Path(self.tmp.name) / "parent.jsonl"
+        transcript.write_text(json.dumps({"type": "assistant", "message": {"model": model}}) + "\n", encoding="utf-8")
+        return dict(event, transcript_path=str(transcript))
+
     def log_lines(self):
         path = self.data / "dispatch.jsonl"
         if not path.is_file():
@@ -144,14 +151,15 @@ class TestShape(GuardCase):
 
 class TestProtocol(GuardCase):
     def test_codex_block_exits_2_with_the_reason_on_stderr(self):
-        event = {"tool_name": "spawn_agent", "tool_input": {"message": "Investigate"}}
+        # Codex's PreToolUse input always carries the active model.
+        event = {"tool_name": "spawn_agent", "tool_input": {"message": "Investigate"}, "model": "gpt-6-astra"}
         code, out, err = self.run_cli(event, LEOS_AGENT_HARNESS="codex")
         self.assertEqual(code, 2)
         self.assertEqual(out, "")
         self.assertIn("BLOCKED", err)
 
     def test_claude_correction_does_not_grant_permission(self):
-        code, out, err = self.run_cli(dispatch_event())
+        code, out, err = self.run_cli(self.with_parent(dispatch_event()))
         self.assertEqual(code, 0)
         response = json.loads(out)["hookSpecificOutput"]
         self.assertEqual(response["updatedInput"]["model"], "sonnet")
@@ -175,7 +183,7 @@ class TestProtocol(GuardCase):
         self.assertEqual(self.log_lines(), [])
 
     def test_warn_records_the_block_without_blocking(self):
-        code, _out, err = self.run_cli(dispatch_event(), LEOS_AGENT_DISPATCH_GUARD="warn")
+        code, _out, err = self.run_cli(self.with_parent(dispatch_event()), LEOS_AGENT_DISPATCH_GUARD="warn")
         self.assertEqual(code, 0)
         self.assertEqual(err, "")
         rows = self.log_lines()
@@ -183,7 +191,7 @@ class TestProtocol(GuardCase):
 
     def test_a_log_failure_never_changes_the_decision(self):
         with self.env(), mock.patch.object(self.guard, "_log", side_effect=lambda entry: None):
-            result = self.guard.process(dispatch_event(), "claude")
+            result = self.guard.process(self.with_parent(dispatch_event()), "claude")
         self.assertEqual(result["action"], "correct")
 
 

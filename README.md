@@ -51,8 +51,8 @@ work justifies a separate worker. Otherwise do that work in the parent.
 The existing price ceiling applies to every tier; premium does not bypass it.
 
 The tier name is not a price ordering. For example, the bundled reference
-catalog prices GPT-5.6 Terra output above GPT-5.6 Sol output, so a Terra
-selection under a Sol parent is replaced with the parent where supported. Input/output crossover
+catalog prices GPT-6 Astra above GPT-6.1 Sol, so a premium Astra selection
+under a GPT-6.1 Sol parent is replaced with the parent where supported. Input/output crossover
 rates, unknown IDs, and ambiguous catalog matches are allowed with diagnostics,
 as configured by this project's policy. Thus the ceiling prevents **known**
 overselection, not every possible billing outcome.
@@ -75,7 +75,7 @@ operation.
 
 | Harness | Policy delivery | Model control | Outcome signal | Important limit |
 |---|---|---|---|---|
-| Claude Code | SessionStart, including forks | Agent/Task argument correction; native profiles | SubagentStop final message, child transcript fallback, child usage from transcript | The first dispatch may precede parent transcript persistence; missing parent data permits dispatch with a diagnostic. Forced settings/provider substitutions also limit enforcement. |
+| Claude Code | SessionStart, including forks | `agent.spawn` model setting on builds where it covers teammates too ([hooks/README.md](hooks/README.md#claude-agentspawn-mod)), else Agent/Task argument correction; native profiles | SubagentStop final message, child transcript fallback, child usage from transcript | On the Agent/Task path the first dispatch may precede parent transcript persistence; missing parent data permits dispatch with a diagnostic. Forced settings/provider substitutions also limit enforcement. |
 | Codex | Separate native SessionStart hook | Tier-enforcing explicit spawn selection; model-free native profiles | SubagentStop final message, rollout fallback, cumulative token counts | Hooks need native trust. A renamed multi-agent tool namespace is not matched. Other/customized profiles can still override spawn settings. Encrypted briefs make the escalation marker unobservable; recorded as such. |
 | Cursor | Native always-apply rule | Installed user agents; resolved subagentStart model ceiling | subagentStop summary and status, joined by call id; no usage | No invented Task model argument; hook diagnostics distinguish planned models from completion. Worker no-delegation is instruction-only: no per-agent tool restriction, and no parent-agent identity at subagentStart. |
 | OpenCode | One registered rendered instruction | Native agent selection, confirmed through the SDK | `tool.execute.after` output of a foreground `task`, joined by call id, child model from task metadata; no usage | Task has no model field; a correction that cannot be applied blocks the task. A slash-command subtask's own model is not visible to the guard. Source/config paths must remain valid. |
@@ -269,7 +269,9 @@ absolute path, and an empty one counts as unset.
 
 Data lives in `~/.leos-agent-local`, or LEOS_AGENT_LOCAL_PATH, outside versioned
 plugin caches. Configure concrete provider/harness IDs rather than assuming
-that a familiar alias exists everywhere:
+that a familiar alias exists everywhere. Claude is the exception: its Agent
+tool accepts only `haiku`, `sonnet`, `opus`, or `fable`, so `routing.py`
+refuses any other Claude model:
 
 ```sh
 python3 scripts/routing.py set --harness claude --cheap haiku --standard sonnet
@@ -284,7 +286,9 @@ Unknown model identifiers are retained and diagnosed, not silently corrected
 to a different dispatch ID. Parent-level always means the current parent.
 
 Guard modes are `LEOS_AGENT_DISPATCH_GUARD=on` (default), `warn` (log proposed
-corrections/blocks), and `off`. Unrelated tools and third-party MCP tools are
+corrections/blocks), and `off`; `0`, `false`, `no`, and `disabled` also mean
+off. Any other value keeps the guard on and marks each logged dispatch with an
+`unrecognized-guard-mode` diagnostic. Unrelated tools and third-party MCP tools are
 not routed. Failures are logged distinctly and fail open; this is not a
 security boundary. Native or organization-level model substitutions may still
 require investigation of actual execution.

@@ -3,6 +3,7 @@
 | File | Harness | Loading |
 |---|---|---|
 | hooks.json | Claude Code | Auto-discovered; do not also declare the default file in its manifest. |
+| claude-spawn.js | Claude Code | Hooks module (mod) that hooks.json names under `modules`. |
 | hooks-codex.json | Codex | Explicit manifest override replaces default discovery. |
 | hooks-cursor.json | Cursor | Explicit manifest override with Cursor event names. |
 
@@ -110,15 +111,48 @@ References:
 - [Cursor plugin format](https://cursor.com/docs/reference/plugins)
 
 Claude live verification established that Agent accepts the aliases haiku,
-sonnet, opus, and fable, rather than full transcript model IDs. The guard
-translates an observed parent to an alias only after checking its price.
+sonnet, opus, and fable, rather than full transcript model IDs. The guard caps
+a child with the parent's family alias, which Claude runs on the parent's exact
+model; when the parent's ID names no family, an inheriting agent gets no
+`model` and so runs on the parent. It fills a missing model only for built-in
+agents that would inherit (general-purpose, claude, Explore, Plan) and for the
+cheap, standard, and premium leo tiers. leo-parent and forks run on the
+parent; other plugins' agents keep their own model.
 Fresh-session PreToolUse may run before the first assistant response is
-written: the parent is then unavailable and the approved unknown-price policy
-allows dispatch with a diagnostic. SubagentStop can likewise precede the child
-transcript flush; SessionEnd reconciles those observations without model calls.
+written: the parent is then unavailable, nothing is filled in except a leo
+tier's configured model, and dispatch is allowed with a diagnostic.
+SubagentStop can likewise precede the child transcript flush; SessionEnd
+reconciles those observations without model calls.
 Claude Code gives all SessionEnd hooks one 1.5 s budget, and a plugin hook's
 `timeout` cannot raise it (only `CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS` or a
 user-settings hook can), so the SessionEnd hook only starts a detached,
 time-bounded reconciliation process and returns. SubagentStop may not fire for
 background Agent-tool subagents on some builds or in the VS Code extension;
 the report counts those dispatches as having no completion signal.
+
+## Claude agent.spawn mod
+
+Claude Code raises `agent.spawn` after PreToolUse, just before a subagent or
+teammate starts, with the resolved agent type, the requested model and the
+parent's effective model, so no transcript lookup is needed for the ceiling.
+`claude-spawn.js` hands that to `dispatch_guard.py --json`, the same decision
+and the same single log row as the command guard, then sets the child's model
+or refuses the spawn with the guard's text. It grants no permission and fails
+open: if the guard cannot run, the spawn proceeds and the debug log says why.
+
+One side decides each dispatch. On Claude Code 2.1.289 and later, where
+`agent.spawn` also covers teammates, the module's `session.start` sets
+`LEOS_AGENT_CLAUDE_SPAWN_MOD` to the plugin root in the Claude Code process.
+Claude Code starts this plugin's command hooks with `CLAUDE_PLUGIN_ROOT` set to
+the same root; when the two agree, the PreToolUse command guard passes Claude
+dispatches through without correcting or logging them. Processes the Bash tool
+starts inherit the variable but not `CLAUDE_PLUGIN_ROOT`, so tests and manual
+runs inside a session still decide. On earlier builds the module clears the
+variable, and wherever mods do not load (`disableAllHooks`,
+`allowManagedModsOnly`, `--safe-mode`) nothing sets it, so the command guard
+decides. Forks, workflow agents and other plugins' own `$.agent.spawn` calls are
+left alone. Claude Code 2.1.250 and older reject this hooks file outright, so
+none of its hooks load there.
+
+`claude plugin validate .` lists what the module hooks and calls;
+`claude plugin test .` runs `tests/claude/` against Claude Code's own engine.
