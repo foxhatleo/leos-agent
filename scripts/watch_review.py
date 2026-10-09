@@ -88,6 +88,7 @@ PRUNE_BATCH = 50
 # A files listing that never matches its head is reviewed in full, not dropped.
 UNSTABLE_TRIES = 3
 CARRIED, UNSTABLE = "carried", "unstable"
+SERIOUS = "seriously-problematic"
 
 
 def fail(message):
@@ -376,8 +377,11 @@ def completion_refusal(result, repo, number, head, acknowledgement=None):
 		return "completion report has no verdict; restage with this release's ghreview.py"
 	pending = sum(result.get(key) or 0 for key in ("staged", "carried", "notes")
 		if isinstance(result.get(key), int))
+	# As stage enforces: a reservation or a blocking issue the author never sees is not a verdict.
 	if verdict == ghreview.NEUTRAL and pending == 0:
 		return "neutral needs at least one pending comment; stage the reservation or record ready-to-merge"
+	if verdict == SERIOUS and pending == 0:
+		return "seriously-problematic needs at least one pending comment or note stating the blocking issue"
 	if result.get("complete") is True and acknowledgement is None:
 		return None
 	omitted = result.get("omitted")
@@ -681,7 +685,9 @@ def pr_files(repo, number, head, cwd):
 	previous commit.
 	"""
 	out = gh(["api", f"repos/{repo}/pulls/{number}/files", "--paginate", "--jq", ".[]"], cwd)
-	files = [json.loads(line) for line in out.splitlines() if line.strip()]
+	# One object per "\n". jq leaves U+2028 and U+0085 unescaped inside strings,
+	# and str.splitlines() would cut an object in two at either.
+	files = [json.loads(line) for line in out.split("\n") if line.strip()]
 	if gh(["api", f"repos/{repo}/pulls/{number}", "--jq", ".head.sha"], cwd).strip() != head:
 		return None
 	if listing_commits(files) - {head}:

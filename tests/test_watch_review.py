@@ -142,7 +142,9 @@ class FakeGitHub:
                 pr["stale"] -= 1
                 head, patch = pr["old"]
             files = files_at(head, patch)
-            return "\n".join(json.dumps(f) for f in files)
+            # --jq '.[]' prints one object per line and, like jq, leaves non-ASCII
+            # (U+2028 and U+0085 included) unescaped inside strings.
+            return "".join(json.dumps(f, ensure_ascii=False) + "\n" for f in files)
         jq = args[args.index("--jq") + 1]
         if jq == ".head.sha":
             return pr["head"] + "\n"
@@ -550,9 +552,10 @@ class TestClaimsAndPagination(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.w.main(["record", "1", "--head", "a" * 40, "--result", str(report)])
             # The acknowledgement is the new bypass surface. It dismisses omitted
-            # findings; it must not stand in for a stage that never made a review.
+            # findings; it must not stand in for a stage that never made a review
+            # (here, one whose post failed after a comment was validated).
             report.write_text(json.dumps(stage_report(
-                complete=False, review_created=False, staged=0,
+                complete=False, review_created=False, staged=1,
                 verdict="seriously-problematic",
                 omitted=[{"path": "a.py", "reason": "malformed"}])))
             with self.assertRaisesRegex(ValueError, "no review was created"):
@@ -777,6 +780,15 @@ class TestVerdicts(WatcherStateCase):
     def test_neutral_with_no_pending_comment_is_not_recorded(self):
         with self.assertRaisesRegex(ValueError, "neutral needs"):
             self.record(staged=0, carried=0, notes=0)
+
+    def test_seriously_problematic_with_nothing_pending_is_not_recorded(self):
+        # Stage refuses it too: a blocking issue the author never sees is no verdict.
+        with self.assertRaisesRegex(ValueError, "seriously-problematic needs"):
+            self.record(verdict="seriously-problematic", staged=0, carried=0, notes=0)
+        self.assertEqual(self.w.reviewed_heads("o/r"), {})
+        for pending in ({"staged": 1}, {"carried": 1}, {"notes": 1}):
+            report = stage_report(verdict="seriously-problematic", **dict({"staged": 0}, **pending))
+            self.assertIsNone(self.w.completion_refusal(report, "o/r", 1, self.HEAD), pending)
 
     def test_an_unreviewed_file_is_not_recorded(self):
         coverage = {"files_changed": 2, "files_reviewed": 1, "files_skipped_generated": [],
@@ -1043,6 +1055,13 @@ class TestFilesListing(HostCase):
         events = [parse(line) for line in out]
         self.assertEqual([(e["verb"], e["head"]) for e in events], [("re-review", H2)], out)
         self.assertNotEqual(self.w.load_entry("o/r")["verdicts"]["1"].get("carried_to"), H2)
+
+    def test_line_separators_inside_a_patch_do_not_split_a_listing_entry(self):
+        patch = "@@ -1,1 +1,2 @@\n ctx\n+s = 'a b\x85c d'"
+        self.github.add(1, H1, patch=patch)
+        files = self.w.pr_files("o/r", 1, H1, ".")
+        self.assertEqual([f["filename"] for f in files], ["a.py", "gone.py"])
+        self.assertEqual(files[0]["patch"], patch)
 
     def test_listing_commits_ignore_removed_files(self):
         self.assertEqual(self.w.listing_commits(files_at(H2)), {H2})
