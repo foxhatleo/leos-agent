@@ -192,7 +192,7 @@ class TestInstallIdempotency(RoutingCase):
 
     def test_second_install_writes_nothing_and_config_survives(self):
         home = Path(self.tmp.name) / "home"
-        home.mkdir()
+        (home / ".codex").mkdir(parents=True)  # the installer never creates a harness config dir
         self.write_config({"codex": {"cheap": {"model": "gpt-x", "effort": "minimal"}}})
         before = (self.data / "routing.json").read_bytes()
 
@@ -201,13 +201,13 @@ class TestInstallIdempotency(RoutingCase):
         second = self.install("codex", home)
         self.assertFalse([r.target for r in second if r.changed], "a second install rewrote a target")
 
-        self.assertNotIn('model =', (home / ".codex" / "agents" / "leo-runner.toml").read_text())
-        self.assertNotIn('model_reasoning_effort =', (home / ".codex" / "agents" / "leo-runner.toml").read_text())
+        self.assertNotIn('model =', (home / ".codex" / "agents" / "leo-cheap.toml").read_text())
+        self.assertNotIn('model_reasoning_effort =', (home / ".codex" / "agents" / "leo-cheap.toml").read_text())
         self.assertEqual((self.data / "routing.json").read_bytes(), before, "the installer wrote to the config")
 
     def test_uninstall_leaves_the_config_alone(self):
         home = Path(self.tmp.name) / "home2"
-        home.mkdir()
+        (home / ".cursor").mkdir(parents=True)
         self.write_config({"cursor": {"cheap": "fast-1"}})
         before = (self.data / "routing.json").read_bytes()
         self.install("cursor", home)
@@ -222,7 +222,7 @@ class TestInstallIdempotency(RoutingCase):
 
     def test_codex_mapping_changes_do_not_rewrite_model_free_profiles(self):
         home = Path(self.tmp.name) / "home3"
-        home.mkdir()
+        (home / ".codex").mkdir(parents=True)
         self.install("codex", home)
         self.write_config({"codex": {"cheap": {"model": "gpt-changed", "effort": None}}})
         with mock.patch.dict(os.environ, {"LEOS_AGENT_LOCAL_PATH": str(self.data)}), \
@@ -389,7 +389,7 @@ class TestWriting(WriteCase):
         # The whole feature in one test: set, install, and the model is in the
         # file a session actually loads -- and a second install writes nothing.
         home = Path(self.tmp.name) / "home-write"
-        home.mkdir()
+        (home / ".cursor").mkdir(parents=True)
         self.run_cli("set", "--harness", "cursor", "--runner", "fast-9")
         with mock.patch.dict(os.environ, {"LEOS_AGENT_LOCAL_PATH": str(self.data)}), \
              mock.patch.object(Path, "home", staticmethod(lambda: home)):

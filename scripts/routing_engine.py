@@ -10,7 +10,10 @@ import routing
 
 CAPABILITIES = {
     "claude": {"tools": ("Agent", "Task"), "model_field": "model", "rewrite": True, "profiles": True},
-    "codex": {"tools": ("spawn_agent",), "model_field": "model", "rewrite": False, "profiles": True},
+    # Multi-agent v2 namespaces its tools, and Codex hooks see namespace and
+    # name joined with no separator: collaboration + spawn_agent.
+    "codex": {"tools": ("spawn_agent", "collaborationspawn_agent"), "model_field": "model", "rewrite": False,
+              "profiles": True},
     "cursor": {"tools": ("Task", "task"), "model_field": None, "rewrite": False, "profiles": True},
     "opencode": {"tools": ("task",), "model_field": None, "rewrite": True, "profiles": True},
     "hermes": {"tools": ("delegate_task",), "model_field": None, "rewrite": False, "profiles": False},
@@ -29,6 +32,39 @@ CLAUDE_INHERITING = frozenset(("general-purpose", "claude", "Explore", "Plan"))
 # A fork always runs on the parent's model and shares its prompt cache;
 # Claude ignores `model` for it.
 CLAUDE_FORK = "fork"
+
+
+CONFIG_INVALID = "routing-config-invalid"
+
+
+def load_config():
+    """(config, error). An invalid routing.json must not switch routing off.
+
+    Each harness section that validates on its own is kept; the rest fall back
+    to defaults. error is what made the file invalid, or None when it loaded whole.
+    """
+    try:
+        return routing.load(), None
+    except (ValueError, OSError) as exc:
+        error = exc
+    config = {}
+    try:
+        raw = routing.read_raw()
+    except (ValueError, OSError):
+        raw = None
+    for harness, entry in (raw.items() if isinstance(raw, dict) else ()):
+        try:
+            config.update(routing.validate({harness: entry}))
+        except (ValueError, OSError):
+            continue
+    return config, error
+
+
+def hermes_spawn(args):
+    """Hermes's own reading of delegate_task: (action or "").strip().lower(),
+    where empty means spawn. A truthy non-string never spawns there."""
+    action = args.get("action") or ""
+    return isinstance(action, str) and action.strip().lower() in ("", "spawn")
 
 
 def tier_for(agent):
@@ -143,9 +179,12 @@ or global settings determine the actual requested child model.
               "requested_model": None, "effective_model": None, "price": None}
     if cap is None or tool not in cap["tools"] or not isinstance(args, dict):
         return result
-    if harness == "hermes" and args.get("action", "spawn") != "spawn":
+    if harness == "hermes" and not hermes_spawn(args):
         return result
-    config = routing.load() if config is None else config
+    if config is None:
+        config, error = load_config()
+        if error is not None:
+            result["diagnostic"] = CONFIG_INVALID
     catalog = pricing.load() if catalog is None else catalog
     agent = args.get("subagent_type") or args.get("agent_type") or args.get("agent") or args.get("profile")
     tier = tier_for(agent)
@@ -162,6 +201,8 @@ or global settings determine the actual requested child model.
                              native_profiles=native_profiles)
             if decision["action"] != "block":
                 decision.update(action="correct", updated_input=decision["updated_input"] or updated)
+            if "diagnostic" in result:
+                decision["diagnostic"] = result["diagnostic"]
             return decision
     field = cap["model_field"]
     requested = args.get(field) if field else None
