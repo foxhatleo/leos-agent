@@ -109,13 +109,13 @@ class TestCodexPayload(unittest.TestCase):
     def test_foreign_agent_is_not_overwritten_without_force(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
-            target = home / ".codex" / "agents" / "leo-runner.toml"
+            target = home / ".codex" / "agents" / "leo-cheap.toml"
             target.parent.mkdir(parents=True)
             target.write_text("name = \"mine\"\n", encoding="utf-8")
             with mock.patch.object(self.installer.Path, "home", return_value=home):
                 results = self.installer.run("codex", ROOT, args())
             by_target = {result.target: result for result in results}
-            self.assertEqual(by_target["~/.codex/agents/leo-runner.toml"].status, "conflict")
+            self.assertEqual(by_target["~/.codex/agents/leo-cheap.toml"].status, "conflict")
             self.assertEqual(target.read_text(encoding="utf-8"), "name = \"mine\"\n")
 
     def test_codex_sources_carry_no_plugin_root_token(self):

@@ -153,7 +153,7 @@ class TestRendering(RoutingCase):
     def test_codex_profiles_leave_model_selection_to_the_guard(self):
         """The profile pins no model at all: rendering is a pure strip, and the
         routing config it used to consult is not consulted any more."""
-        shipped = (ROOT / "payload" / "codex-agents" / "leo-runner.toml").read_text(encoding="utf-8")
+        shipped = (ROOT / "payload" / "codex-agents" / "leo-cheap.toml").read_text(encoding="utf-8")
         rendered = self.installer.render_codex_agent(shipped)
         self.assertNotIn('model =', rendered)
         # Neither setting may override the guarded spawn selection.
@@ -185,8 +185,8 @@ class TestInstallIdempotency(RoutingCase):
         second = self.install("codex", home)
         self.assertFalse([r.target for r in second if r.changed], "a second install rewrote a target")
 
-        self.assertNotIn('model =', (home / ".codex" / "agents" / "leo-runner.toml").read_text())
-        self.assertNotIn('model_reasoning_effort =', (home / ".codex" / "agents" / "leo-runner.toml").read_text())
+        self.assertNotIn('model =', (home / ".codex" / "agents" / "leo-cheap.toml").read_text())
+        self.assertNotIn('model_reasoning_effort =', (home / ".codex" / "agents" / "leo-cheap.toml").read_text())
         self.assertEqual((self.data / "routing.json").read_bytes(), before, "the installer wrote to the config")
 
     def test_uninstall_leaves_the_config_alone(self):
