@@ -21,9 +21,9 @@ a cheaper model while preserving quality.
 
 | Tier | Appropriate work | Claude default | Codex default |
 |---|---|---|---|
-| Cheap | Bounded factual checks, mechanical work, known procedures | Haiku | GPT-5.6 Luna |
-| Standard | Investigation, implementation, diagnosis, ordinary review | Sonnet | GPT-5.6 Terra |
-| Premium | Difficult diagnosis, cross-module design, complex implementation, consequential review | Opus | GPT-5.6 Sol |
+| Cheap | Bounded factual checks, mechanical work, known procedures | Haiku | GPT-6 Luna |
+| Standard | Investigation, implementation, diagnosis, ordinary review | Sonnet | GPT-6.1 Sol |
+| Premium | Difficult diagnosis, cross-module design, complex implementation, consequential review | Opus | GPT-6 Astra |
 | Parent-level | Exceptional work beyond premium capability that justifies delegation | Current parent | Current parent |
 
 Native profiles are `leo-cheap`, `leo-standard`, `leo-premium`, `leo-parent`, and
@@ -51,8 +51,8 @@ work justifies a separate worker. Otherwise do that work in the parent.
 The existing price ceiling applies to every tier; premium does not bypass it.
 
 The tier name is not a price ordering. For example, the bundled reference
-catalog prices Terra output above Sol output; the ceiling therefore replaces
-that selection with the current parent where supported. Input/output crossover
+catalog prices GPT-5.6 Terra output above GPT-5.6 Sol output, so a Terra
+selection under a Sol parent is replaced with the parent where supported. Input/output crossover
 rates, unknown IDs, and ambiguous catalog matches are allowed with diagnostics,
 as configured by this project's policy. Thus the ceiling prevents **known**
 overselection, not every possible billing outcome.
@@ -218,7 +218,7 @@ that a familiar alias exists everywhere:
 
 ```sh
 python3 scripts/routing.py set --harness claude --cheap haiku --standard sonnet
-python3 scripts/routing.py set --harness codex --cheap gpt-5.6-luna --standard gpt-5.6-terra
+python3 scripts/routing.py set --harness codex --cheap gpt-6-luna --standard gpt-6.1-sol
 python3 scripts/routing.py show
 python3 scripts/leo-install.py <harness>
 ```

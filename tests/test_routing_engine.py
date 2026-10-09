@@ -47,9 +47,9 @@ class RoutingEngine(unittest.TestCase):
         self.assertIsNone(result["updated_input"])
 
     def test_codex_does_not_emit_unsupported_rewrite_response(self):
-        result = self.route("codex", {"message": "Investigate"}, "gpt-5.6-sol")
+        result = self.route("codex", {"message": "Investigate"}, "gpt-6-astra")
         self.assertEqual(result["action"], "block")
-        self.assertIn("gpt-5.6-sol", result["retry"])
+        self.assertIn("gpt-6.1-sol", result["retry"])
         self.assertIsNone(result["updated_input"])
 
     def test_native_codex_profile_precedence_is_respected(self):
@@ -59,7 +59,7 @@ class RoutingEngine(unittest.TestCase):
     def test_codex_cheap_profile_cannot_silently_use_expensive_parent(self):
         result = self.route("codex", {"agent_type": "leo-cheap", "model": "gpt-6-astra"}, "gpt-6-astra")
         self.assertEqual(result["action"], "block")
-        self.assertIn("gpt-5.6-luna", result["retry"])
+        self.assertIn("gpt-6-luna", result["retry"])
 
     def test_codex_standard_profile_is_capped_to_cheap_parent(self):
         result = self.route("codex", {"agent_type": "leo-standard", "model": "gpt-5.6-terra"}, "gpt-5.6-luna")
@@ -88,11 +88,13 @@ class RoutingEngine(unittest.TestCase):
         self.assertEqual(claude["updated_input"]["model"], "opus")
         capped = self.route("claude", {"subagent_type": "leo-premium"}, "haiku")
         self.assertEqual(capped["updated_input"]["model"], "haiku")
-        codex = self.route("codex", {"agent_type": "leo-premium", "model": "gpt-5.6-sol"}, "gpt-6-astra")
+        codex = self.route("codex", {"agent_type": "leo-premium", "model": "gpt-6-astra"}, "gpt-6-astra")
         self.assertEqual(codex["action"], "allow")
-        wrong = self.route("codex", {"agent_type": "leo-premium", "model": "gpt-6-astra"}, "gpt-6-astra")
+        wrong = self.route("codex", {"agent_type": "leo-premium", "model": "gpt-6.1-sol"}, "gpt-6-astra")
         self.assertEqual(wrong["reason"], "tier-selection-required")
-        self.assertIn("gpt-5.6-sol", wrong["retry"])
+        self.assertIn("gpt-6-astra", wrong["retry"])
+        capped = self.route("codex", {"agent_type": "leo-premium", "model": "gpt-6.1-sol"}, "gpt-6.1-sol")
+        self.assertEqual(capped["action"], "allow")
 
     def test_only_owned_profiles_are_recognized(self):
         self.assertEqual(engine.tier_for("leos-agent:leo-runner"), "cheap")
