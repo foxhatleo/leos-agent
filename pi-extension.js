@@ -2,6 +2,11 @@
 import { fileURLToPath } from 'node:url';
 import { guard, runPython } from './scripts/harness_bridge.js';
 
+// Rows need the session for burst grouping and joins; Pi exposes it read-only.
+const sessionId = (ctx) => {
+  try { return ctx?.sessionManager?.getSessionId?.() ?? null; } catch { return null; }
+};
+
 export default function (pi) {
   const root = process.env.LEOS_AGENT_ROOT || process.env.PLUGIN_ROOT || fileURLToPath(new URL('.', import.meta.url));
   let cached = null;
@@ -17,11 +22,11 @@ export default function (pi) {
     if (event.toolName !== 'subagent') return;
     const result = await guard(root, 'pi', {
       tool_name: event.toolName, tool_input: event.input, toolCallId: event.toolCallId,
-      parent_model: ctx?.model?.id, cwd: ctx?.cwd,
+      session_id: sessionId(ctx), parent_model: ctx?.model?.id, cwd: ctx?.cwd,
     });
     if (result.action === 'block') return { block: true, reason: result.retry || result.reason };
   });
-  pi.on('tool_result', async (event) => {
+  pi.on('tool_result', async (event, ctx) => {
     if (event.toolName !== 'subagent') return;
     // Text parts only, last 4 KiB, classified and dropped by the observer.
     // Returns nothing: this never alters Pi's tool result.
@@ -29,7 +34,7 @@ export default function (pi) {
       .filter((part) => part?.type === 'text' && typeof part.text === 'string')
       .map((part) => part.text).join('\n').slice(-4096);
     await runPython(root, 'pi', 'observe_agent.py', [], {
-      hook_event_name: 'SubagentStop', tool_name: 'subagent', toolCallId: event.toolCallId,
+      hook_event_name: 'SubagentStop', tool_name: 'subagent', toolCallId: event.toolCallId, session_id: sessionId(ctx),
       agent: event.input?.agent ?? event.input?.subagent_type ?? null,
       result_text: text, status: event.isError ? 'error' : null,
       usage: event.usage ?? null, reason: 'pi-tool-result',

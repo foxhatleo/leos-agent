@@ -9,6 +9,10 @@ import dispatch_guard
 import dispatch_log
 import session_models
 
+# Cursor blocks a permission hook whose output is not a valid response, even
+# with failClosed off, so subagentStart always answers, failures included.
+ALLOW = {"permission": "allow"}
+
 
 def handle(event):
     kind = event.get("hook_event_name")
@@ -26,7 +30,10 @@ def handle(event):
             "session_id": session, "call_id": event.get("tool_call_id"),
         }, "cursor")
         if result["action"] == "block":
-            return {"permission": "deny", "user_message": dispatch_guard.render_block(result)}
+            # agent_message is what the model reads, so it can retry within the ceiling.
+            message = dispatch_guard.render_block(result)
+            return {"permission": "deny", "user_message": message, "agent_message": message}
+        return dict(ALLOW)
     elif kind == "subagentStop":
         # This event proves lifecycle completion, not which model was billed.
         # Current builds add the child's summary, which carries its Result and
@@ -44,7 +51,11 @@ def handle(event):
     return None
 
 
-def main():
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    # The manifest names the permission event, so even unreadable input answers.
+    permission = "subagentStart" in argv
+    result = None
     try:
         raw = sys.stdin.buffer.read(2 * 1024 * 1024 + 1)
         if len(raw) > 2 * 1024 * 1024:
@@ -52,11 +63,14 @@ def main():
         event = json.loads(raw)
         if not isinstance(event, dict):
             raise ValueError("hook input must be an object")
+        permission = permission or event.get("hook_event_name") == "subagentStart"
         result = handle(event)
-        if result:
-            print(json.dumps(result))
     except Exception as exc:
         dispatch_guard._breadcrumb("cursor", exc)
+    if permission and not (isinstance(result, dict) and result.get("permission") in ("allow", "deny")):
+        result = dict(ALLOW)
+    if result:
+        print(json.dumps(result))
     return 0
 
 

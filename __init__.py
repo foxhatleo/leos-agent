@@ -73,6 +73,12 @@ def _native_delegation_model():
     return config.get("model") if isinstance(config.get("model"), str) else None
 
 
+# Hermes blocks the tool when a pre_tool_call callback raises or outlives
+# plugins.hook_callback_timeout (30 s by default). The guard is a fail-open cost
+# check, so the bridge stays well inside that budget and never raises.
+_GUARD_TIMEOUT = 10
+
+
 def _on_pre_tool_call(tool_name="", args=None, task_id=None, session_id=None, tool_call_id=None, **_):
     if tool_name != "delegate_task":
         return None
@@ -82,20 +88,21 @@ def _on_pre_tool_call(tool_name="", args=None, task_id=None, session_id=None, to
         parent = observed[0] if observed and time.time() - observed[1] < 86400 else None
         try:
             effective = _native_delegation_model()
-        except (ImportError, AttributeError):
+        except Exception:  # noqa: BLE001 - an unreadable config is unknown, not a refusal
             logger.warning("leos-agent cannot inspect Hermes delegation configuration")
             effective = None
         response = _python("dispatch_guard.py", ("--json",), {
             "tool_name": tool_name, "tool_input": args, "session_id": session_id or task_id or "",
             "call_id": tool_call_id, "parent_model": parent, "effective_model": effective,
             "cwd": str(Path.cwd()),
-        })
+        }, timeout=_GUARD_TIMEOUT)
         if response.returncode:
             raise ValueError("guard bridge exited unsuccessfully")
         result = json.loads(response.stdout)
-        if result["action"] == "block":
-            return {"action": "block", "message": "[leo routing] " + result["reason"] + ". " + result.get("retry", "")}
-    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        if isinstance(result, dict) and result.get("action") == "block":
+            return {"action": "block",
+                    "message": "[leo routing] %s. %s" % (result.get("reason") or "blocked", result.get("retry") or "")}
+    except Exception:  # noqa: BLE001 - Hermes would turn a raise into a block
         logger.warning("leos-agent dispatch bridge failed open")
     return None
 

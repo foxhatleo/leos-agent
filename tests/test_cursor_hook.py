@@ -1,4 +1,4 @@
-"""Native Cursor envelopes, including resolved child models and no allow override."""
+"""Native Cursor envelopes, including resolved child models and a plain explicit allow."""
 import importlib.util
 import json
 import os
@@ -29,9 +29,11 @@ class CursorHooks(unittest.TestCase):
         self.assertEqual(result["permission"], "deny")
         self.assertIn("parent", result["user_message"])
 
-    def test_cheap_and_unknown_children_do_not_override_permissions(self):
-        self.assertIsNone(self.module.handle(self.event("claude-haiku-4-5", "claude-opus-5")))
-        self.assertIsNone(self.module.handle(self.event("custom-model", "claude-opus-5")))
+    def test_cheap_and_unknown_children_get_a_plain_allow(self):
+        # Cursor blocks a permission hook that gives no valid response, so an
+        # allowed start answers allow and adds nothing else.
+        self.assertEqual(self.module.handle(self.event("claude-haiku-4-5", "claude-opus-5")), {"permission": "allow"})
+        self.assertEqual(self.module.handle(self.event("custom-model", "claude-opus-5")), {"permission": "allow"})
 
     def test_lifecycle_never_injects_policy_or_claims_executed_model(self):
         self.assertIsNone(self.module.handle({"hook_event_name": "sessionStart", "conversation_id": "c", "model_id": "claude-opus-5"}))
@@ -67,5 +69,5 @@ class CursorHooks(unittest.TestCase):
     def test_unknown_resolved_model_does_not_use_config_as_observation(self):
         event = self.event(None, "claude-haiku-4-5")
         event["subagent_type"] = "leo-standard"
-        self.assertIsNone(self.module.handle(event))
+        self.assertEqual(self.module.handle(event), {"permission": "allow"})
         self.assertEqual(self.module.dispatch_log.read()[-1]["reason"], "per-dispatch-routing-unavailable")
