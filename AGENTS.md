@@ -234,9 +234,11 @@ The policy in `rules/preferences.md` applies to work on this repo too.
 The canonical procedure is `skills/review-pr/reference/procedure.md`. Preserve
 these contracts when changing it or `scripts/ghreview.py`:
 
-- Pin the full head SHA, linked requirements, and prior threads. Mutations go
-  through the helper. New reviews/replies stay pending; never use `gh pr review`
-  here, but do not ban explicitly authorized submission globally.
+- Pin the full head SHA, linked requirements, and prior threads. Read PR code
+  only at that SHA (`ghreview.py show`/`extract`), never from a working tree,
+  which is usually at another revision. Mutations go through the helper. New
+  reviews/replies stay pending; never use `gh pr review` here, but do not ban
+  explicitly authorized submission globally.
 - Replace only unchanged owned drafts after the new review is ready. Preserve
   manual edits, ownership receipts, and recovery data. Head drift means re-review.
   Receipts hash only what GitHub returns for a PENDING review (path, body,
@@ -252,11 +254,15 @@ these contracts when changing it or `scripts/ghreview.py`:
   reports. Partial coverage blocks readiness, not a verified blocking verdict.
   A decision only Leo can make parks the head (`block`) instead of burning
   retries. The first tick emits without settling.
-- Verdicts: neutral needs a staged comment or note; CI is informational only;
+- Verdicts: neutral needs a staged comment or note (stage also requires one
+  for seriously-problematic); CI is informational only;
   the only caps are unverified behaviour and an unread ticket. A recorded
   ready-to-merge stands until the PR diff (hunk headers ignored) changes;
   downgrading it needs an explicit `verdict_override`. Stage and `record` both
   enforce this. Reports give each PR its own `##` section.
+- The cross-model lens (`review_peer.py`) runs only when the user enabled it,
+  discloses that the diff goes to a second provider, never counts as coverage,
+  and raises confidence only when `independence_verified` is true.
 
 ## Security and untrusted input
 
