@@ -3,6 +3,7 @@
 | File | Harness | Loading |
 |---|---|---|
 | hooks.json | Claude Code | Auto-discovered; do not also declare the default file in its manifest. |
+| claude-spawn.js | Claude Code | Hooks module (mod) that hooks.json names under `modules`. |
 | hooks-codex.json | Codex | Explicit manifest override replaces default discovery. |
 | hooks-cursor.json | Cursor | Explicit manifest override with Cursor event names. |
 
@@ -106,3 +107,30 @@ written: the parent is then unavailable, nothing is filled in except a leo
 tier's configured model, and dispatch is allowed with a diagnostic.
 SubagentStop can likewise precede the child transcript flush; SessionEnd
 reconciles those observations without model calls.
+
+## Claude agent.spawn mod
+
+Claude Code raises `agent.spawn` after PreToolUse, just before a subagent or
+teammate starts, with the resolved agent type, the requested model and the
+parent's effective model, so no transcript lookup is needed for the ceiling.
+`claude-spawn.js` hands that to `dispatch_guard.py --json`, the same decision
+and the same single log row as the command guard, then sets the child's model
+or refuses the spawn with the guard's text. It grants no permission and fails
+open: if the guard cannot run, the spawn proceeds and the debug log says why.
+
+One side decides each dispatch. On Claude Code 2.1.289 and later, where
+`agent.spawn` also covers teammates, the module's `session.start` sets
+`LEOS_AGENT_CLAUDE_SPAWN_MOD` to the plugin root in the Claude Code process.
+Claude Code starts this plugin's command hooks with `CLAUDE_PLUGIN_ROOT` set to
+the same root; when the two agree, the PreToolUse command guard passes Claude
+dispatches through without correcting or logging them. Processes the Bash tool
+starts inherit the variable but not `CLAUDE_PLUGIN_ROOT`, so tests and manual
+runs inside a session still decide. On earlier builds the module clears the
+variable, and wherever mods do not load (`disableAllHooks`,
+`allowManagedModsOnly`, `--safe-mode`) nothing sets it, so the command guard
+decides. Forks, workflow agents and other plugins' own `$.agent.spawn` calls are
+left alone. Claude Code 2.1.250 and older reject this hooks file outright, so
+none of its hooks load there.
+
+`claude plugin validate .` lists what the module hooks and calls;
+`claude plugin test .` runs `tests/claude/` against Claude Code's own engine.
