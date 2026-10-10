@@ -12,8 +12,10 @@ error, asks for the same report again with both lines.
 At most once per child: the first refusal claims a marker under the data
 directory that only one call can create, and a child whose marker exists is
 let through whatever its report says. When no marker can be written, nothing
-is refused. Guard modes `warn` and `off` disable the check. The reply is a
-denial or nothing; it never grants permission. Errors fail open.
+is refused. The observer records whether the marker exists on the child's
+completion row as `contract_refused`. Guard modes `warn` and `off` disable
+the check. The reply is a denial or nothing; it never grants permission.
+Errors fail open.
 """
 import json
 import os
@@ -51,16 +53,23 @@ def agent_type(event):
     return value if isinstance(value, str) else ""
 
 
+def marker_path(session, child):
+    """Where one child's refusal is remembered. The observer checks the same
+    path to record that the child was refused (observe_agent.contract_refused)."""
+    import hashlib
+    from state import _data_root
+    name = hashlib.sha256(("claude:%s:%s" % (session, child)).encode("utf-8", "replace")).hexdigest() + ".json"
+    return os.path.join(_data_root(), MARKER_DIR, name)
+
+
 def first_refusal(session, child):
     """True for exactly one call per child: the one that creates the child's marker."""
-    import hashlib
     import session_models
-    from state import _data_root
-    directory = os.path.join(_data_root(), MARKER_DIR)
-    name = hashlib.sha256(("claude:%s:%s" % (session, child)).encode("utf-8", "replace")).hexdigest() + ".json"
+    path = marker_path(session, child)
+    directory = os.path.dirname(path)
     try:
         os.makedirs(directory, mode=0o700, exist_ok=True)
-        fd = os.open(os.path.join(directory, name), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except OSError:
         return False  # already refused once, or a refusal that could not be remembered might repeat
     os.close(fd)

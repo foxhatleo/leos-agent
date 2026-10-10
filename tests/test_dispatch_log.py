@@ -182,6 +182,111 @@ class Cost(unittest.TestCase):
         self.assertNotIn("  cost  ", dispatch_log.render(summary))
 
 
+LENS = "leos-agent:leo-lens"
+
+
+class LensTiers(unittest.TestCase):
+    """A Claude leo-lens is logged under the tier of the model it runs on."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.data = Path(tmp.name)
+        env = mock.patch.dict(os.environ, {"LEOS_AGENT_LOCAL_PATH": tmp.name})
+        env.start(); self.addCleanup(env.stop)
+        import routing_engine
+        self.run_tier = routing_engine.run_tier
+
+    def test_the_cheap_family_is_cheap_whether_named_by_alias_or_by_id(self):
+        # The Agent call carries the alias; transcripts, a capped parent and
+        # provider routes carry full IDs.
+        for model in ("haiku", "claude-haiku-5-5", "claude-haiku-4-5-20251001",
+                      "us.anthropic.claude-haiku-4-5-20251001-v1:0", "claude-haiku-4-5@20251001"):
+            with self.subTest(model=model):
+                self.assertEqual(self.run_tier(LENS, "claude", model), "cheap")
+                self.assertEqual(self.run_tier("leo-lens", "claude", model), "cheap")
+        for model in ("sonnet", "claude-sonnet-5-5", "opus", "claude-opus-5-5[1m]", "inherit", "private-local-model", "", None):
+            with self.subTest(model=model):
+                self.assertEqual(self.run_tier(LENS, "claude", model), "standard")
+
+    def test_the_configured_cheap_tier_decides_not_a_model_name(self):
+        (self.data / "routing.json").write_text(json.dumps({"claude": {"cheap": "sonnet", "standard": "opus"}}))
+        self.assertEqual(self.run_tier(LENS, "claude", "claude-sonnet-5-5"), "cheap")
+        self.assertEqual(self.run_tier(LENS, "claude", "haiku"), "standard")
+        # When cheap and standard name one family the model carries no tier.
+        same = {"claude": {"standard": {"model": "haiku", "effort": None}}}
+        self.assertEqual(self.run_tier(LENS, "claude", "haiku", same), "standard")
+        # A routing file that fails validation falls back to the defaults, as the guard does.
+        (self.data / "routing.json").write_text("{not json")
+        self.assertEqual(self.run_tier(LENS, "claude", "haiku"), "cheap")
+
+    def test_other_profiles_and_other_harnesses_keep_their_own_tier(self):
+        for agent, tier in (("leos-agent:leo-cheap", "cheap"), ("leo-standard", "standard"), ("leo-reviewer", "standard"),
+                            ("leo-premium", "premium"), ("general-purpose", None), ("other-plugin:leo-lens", None)):
+            with self.subTest(agent=agent):
+                self.assertEqual(self.run_tier(agent, "claude", "haiku"), tier)
+                self.assertEqual(self.run_tier(agent, "claude", "opus"), tier)
+        # Codex, OpenCode and Cursor hold a lens to standard; a cheap lens there is leo-cheap.
+        for harness, model in (("codex", "gpt-6-luna"), ("opencode", "anthropic/claude-haiku-4-5"),
+                               ("cursor", "claude-haiku-4-5"), ("hermes", "haiku"), ("pi", "haiku")):
+            with self.subTest(harness=harness):
+                self.assertEqual(self.run_tier("leo-lens", harness, model), "standard")
+
+    def test_cheap_and_standard_lenses_launched_together_pair_at_their_own_tier(self):
+        # As the guard and the observer now write them, with no link rows: both
+        # dispatches share one second, so one tier could only call it a tie.
+        rows = [dispatch("2026-10-01T10:00:00Z", LENS, decision="correct", tier="cheap", effective_model="haiku"),
+                dispatch("2026-10-01T10:00:00Z", LENS, decision="correct", tier="standard", effective_model="sonnet"),
+                child("2026-10-01T10:00:30Z", LENS, "a1", decision="executed", tier="cheap", effective_model="claude-haiku-5-5"),
+                child("2026-10-01T10:00:40Z", LENS, "a2", decision="executed", tier="standard",
+                      effective_model="claude-sonnet-5-5", outcome="partial")]
+        summary = dispatch_log.summarise(rows)
+        self.assertEqual(summary["outcomes"], {"cheap": {"done": 1}, "standard": {"partial": 1}})
+        self.assertEqual(summary["joins"], {"nearest": 2})
+        self.assertEqual(summary["coverage"], {"cheap": {"ran": 1, "no_signal": 0}, "standard": {"ran": 1, "no_signal": 0}})
+
+    def test_rows_written_before_lens_tiers_report_as_they_always_did(self):
+        # A lens dispatch logged standard whatever its model, and a lens
+        # completion carried no tier, so both read as standard.
+        rows = [dispatch("2026-10-01T10:00:00Z", LENS, decision="correct", effective_model="haiku"),
+                dispatch("2026-10-01T10:00:00Z", LENS, decision="correct", effective_model="sonnet"),
+                child("2026-10-01T10:00:30Z", LENS, "a1", decision="executed", effective_model="claude-haiku-5-5"),
+                child("2026-10-01T10:00:40Z", LENS, "a2", decision="executed", effective_model="claude-sonnet-5-5")]
+        self.assertEqual(rows[0]["tier"], "standard")
+        summary = dispatch_log.summarise(rows)
+        self.assertEqual(summary["outcomes"], {"ambiguous": {"done": 1}, "standard": {"done": 1}})
+        self.assertEqual(summary["joins"], {"ambiguous": 1, "nearest": 1})
+        self.assertEqual(summary["contract_refused"], {})
+
+
+class HandbackRefusals(unittest.TestCase):
+    def test_refusals_are_counted_per_tier_beside_the_outcomes_never_in_them(self):
+        summary = dispatch_log.summarise([
+            dispatch("2026-10-01T10:00:00Z", "leo-cheap", call="a"),
+            dispatch("2026-10-01T10:00:01Z", "leo-cheap", call="b"),
+            dispatch("2026-10-01T10:00:02Z", "leo-standard", call="c"),
+            child("2026-10-01T10:00:30Z", "leo-cheap", "a1", call="a", contract_refused=True),
+            # Its SessionEnd backfill repeats the flag; the child is counted once.
+            child("2026-10-01T10:00:30Z", "leo-cheap", "a1", call="a", decision="executed", contract_refused=True,
+                  effective_model="haiku"),
+            child("2026-10-01T10:00:31Z", "leo-cheap", "b1", call="b", contract_refused=False),
+            child("2026-10-01T10:00:32Z", "leo-standard", "c1", call="c", outcome="unknown", verified=None,
+                  contract_refused=True),
+        ])
+        self.assertEqual(summary["contract_refused"], {"cheap": 1, "standard": 1})
+        self.assertEqual(summary["outcomes"], {"cheap": {"done": 2}, "standard": {"unknown": 1}})
+        self.assertEqual(summary["verified"], {"cheap": {"stated": 2}, "standard": {"unstated": 1}})
+        text = dispatch_log.render(summary)
+        self.assertIn("cheap     done 2  | hand-back refused 1", text)
+        self.assertIn("standard  unknown 1  | hand-back refused 1", text)
+
+    def test_rows_without_the_flag_print_no_refusals(self):
+        summary = dispatch_log.summarise([dispatch("2026-10-01T10:00:00Z", "leo-cheap", call="a"),
+                                          child("2026-10-01T10:00:30Z", "leo-cheap", "a1", call="a")])
+        self.assertEqual(summary["contract_refused"], {})
+        self.assertNotIn("refused", dispatch_log.render(summary))
+
+
 class RotationSafeRead(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

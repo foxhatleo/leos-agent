@@ -154,6 +154,39 @@ class RefuseOnce(Host):
         self.assertTrue(all((directory / name).stat().st_size == 0 for name in self.markers()))
 
 
+class RecordedRefusal(Host):
+    def stop(self, child, agent="leos-agent:leo-cheap"):
+        return {"hook_event_name": "SubagentStop", "session_id": "session-1", "agent_id": child, "agent_type": agent,
+                "permission_mode": "auto", "stop_hook_active": False, "transcript_path": str(self.parent),
+                "agent_transcript_path": str(self.child_transcript(child)), "last_assistant_message": "Handed back."}
+
+    def test_a_refused_child_is_flagged_and_its_outcome_counts_unchanged(self):
+        self.assertFalse(self.hand_back(BARE)[0])
+        self.assertTrue(self.hand_back(CLOSED)[0])
+        self.assertTrue(self.hand_back(CLOSED, child="c2")[0])
+        self.assertEqual(self.markers(), [os.path.basename(handback_contract.marker_path("session-1", "c1"))])
+        for child in ("c1", "c2"):
+            self.assertIsNone(observe_agent.observe(self.stop(child), "claude"))
+        rows = dispatch_log.read()
+        self.assertEqual([(r["agent_id"], r["contract_refused"], r["outcome"], r["outcome_source"]) for r in rows],
+                         [("c1", True, "done", "handback"), ("c2", False, "done", "handback")])
+        summary = dispatch_log.summarise(rows)
+        self.assertEqual(summary["outcomes"], {"cheap": {"done": 2}})
+        self.assertEqual(summary["contract_refused"], {"cheap": 1})
+        self.assertIn("hand-back refused 1", dispatch_log.render(summary))
+        self.assertIn(b'"contract_refused": true', (self.data / "dispatch.jsonl").read_bytes())
+
+    def test_only_a_claude_row_that_names_its_child_carries_the_flag(self):
+        self.assertFalse(self.hand_back(BARE)[0])
+        observe_agent.observe(dict(self.stop("c1"), stop_hook_active=True), "codex")  # past its own one prompt
+        self.assertNotIn("contract_refused", dispatch_log.read()[-1])
+        nameless = {k: v for k, v in self.stop("c1").items() if k != "agent_id"}
+        observe_agent.observe(nameless, "claude")
+        self.assertNotIn("contract_refused", dispatch_log.read()[-1])
+        observe_agent.observe(self.stop("other"), "claude")
+        self.assertIs(dispatch_log.read()[-1]["contract_refused"], False)
+
+
 class PassThrough(Host):
     def test_other_agents_and_the_main_thread_are_never_refused(self):
         for agent in ("general-purpose", "Explore", "other-plugin:leo-cheap", "leos-agent:leo-unknown", "leo-mystery", None):

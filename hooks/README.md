@@ -64,7 +64,10 @@ metadata sidecar. Other agents, the main thread, and guard modes `warn` and
 `off` pass untouched; the hook never grants permission and fails open. A
 refused call delivered nothing, so the observer reads only hand-backs that
 went through, and a child whose only hand-back was refused can still get its
-one SubagentStop prompt.
+one SubagentStop prompt. At the child's stop the observer checks for its marker
+(`handback_contract.marker_path`) and records the boolean `contract_refused`
+on its completion row; no other harness has the check or the field. The report
+counts refused children per tier beside the outcomes, never as an outcome.
 
 Completion signals share one contract. Every adapter sends the observer a
 SubagentStop-shaped event carrying at most the last 4 KiB of the child's final
@@ -91,6 +94,18 @@ session; `post_tool_call` sees a background handle or the same children, so it
 records only on a build that never fires `subagent_stop`. The guard records the
 brief's `Escalation from <tier>:` header as a tier token; on Codex the brief is
 encrypted and the field reads `unobservable`.
+
+A row's tier is its profile's, except a Claude `leo-lens`, whose tier is the
+model it runs on: cheap when that model's family is the configured cheap
+tier's, otherwise standard (also when cheap and standard name one family). Its
+dispatch row takes the model after the guard's fill or cap; in `warn` mode,
+which applies neither, the call's own model or the parent the lens inherits.
+Its completion row takes the child transcript's model, or gets its tier from
+the SessionEnd backfill when that model flushed late. Both sides therefore
+carry one tier, whether the report joins them through the link row or by the
+nearest preceding dispatch. On Codex, OpenCode and Cursor a lens is standard
+and a cheap lens is `leo-cheap`. A completion's tier and `contract_refused`
+are optional v3 fields, so rows written before them report as they did.
 
 Scripts live in scripts/ and are included in the npm package. Hook input is
 bounded; errors fail open with local diagnostics. An invalid routing.json keeps

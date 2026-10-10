@@ -240,6 +240,45 @@ class Signals(unittest.TestCase):
         with patch.object(session_models.os.path, "getsize", return_value=session_models.USAGE_READ_LIMIT + 1):
             self.assertEqual(session_models.transcript_stats(path), {"usage": None, "complete": False, "turns": None})
 
+    def test_a_claude_lens_completion_takes_its_tier_from_the_model_it_ran_on(self):
+        for child, model, tier in (("lc", "claude-haiku-5-5", "cheap"), ("ls", "claude-sonnet-5-5", "standard")):
+            observe_agent.observe({"hook_event_name": "SubagentStop", "agent_type": "leos-agent:leo-lens", "agent_id": child,
+                                   "session_id": "s", "agent_transcript_path": self.claude_transcript(child, model=model),
+                                   "last_assistant_message": REPLY}, "claude")
+            row = dispatch_log.read()[-1]
+            self.assertEqual((row["effective_model"], row["tier"]), (model, tier))
+        # Any other agent's tier stays its own, recomputed by the report.
+        observe_agent.observe({"hook_event_name": "SubagentStop", "agent_type": "leos-agent:leo-standard", "agent_id": "w",
+                               "session_id": "s", "agent_transcript_path": self.claude_transcript("w", model="claude-haiku-5-5"),
+                               "last_assistant_message": REPLY}, "claude")
+        self.assertNotIn("tier", dispatch_log.read()[-1])
+
+    def test_a_lens_that_flushed_late_gets_its_tier_with_its_model(self):
+        parent = self.root / "lens.jsonl"
+        child = self.root / "lens/subagents/agent-lz.jsonl"
+        observe_agent.observe({"hook_event_name": "SubagentStop", "session_id": "s5", "agent_id": "lz",
+                               "agent_type": "leos-agent:leo-lens", "agent_transcript_path": str(child)}, "claude")
+        self.assertNotIn("tier", dispatch_log.read()[-1])
+        child.parent.mkdir(parents=True)
+        child.write_text(json.dumps({"type": "assistant", "message": {"id": "m", "model": "claude-haiku-5-5", "content": [
+            {"type": "text", "text": "Result: done\nVerified: grep"}]}}) + "\n")
+        observe_agent.reconcile("s5", str(parent))
+        row = dispatch_log.read()[-1]
+        self.assertEqual((row["decision"], row["tier"], row["outcome"]), ("executed", "cheap", "done"))
+        self.assertEqual(dispatch_log.summarise(dispatch_log.read())["outcomes"], {"cheap": {"done": 1}})
+
+    def test_lenses_on_other_harnesses_stay_standard_and_carry_no_refusal_flag(self):
+        # A cheap lens there is leo-cheap, so a leo-lens is standard whatever it ran on.
+        for harness, model in (("codex", "gpt-6-luna"), ("opencode", "anthropic/claude-haiku-4-5"), ("cursor", "claude-haiku-4-5")):
+            with self.subTest(harness=harness):
+                observe_agent.observe({"hook_event_name": "SubagentStop", "agent_type": "leo-lens", "agent_id": "x-" + harness,
+                                       "session_id": "s", "child_model": model, "result_text": REPLY}, harness)
+                row = dispatch_log.read()[-1]
+                self.assertEqual(row["effective_model"], model)
+                self.assertNotIn("tier", row)
+                self.assertNotIn("contract_refused", row)
+        self.assertEqual(set(dispatch_log.summarise(dispatch_log.read())["outcomes"]), {"standard"})
+
 
 class ContractPrompt(unittest.TestCase):
     """SubagentStop as Claude Code and Codex send it: stop_hook_active is false

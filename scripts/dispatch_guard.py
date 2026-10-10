@@ -194,6 +194,17 @@ def _corrected(dispatch, updated):
     return dispatch._replace(agent=agent) if agent else dispatch
 
 
+def _runs_on(result, parent):
+    """The model the child runs on, as far as the guard knows, after its fill
+    or cap. A warning applies neither, so the call keeps its own model or,
+    naming none, its definition's: a lens inherits the parent. A forced
+    setting runs whatever the guard decides, so its model stands even then.
+    Only a Claude leo-lens's logged tier reads this."""
+    if result.get("action") == "warn" and result.get("reason") != "forced-model-over-ceiling":
+        return result.get("requested_model") or parent
+    return result.get("effective_model")
+
+
 def render_block(result=None):
     retry = (result or {}).get("retry", "Retry with an explicit model within the parent price ceiling.")
     return "[leo routing] BLOCKED: " + (result or {}).get("reason", "model choice required") + ". " + retry
@@ -291,7 +302,8 @@ def process(event, name=None):
             result.update(action="warn", proposed_action=action, updated_input=None)
         entry = dispatch_log.record(dispatch, result["action"], result["reason"], name,
                                     _first_str(event, ("session_id", "sessionId")),
-                                    _first_str(event, ("cwd", "workspace", "directory")), triviality(dispatch))
+                                    _first_str(event, ("cwd", "workspace", "directory")), triviality(dispatch),
+                                    model=_runs_on(result, parent))
         entry.update({k: result.get(k) for k in ("requested_model", "effective_model", "price", "proposed_action")})
         entry["call_id"] = event.get("tool_use_id") or event.get("call_id") or event.get("toolCallId")
         # One token per row: an invalid routing config outranks an unrecognized

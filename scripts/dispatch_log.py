@@ -50,7 +50,10 @@ LOG_NAME = "dispatch.jsonl"
 MAX_BYTES = 1 << 20
 
 # v3 added tier, escalation_from, outcome, verified, outcome_source, usage;
-# completion rows may also carry turns, a count of the child's model requests.
+# completion rows may also carry turns, a count of the child's model requests;
+# a Claude leo-lens completion, its tier, from the model it ran on; and a
+# Claude completion, contract_refused, whether the hand-back check refused the
+# child's report once. An optional field is read as absent on older rows.
 # The reader branches on this so "predates instrumentation" is never confused
 # with "the worker emitted no Result line".
 RECORD_VERSION = 3
@@ -87,9 +90,13 @@ def _keep_prompts():
     return os.environ.get("LEOS_AGENT_DISPATCH_LOG_PROMPTS") == "1"
 
 
-def record(dispatch, decision, reason, harness, session=None, cwd=None, trivial=0):
-    """The on-disk shape for one dispatch. Pure; writes nothing."""
-    from routing_engine import tier_for
+def record(dispatch, decision, reason, harness, session=None, cwd=None, trivial=0, model=None):
+    """The on-disk shape for one dispatch. Pure; writes nothing.
+
+    `model` is the model the child runs on, as far as the guard knows; only a
+    Claude leo-lens takes its tier from it (routing_engine.run_tier).
+    """
+    from routing_engine import run_tier
     entry = {
         "v": RECORD_VERSION,
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -113,7 +120,7 @@ def record(dispatch, decision, reason, harness, session=None, cwd=None, trivial=
             "prompt_lines": dispatch.prompt_lines,
             "paths": dispatch.path_count,
             "prompt": dispatch.prompt_hash,
-            "tier": tier_for(dispatch.agent),
+            "tier": run_tier(dispatch.agent, harness, model),
             "escalation_from": dispatch.escalation_from,
         })
         if _keep_prompts():
@@ -215,7 +222,8 @@ def _token(value):
 
 
 def _tier_of(row):
-    """A dispatch or completion row's tier: v3 records it; older rows recompute."""
+    """A row's tier: a v3 dispatch records it, and so does a Claude leo-lens
+    completion whose model is known; any other row recomputes it from its agent."""
     from routing_engine import tier_for
     return row.get("tier") or tier_for(row.get("agent") or "") or None
 
@@ -445,8 +453,13 @@ def summarise(entries, catalog=None):
     usage_rows = collections.Counter()
     turns = {}
     sources = collections.defaultdict(collections.Counter)
+    # Children whose first hand-back the contract check refused. Counted
+    # beside the outcomes, never in them: a refused call delivered nothing.
+    refused = collections.Counter()
     for row in completions:
         _, tier, _how = pairs[id(row)]
+        if row.get("contract_refused") is True:
+            refused[tier] += 1
         if "outcome" in row:
             outcomes.setdefault(tier, collections.Counter())[row.get("outcome") or "unknown"] += 1
             state = {True: "stated", False: "none"}.get(row.get("verified"), "unstated")
@@ -505,6 +518,7 @@ def summarise(entries, catalog=None):
         "links": len(linked),
         "outcomes": {tier: dict(c) for tier, c in sorted(outcomes.items())},
         "verified": {tier: dict(c) for tier, c in sorted(verified.items())},
+        "contract_refused": dict(sorted(refused.items())),
         "usage": {tier: {**u, "rows": usage_rows[tier]} for tier, u in sorted(usage.items())},
         "turns": dict(sorted(turns.items())),
         "cost": dict(sorted(_costs(completions, pairs, catalog).items())),
@@ -582,12 +596,15 @@ def _render_outcomes(summary):
     lines = []
     outcomes = summary.get("outcomes") or {}
     silent_tiers = {tier: c["no_signal"] for tier, c in (summary.get("coverage") or {}).items() if c.get("no_signal")}
+    refused = summary.get("contract_refused") or {}
     first = True
-    for tier in sorted(set(outcomes) | set(silent_tiers)):
+    for tier in sorted(set(outcomes) | set(silent_tiers) | set(refused)):
         counts = outcomes.get(tier, {})
         body = "  ".join("%s %d" % kv for kv in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
         if silent_tiers.get(tier):
             body = (body + "  | " if body else "| ") + "no completion signal %d" % silent_tiers[tier]
+        if refused.get(tier):
+            body = (body + "  | " if body else "| ") + "hand-back refused %d" % refused[tier]
         lines.append("  %-11s %-9s %s" % ("outcomes" if first else "", tier, body))
         first = False
     verified = summary.get("verified") or {}

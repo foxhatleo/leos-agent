@@ -332,6 +332,70 @@ class TestEscalationFields(GuardCase):
         self.assertEqual(row["v"], 3)
 
 
+class TestLensTier(GuardCase):
+    """A leo-lens dispatch is logged under the tier of the model it runs on."""
+
+    def lens(self, model=None, parent="claude-sonnet-5-5"):
+        event = dispatch_event(agent="leos-agent:leo-lens", prompt="Lens: the auth paths at SHA", model=model)
+        return dict(event, parent_model=parent, session_id="s")
+
+    def logged(self):
+        return [(r["harness"], r["decision"], r["effective_model"], r["tier"]) for r in self.log_lines()]
+
+    def test_on_claude_the_call_the_fill_and_the_cap_decide_it(self):
+        with self.env():
+            for model in ("haiku", "sonnet", "opus", None):  # a sonnet reviewer's lenses
+                self.guard.process(self.lens(model), "claude")
+            # A haiku reviewer's sonnet lens is capped to haiku, its parent's alias.
+            self.guard.process(self.lens("sonnet", parent="claude-haiku-5-5"), "claude")
+        self.assertEqual(self.logged(), [
+            ("claude", "allow", "haiku", "cheap"), ("claude", "allow", "sonnet", "standard"),
+            ("claude", "correct", "claude-sonnet-5-5", "standard"), ("claude", "correct", "sonnet", "standard"),
+            ("claude", "correct", "claude-haiku-5-5", "cheap")])
+
+    def test_the_configured_cheap_tier_is_the_one_compared(self):
+        self.write_routing({"claude": {"cheap": "sonnet", "standard": "opus"}})
+        with self.env():
+            self.guard.process(self.lens("sonnet"), "claude")
+            self.guard.process(self.lens("haiku"), "claude")
+        self.assertEqual([r["tier"] for r in self.log_lines()], ["cheap", "standard"])
+
+    def test_a_warning_corrects_nothing_so_the_call_decides_it(self):
+        with self.env(LEOS_AGENT_DISPATCH_GUARD="warn"):
+            # Not capped: the sonnet lens runs on sonnet.
+            self.guard.process(self.lens("sonnet", parent="claude-haiku-5-5"), "claude")
+            # Not filled: a lens naming no model inherits its haiku reviewer.
+            self.guard.process(self.lens(None, parent="claude-haiku-5-5"), "claude")
+        self.assertEqual([(r["decision"], r["proposed_action"], r["tier"]) for r in self.log_lines()],
+                         [("warn", "correct", "standard"), ("warn", "correct", "cheap")])
+
+    def test_a_forced_setting_decides_it_whatever_the_call_names(self):
+        with self.env(CLAUDE_CODE_SUBAGENT_MODEL_FORCE="1", CLAUDE_CODE_SUBAGENT_MODEL="claude-haiku-5-5"):
+            self.guard.process(self.lens("sonnet"), "claude")
+        # Over the haiku reviewer the forced sonnet would be blocked; warned, it still runs.
+        with self.env(LEOS_AGENT_DISPATCH_GUARD="warn", CLAUDE_CODE_SUBAGENT_MODEL_FORCE="1",
+                      CLAUDE_CODE_SUBAGENT_MODEL="claude-sonnet-5-5"):
+            self.guard.process(self.lens("haiku", parent="claude-haiku-5-5"), "claude")
+        self.assertEqual([(r["decision"], r["reason"], r["tier"]) for r in self.log_lines()],
+                         [("allow", "forced-model-setting", "cheap"), ("warn", "forced-model-over-ceiling", "standard")])
+
+    def test_other_harnesses_log_a_lens_as_standard_whatever_it_runs_on(self):
+        codex = {"tool_name": "spawn_agent", "model": "gpt-6-astra",
+                 "tool_input": {"agent_type": "leo-lens", "message": "Lens: x", "model": "gpt-6-luna"}}
+        with self.env(LEOS_AGENT_DISPATCH_GUARD="warn"):
+            self.guard.process(codex, "codex")  # runs on the cheap model it named
+        with self.env():
+            self.guard.process(codex, "codex")
+            self.guard.process({"tool_name": "Task", "tool_input": {"subagent_type": "leo-lens", "prompt": "Lens: x"},
+                                "effective_model": "claude-haiku-4-5", "parent_model": "claude-sonnet-4-5"}, "cursor")
+            self.guard.process({"tool_name": "task", "tool_input": {"subagent_type": "leo-lens", "prompt": "Lens: x"},
+                                "native_profiles": {"leo-lens": {"model": "anthropic/claude-haiku-4-5"}},
+                                "parent_model": "anthropic/claude-sonnet-4-5"}, "opencode")
+        self.assertEqual([(h, d, t) for h, d, _m, t in self.logged()],
+                         [("codex", "warn", "standard"), ("codex", "block", "standard"),
+                          ("cursor", "allow", "standard"), ("opencode", "allow", "standard")])
+
+
 class TestReport(GuardCase):
     def test_lifecycle_records_do_not_inflate_attempts_or_invent_inheritance(self):
         summary = self.log.summarise([
