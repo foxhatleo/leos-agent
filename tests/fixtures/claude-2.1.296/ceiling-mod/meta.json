@@ -1,0 +1,26 @@
+{
+ "about": "Haiku parent requests a general-purpose child on opus; the agent.spawn mod decides.",
+ "captured": "2026-10-10",
+ "claude_code": "2.1.296",
+ "live_rows": [
+  {
+   "agent": "general-purpose",
+   "decision": "correct",
+   "effective_model": "claude-haiku-5-5",
+   "reason": "over-ceiling",
+   "requested_model": "opus",
+   "tier": null
+  },
+  {
+   "decision": "linked"
+  },
+  {
+   "agent": "general-purpose",
+   "decision": "executed",
+   "effective_model": "claude-haiku-5-5",
+   "outcome": "unknown",
+   "reason": "child-transcript-model"
+  }
+ ],
+ "parent_model": "claude-haiku-5-5"
+}

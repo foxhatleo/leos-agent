@@ -1,0 +1,27 @@
+{
+ "about": "A leo-cheap worker told to hand back only `pong`: refused once, then delivered with both lines.",
+ "captured": "2026-10-10",
+ "claude_code": "2.1.296",
+ "live_rows": [
+  {
+   "agent": "leos-agent:leo-cheap",
+   "decision": "allow",
+   "effective_model": "haiku",
+   "reason": "within-ceiling",
+   "requested_model": "haiku",
+   "tier": "cheap"
+  },
+  {
+   "decision": "linked"
+  },
+  {
+   "agent": "leos-agent:leo-cheap",
+   "contract_refused": true,
+   "decision": "executed",
+   "effective_model": "claude-haiku-5-5",
+   "outcome": "done",
+   "reason": "child-transcript-model"
+  }
+ ],
+ "parent_model": "claude-sonnet-5-5"
+}

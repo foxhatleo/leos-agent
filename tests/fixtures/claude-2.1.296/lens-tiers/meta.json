@@ -1,0 +1,57 @@
+{
+ "about": "leo-lens with model haiku, then leo-lens with no model (guard fills the standard tier).",
+ "captured": "2026-10-10",
+ "claude_code": "2.1.296",
+ "live_rows": [
+  {
+   "agent": "leos-agent:leo-lens",
+   "decision": "allow",
+   "effective_model": "haiku",
+   "reason": "within-ceiling",
+   "requested_model": "haiku",
+   "tier": "cheap"
+  },
+  {
+   "agent": "leos-agent:leo-lens",
+   "contract_refused": false,
+   "decision": "executed",
+   "effective_model": "claude-haiku-5-5",
+   "outcome": "done",
+   "reason": "child-transcript-model",
+   "tier": "cheap"
+  },
+  {
+   "agent": "leos-agent:leo-lens",
+   "contract_refused": false,
+   "decision": "executed",
+   "effective_model": "claude-haiku-5-5",
+   "outcome": "done",
+   "reason": "child-transcript-model",
+   "tier": "cheap"
+  },
+  {
+   "decision": "linked"
+  },
+  {
+   "agent": "leos-agent:leo-lens",
+   "decision": "correct",
+   "effective_model": "sonnet",
+   "reason": "explicit-tier-default",
+   "requested_model": null,
+   "tier": "standard"
+  },
+  {
+   "agent": "leos-agent:leo-lens",
+   "contract_refused": false,
+   "decision": "executed",
+   "effective_model": "claude-sonnet-5-5",
+   "outcome": "done",
+   "reason": "child-transcript-model",
+   "tier": "standard"
+  },
+  {
+   "decision": "linked"
+  }
+ ],
+ "parent_model": "claude-sonnet-5-5"
+}

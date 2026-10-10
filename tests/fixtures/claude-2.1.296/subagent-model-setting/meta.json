@@ -1,0 +1,51 @@
+{
+ "about": "CLAUDE_CODE_SUBAGENT_MODEL=haiku: general-purpose with no model, then Explore with no model.",
+ "captured": "2026-10-10",
+ "claude_code": "2.1.296",
+ "live_rows": [
+  {
+   "agent": "general-purpose",
+   "decision": "allow",
+   "effective_model": "haiku",
+   "reason": "subagent-model-setting",
+   "requested_model": null,
+   "tier": null
+  },
+  {
+   "agent": "general-purpose",
+   "decision": "completed",
+   "effective_model": null,
+   "outcome": "unknown",
+   "reason": "child-model-unavailable"
+  },
+  {
+   "agent": "general-purpose",
+   "decision": "executed",
+   "effective_model": "claude-haiku-5-5",
+   "outcome": "unknown",
+   "reason": "child-transcript-model"
+  },
+  {
+   "decision": "linked"
+  },
+  {
+   "agent": "Explore",
+   "decision": "correct",
+   "effective_model": "sonnet",
+   "reason": "explicit-tier-default",
+   "requested_model": null,
+   "tier": null
+  },
+  {
+   "agent": "Explore",
+   "decision": "executed",
+   "effective_model": "claude-sonnet-5-5",
+   "outcome": "unknown",
+   "reason": "child-transcript-model"
+  },
+  {
+   "decision": "linked"
+  }
+ ],
+ "parent_model": "claude-sonnet-5-5"
+}

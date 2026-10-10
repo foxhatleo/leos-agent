@@ -1,0 +1,26 @@
+{
+ "about": "Same request with the agent.spawn mod's variable cleared, so the PreToolUse command guard decides.",
+ "captured": "2026-10-10",
+ "claude_code": "2.1.296",
+ "live_rows": [
+  {
+   "agent": "general-purpose",
+   "decision": "allow",
+   "effective_model": "opus",
+   "reason": "parent-model-unavailable",
+   "requested_model": "opus",
+   "tier": null
+  },
+  {
+   "decision": "linked"
+  },
+  {
+   "agent": "general-purpose",
+   "decision": "executed",
+   "effective_model": "claude-opus-5-5",
+   "outcome": "unknown",
+   "reason": "child-transcript-model"
+  }
+ ],
+ "parent_model": "claude-haiku-5-5"
+}

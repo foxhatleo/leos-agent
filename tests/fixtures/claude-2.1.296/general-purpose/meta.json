@@ -1,0 +1,52 @@
+{
+ "about": "A leo-cheap worker that closed with both lines, then a general-purpose child that ended its turn before calling SubagentHandback (two SubagentStop events).",
+ "captured": "2026-10-10",
+ "claude_code": "2.1.296",
+ "live_rows": [
+  {
+   "agent": "leos-agent:leo-cheap",
+   "decision": "allow",
+   "effective_model": "haiku",
+   "reason": "within-ceiling",
+   "requested_model": "haiku",
+   "tier": "cheap"
+  },
+  {
+   "agent": "leos-agent:leo-cheap",
+   "contract_refused": false,
+   "decision": "executed",
+   "effective_model": "claude-haiku-5-5",
+   "outcome": "done",
+   "reason": "child-transcript-model"
+  },
+  {
+   "decision": "linked"
+  },
+  {
+   "agent": "general-purpose",
+   "decision": "allow",
+   "effective_model": "haiku",
+   "reason": "within-ceiling",
+   "requested_model": "haiku",
+   "tier": null
+  },
+  {
+   "agent": "general-purpose",
+   "decision": "completed",
+   "effective_model": null,
+   "outcome": "unknown",
+   "reason": "child-model-unavailable"
+  },
+  {
+   "agent": "general-purpose",
+   "decision": "executed",
+   "effective_model": "claude-haiku-5-5",
+   "outcome": "unknown",
+   "reason": "child-transcript-model"
+  },
+  {
+   "decision": "linked"
+  }
+ ],
+ "parent_model": "claude-sonnet-5-5"
+}

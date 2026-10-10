@@ -1,0 +1,40 @@
+{
+ "about": "LEOS_AGENT_DISPATCH_GUARD=off: a haiku leo-reviewer spawns leo-lens with no model; the inner PreToolUse carries the reviewer's agent_id.",
+ "captured": "2026-10-10",
+ "claude_code": "2.1.296",
+ "live_rows": [
+  {
+   "agent": "leos-agent:leo-lens",
+   "contract_refused": false,
+   "decision": "executed",
+   "effective_model": "claude-haiku-5-5",
+   "outcome": "done",
+   "reason": "child-transcript-model",
+   "tier": "cheap"
+  },
+  {
+   "agent": "leos-agent:leo-lens",
+   "contract_refused": false,
+   "decision": "executed",
+   "effective_model": "claude-haiku-5-5",
+   "outcome": "done",
+   "reason": "child-transcript-model",
+   "tier": "cheap"
+  },
+  {
+   "decision": "linked"
+  },
+  {
+   "agent": "leos-agent:leo-reviewer",
+   "contract_refused": false,
+   "decision": "executed",
+   "effective_model": "claude-haiku-5-5",
+   "outcome": "done",
+   "reason": "child-transcript-model"
+  },
+  {
+   "decision": "linked"
+  }
+ ],
+ "parent_model": "claude-sonnet-5-5"
+}
