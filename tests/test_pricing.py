@@ -27,6 +27,40 @@ class ModelPrices(unittest.TestCase):
             self.assertIsNotNone(match.model, name)
             self.assertEqual(match.requested, name)
 
+    def test_bedrock_and_vertex_ids_share_the_first_party_identity(self):
+        """The provider IDs Claude Code 2.1.296 lists for each model, plus the
+        other cross-region prefixes it recognizes and the 1M-context suffix."""
+        first_party = {
+            "claude-opus-4-1-20250805": ("us.anthropic.claude-opus-4-1-20250805-v1:0", "anthropic.claude-opus-4-1-20250805-v1:0",
+                                         "eu.anthropic.claude-opus-4-1-20250805-v1:0", "claude-opus-4-1@20250805"),
+            "claude-sonnet-4-5-20250929": ("apac.anthropic.claude-sonnet-4-5-20250929-v1:0", "claude-sonnet-4-5@20250929",
+                                           "global.anthropic.claude-sonnet-4-5-20250929-v1:0[1m]",
+                                           "jp.anthropic.claude-sonnet-4-5-20250929-v1:0", "claude-sonnet-4-5@20250929[1m]"),
+            "claude-3-5-sonnet-20241022": ("us.anthropic.claude-3-5-sonnet-20241022-v2:0", "claude-3-5-sonnet-v2@20241022"),
+            "claude-opus-4-20250514": ("au.anthropic.claude-opus-4-20250514-v1:0", "claude-opus-4@20250514"),
+            "claude-haiku-4-5-20251001": ("us-gov.anthropic.claude-haiku-4-5-20251001-v1:0", "anthropic.claude-haiku-4-5",
+                                          "claude-haiku-4-5@20251001", "US.Anthropic.Claude-Haiku-4-5-20251001-V1:0"),
+            "claude-opus-4-6": ("us.anthropic.claude-opus-4-6-v1",),
+            "claude-fable-5-1": ("us.anthropic.claude-fable-5-1", "anthropic.claude-fable-5-1"),
+        }
+        data = json.loads(pricing.BUNDLED.read_text())
+        for official, provider_ids in first_party.items():
+            reference = pricing.resolve(official, data).report()["reference_model"]
+            self.assertIsNotNone(reference, official)
+            for name in provider_ids:
+                with self.subTest(name=name):
+                    self.assertEqual(pricing.identity(name), pricing.identity(official))
+                    match = pricing.resolve(name, data)
+                    self.assertEqual((match.requested, match.report()["reference_model"]), (name, reference))
+
+    def test_only_the_known_provider_grammar_is_unwrapped(self):
+        for name in ("xx.anthropic.claude-opus-4-1-20250805-v1:0", "us.amazon.nova-pro-v1:0", "anthropic.claude-v2:1",
+                     "us.meta.llama4-maverick-17b-instruct-v1:0", "openai.gpt-oss-120b-1:0"):
+            with self.subTest(name=name):
+                self.assertIsNone(pricing.identity(name))
+        data = json.loads(pricing.BUNDLED.read_text())
+        self.assertEqual(pricing.resolve("claude-opus-4-1@2025", data).status, "unknown")
+
     def test_nearby_versions_preserve_tiers_and_sizes(self):
         data = catalog(("anthropic/claude-fable-5.1", 10, 50),
                        ("openai/gpt-5.6-sol", 2, 10), ("qwen/qwen3.8-27b", 1, 3),

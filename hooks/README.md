@@ -113,11 +113,30 @@ References:
 Claude live verification established that Agent accepts the aliases haiku,
 sonnet, opus, and fable, rather than full transcript model IDs. The guard caps
 a child with the parent's family alias, which Claude runs on the parent's exact
-model; when the parent's ID names no family, an inheriting agent gets no
-`model` and so runs on the parent. It fills a missing model only for built-in
-agents that would inherit (general-purpose, claude, Explore, Plan) and for the
-cheap, standard, and premium leo tiers. leo-parent and forks run on the
+model. Bedrock IDs (`us.anthropic.claude-sonnet-4-5-20250929-v1:0`, with or
+without a cross-region prefix) and Agent Platform (Vertex AI) IDs
+(`claude-sonnet-4-5@20250929`) name their family and price like the
+first-party ID. When the parent's ID names no family, an inheriting agent
+gets no `model` and so runs on the parent. It fills a missing model only for
+built-in agents that would inherit (general-purpose, claude, Explore, Plan) and
+for the cheap, standard, and premium leo tiers. leo-parent and forks run on the
 parent; other plugins' agents keep their own model.
+
+Claude Code takes a child's model from the call's `model`, then the agent
+definition, then `CLAUDE_CODE_SUBAGENT_MODEL`, then the parent. The guard reads
+that setting from its environment, which also carries a settings file's `env`.
+Without the force flag it is the model general-purpose and claude run on, as
+their definitions name none: the guard fills no `model` for them, logs
+`subagent-model-setting`, and only caps a setting priced over the parent with
+the parent's alias. Under a parent with no alias it blocks instead, since
+omitting `model` would run the setting, not the parent. Explore and Plan are
+defined as `inherit`, which outranks the setting, so they still get the
+standard default; leo tiers keep their configured model. With
+`CLAUDE_CODE_SUBAGENT_MODEL_FORCE` on (`1`, `true`, `yes`, or `on`), every
+subagent but a fork runs on the setting, or on the parent when it is unset,
+whatever `model` says. The guard then changes nothing, logs
+`forced-model-setting`, and blocks a setting priced over the parent.
+
 Fresh-session PreToolUse may run before the first assistant response is
 written: the parent is then unavailable, nothing is filled in except a leo
 tier's configured model, and dispatch is allowed with a diagnostic.

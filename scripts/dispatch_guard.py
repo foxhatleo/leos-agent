@@ -219,6 +219,14 @@ def claude_flag(name):
     return os.environ.get(name, "").strip().lower() in CLAUDE_TRUE
 
 
+def claude_subagent_model():
+    """CLAUDE_CODE_SUBAGENT_MODEL as Claude Code reads it: trimmed, with an
+    empty value or `inherit` meaning unset. A settings file's `env` reaches
+    hook processes, and the agent.spawn mod's guard run, as environment."""
+    value = os.environ.get("CLAUDE_CODE_SUBAGENT_MODEL", "").strip()
+    return value if value and value != "inherit" else None
+
+
 GUARD_OFF = frozenset(("off", "0", "false", "no", "disable", "disabled"))
 GUARD_ON = frozenset(("on", "1", "true", "yes", "enable", "enabled", ""))
 
@@ -254,8 +262,9 @@ def process(event, name=None):
         from session_models import parent_model
         parent = parent_model(event, name)
         effective = event.get("effective_model")
+        setting = claude_subagent_model() if name == "claude" else None
         if name == "claude" and claude_flag("CLAUDE_CODE_SUBAGENT_MODEL_FORCE"):
-            forced = os.environ.get("CLAUDE_CODE_SUBAGENT_MODEL", "").strip() or parent
+            forced = setting or parent
             result = route(name, tool, args, parent, effective_model=forced)
             # Forced settings cannot be overridden by updatedInput. A fork runs
             # on the parent whatever the setting, so nothing is forced there.
@@ -267,7 +276,10 @@ def process(event, name=None):
             else:
                 result.update(action="allow", reason="forced-model-setting", updated_input=None)
         else:
-            result = route(name, tool, args, parent, effective_model=effective, native_profiles=event.get("native_profiles"))
+            # Unforced, the setting is only Claude's default: the call's model
+            # and an agent's own definition still outrank it.
+            result = route(name, tool, args, parent, effective_model=effective, native_profiles=event.get("native_profiles"),
+                           default_model=setting)
         if result["reason"] == "not-a-dispatch":
             return result
         dispatch = normalize(event, name)
