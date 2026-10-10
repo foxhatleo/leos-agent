@@ -352,6 +352,17 @@ def refresh(force=False, opener=None):
         os.close(fd)
 
 
+# Either set to "off" switches the session-start refresh off. `claude plugin
+# eval` passes a run only an allowlist and EVAL_* variables, and each run has a
+# fresh home with no catalog, so the eval cases need the prefixed spelling.
+REFRESH_OPT_OUT = ("LEOS_AGENT_PRICE_REFRESH", "EVAL_LEOS_AGENT_PRICE_REFRESH")
+
+
+def refresh_disabled(environ=None):
+    environ = os.environ if environ is None else environ
+    return any(environ.get(name) == "off" for name in REFRESH_OPT_OUT)
+
+
 def refresh_background(force=False):
     path = cache_path().with_suffix(".attempt")
     try:

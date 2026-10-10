@@ -29,8 +29,10 @@ a cheaper model while preserving quality.
 Native profiles are `leo-cheap`, `leo-standard`, `leo-premium`, `leo-parent`, and
 `leo-reviewer`. The retired `leo-runner` and `leo-executor` profiles are gone,
 but the guard and logs still map those names to cheap and standard, and routing
-config still accepts its `runner` and `executor` keys. On Claude Code each
-worker profile caps its turns; a capped run returns its output marked partial. Review
+config still accepts its `runner` and `executor` keys. Worker profiles cap their
+turns on Claude Code, where a capped run returns its output marked partial, and
+on OpenCode as `steps`, past which the worker loses its tools and answers in
+text. The Codex and Cursor profiles carry no turn cap. Review
 may use nested read-only lenses; ordinary workers do not delegate. Small
 reviews run locally, and larger reviews divide independent areas rather than
 requiring every lens to reread everything.
@@ -384,7 +386,10 @@ symlink escapes are refused by the helper.
 `evals/` is a [`claude plugin eval`](https://code.claude.com/docs/en/plugin-evals)
 suite for the delegation policy on Claude Code. Each case runs three times with
 the plugin and three times without it, every run in a fresh temporary home, so
-the plugin's default tiers apply rather than your `routing.json`. Fixtures are
+the plugin's default tiers apply rather than your `routing.json`. A run receives
+only `EVAL_*` variables beside an allowlist of your shell, so each case sets
+`EVAL_LEOS_AGENT_PRICE_REFRESH=off`, which the SessionStart hook honours like
+`LEOS_AGENT_PRICE_REFRESH=off`; no run starts a price refresh. Fixtures are
 small read-only directories inside each case. No case needs `--scaffold` or
 `--allow-tools`, and every grader is a regex or tool-use check, so no judge
 model is called.

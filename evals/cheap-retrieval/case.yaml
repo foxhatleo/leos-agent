@@ -3,3 +3,6 @@ name: cheap-retrieval
 plugins: ["../.."]
 context:
   add_dirs: [incidents]
+execution:
+  env:
+    EVAL_LEOS_AGENT_PRICE_REFRESH: "off"

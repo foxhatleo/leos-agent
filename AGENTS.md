@@ -32,6 +32,7 @@ The repo root *is* the plugin. Six manifests sit side by side over one tree:
 | `hooks/` | Native hook manifests per harness. Scripts they call live in `scripts/` so npm installs ship them. |
 | `scripts/` | Installer, guard, routing engine, diagnostics, release tooling. Stdlib-only Python, Python 3.9 floor. |
 | `tests/` | `unittest` suites plus `tests/js/` for Node 22. |
+| `evals/` | `claude plugin eval` suite for the delegation policy; every run is a paid model call. `tests/test_evals.py` is its offline gate. |
 | `~/.leos-agent-local` | Per-machine state (routing, handoffs, dispatch log, backups). Never inside a versioned plugin cache. |
 
 ## Gates and when to run them
