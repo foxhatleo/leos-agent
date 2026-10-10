@@ -7,7 +7,11 @@ a no-op, so re-running a tag is safe, while a lookup that fails for any reason
 other than a confirmed 404 aborts rather than guessing. And the tree npm would
 actually ship is inspected before it ships, because `files` in package.json
 scopes the publish but does not exclude build residue that lands inside a
-directory it lists.
+directory it lists, and nothing else notices a runtime file it leaves out.
+
+`latest` only ever moves forward. A version older than the registry's newest
+release -- an old tag re-run after its publish failed -- goes out under its own
+dist-tag instead, so installs keep resolving the newest release.
 
 Once npm accepts the upload the release has happened, so nothing after that
 point fails this script. The registry's read path can lag a publish by minutes;
@@ -20,6 +24,8 @@ permission supplies a short-lived credential, so there is no token to read here.
 
 import argparse
 import json
+import posixpath
+import re
 import subprocess
 import sys
 import time
@@ -32,15 +38,34 @@ PACKAGE = "leos-agent"
 FORBIDDEN_PARTS = ("__pycache__",)
 FORBIDDEN_SUFFIXES = (".pyc", ".log")
 FORBIDDEN_NAMES = (".DS_Store",)
-REQUIRED_FILES = {
-	"LICENSE", "package.json", "index.js", "pi-extension.js", "rules/preferences.md",
+
+# The dist-tag a version goes out under when the registry already holds a newer
+# release. A plain `npm publish` applies `latest`, so re-running an older tag
+# whose publish failed would move `latest` backwards on npm 10; npm 11 instead
+# refuses to apply `latest` implicitly, which leaves that tag unpublishable.
+BACKFILL_TAG = "backfill"
+
+# What the runtime reads through path joins, which no reference scan can see.
+# Everything else an install needs is derived by required_files().
+DATA_FILES = (
+	"LICENSE", "package.json", "rules/preferences.md",
 	"payload/model-prices.json", "payload/legacy-copy-hashes.json",
-	"scripts/leo-install.py", "scripts/install_transaction.py", "scripts/jsonc_edit.py",
-	"scripts/routing.py", "scripts/routing_engine.py", "scripts/pricing.py",
-	"scripts/harness_bridge.js", "scripts/dispatch_guard.py", "scripts/dispatch_log.py",
-	"scripts/session_models.py", "scripts/payload.py", "scripts/state.py",
-	"scripts/doctor.py", "skills/install/SKILL.md",
-} | {f"agents/leo-{name}.md" for name in ("cheap", "standard", "premium", "parent", "reviewer")}
+)
+
+# Hermes loads __init__.py from a checkout rather than from npm, so it is not in
+# `files`. It runs the same shared scripts, though, so it seeds the scan; and
+# one closure for every adapter is simpler to trust than one per harness.
+SCAN_ONLY = ("__init__.py",)
+
+# How one runtime file names another. A path literal under a shipped directory;
+# a skill's own `reference/` file, named relative to the skill; a bare script
+# name, which harness_bridge.js and __init__.py both resolve under scripts/; a
+# Python import of a sibling module; a relative JavaScript import.
+PATH_REFERENCE = re.compile(r"(?<![\w.-])((?:agents|hooks|payload|rules|scripts|skills|skills-claude)/[\w./-]*\w)")
+SKILL_REFERENCE = re.compile(r"(?<![\w./-])(reference/[\w./-]*\w)")
+SCRIPT_NAME = re.compile(r"""['"]([\w-]+\.py)['"]""")
+PY_IMPORT = re.compile(r"(?m)^[ \t]*(?:from[ \t]+(\w+)[ \t]+import|import[ \t]+(\w+(?:[ \t]*,[ \t]*\w+)*))")
+JS_IMPORT = re.compile(r"""\b(?:from|import)\s*\(?\s*['"](\.{1,2}/[^'"]+)['"]""")
 
 
 class ReleaseError(Exception):
@@ -54,6 +79,68 @@ def run(command):
 def declared_version():
 	version = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["version"]
 	return version
+
+
+def release_key(version):
+	"""Order release versions numerically; None for anything not plain major.minor.patch."""
+	match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", version) if isinstance(version, str) else None
+	return tuple(int(part) for part in match.groups()) if match else None
+
+
+def references(root, rel):
+	"""The shipped or scanned files `rel` names, as paths relative to the root."""
+	path = root / rel
+	text = path.read_text(encoding="utf-8")
+	found = set(PATH_REFERENCE.findall(text))
+	parts = rel.split("/")
+	if path.suffix == ".md" and len(parts) > 2 and parts[0] in ("skills", "skills-claude"):
+		found.update(f"{parts[0]}/{parts[1]}/{ref}" for ref in SKILL_REFERENCE.findall(text))
+	if path.suffix in (".py", ".js"):
+		found.update(f"scripts/{name}" for name in SCRIPT_NAME.findall(text))
+	if path.suffix == ".py":
+		for single, listed in PY_IMPORT.findall(text):
+			for name in (single or listed).split(","):
+				found.add(f"scripts/{name.strip()}.py")
+	if path.suffix == ".js":
+		base = posixpath.dirname(rel)
+		found.update(posixpath.normpath(posixpath.join(base, spec)) for spec in JS_IMPORT.findall(text))
+	return {ref for ref in found if (root / ref).is_file()}
+
+
+def entry_points(root=ROOT):
+	"""Files a harness loads from an npm install directly, before any of them runs."""
+	manifest = json.loads((root / "package.json").read_text(encoding="utf-8"))
+	pi = manifest.get("pi", {})
+	entries = {manifest["main"], *pi.get("extensions", [])}
+	for directory in pi.get("skills", []):
+		entries.update(p.relative_to(root).as_posix() for p in sorted((root / directory).glob("*/SKILL.md")))
+	entries.update(p.relative_to(root).as_posix() for p in sorted((root / "hooks").glob("*.json")))
+	return {posixpath.normpath(entry) for entry in entries}
+
+
+def required_files(root=ROOT):
+	"""Every file an npm install needs at runtime, derived from what loads it.
+
+	Starts from the package's entry points (package.json's main and Pi metadata,
+	the hook manifests) and follows each reference until nothing new turns up,
+	so a script an adapter starts running cannot be left out of this list by
+	someone forgetting to add it here.
+	"""
+	required = set(DATA_FILES)
+	required.update(p.relative_to(root).as_posix() for p in sorted((root / "agents").glob("*.md")))
+	pending = sorted(entry_points(root)) + [rel for rel in SCAN_ONLY if (root / rel).is_file()]
+	seen = set()
+	while pending:
+		rel = pending.pop()
+		if rel in seen:
+			continue
+		seen.add(rel)
+		# Only text that can name another file is read; anything else it names
+		# (an image, an archive) is required but not opened.
+		if posixpath.splitext(rel)[1] in (".py", ".js", ".json", ".md"):
+			pending.extend(sorted(references(root, rel) - seen))
+	required.update(seen - set(SCAN_ONLY))
+	return frozenset(required)
 
 
 def pack_inventory(npm="npm"):
@@ -81,8 +168,9 @@ def forbidden_paths(inventory):
 	return found
 
 
-def check_inventory(inventory):
-	missing = REQUIRED_FILES - set(inventory)
+def check_inventory(inventory, required=None):
+	required = required_files() if required is None else required
+	missing = set(required) - set(inventory)
 	if missing:
 		raise ReleaseError("publish tree is missing required runtime files: " + ", ".join(sorted(missing)))
 	found = forbidden_paths(inventory)
@@ -107,8 +195,49 @@ def registry_state(version, npm="npm"):
 	raise ReleaseError(f"npm version lookup failed without a confirmed not-found: {output}")
 
 
-def publish(npm="npm"):
-	published = run([npm, "publish", "--access", "public"])
+def newest_release(npm="npm"):
+	"""The newest release the registry holds, or None before the first publish.
+
+	Both `latest` and the full version list count. `latest` is what installs
+	resolve, but it can be moved by hand, and npm 11's own guard compares
+	against the highest version published; a publish must not take `latest`
+	when either is newer. Prerelease versions are skipped, as npm skips them.
+	Like registry_state, anything but a clean answer or a confirmed 404 refuses.
+	"""
+	viewed = run([npm, "view", PACKAGE, "dist-tags", "versions", "--json"])
+	if viewed.returncode:
+		output = (viewed.stdout + viewed.stderr).strip()
+		if "E404" in output or "404 Not Found" in output:
+			return None
+		raise ReleaseError(f"npm dist-tag lookup failed without a confirmed not-found: {output}")
+	try:
+		report = json.loads(viewed.stdout)
+	except json.JSONDecodeError as exc:
+		raise ReleaseError(f"npm view emitted unparseable JSON: {exc}") from exc
+	if not isinstance(report, dict):
+		raise ReleaseError(f"npm view returned {report!r}, not dist-tags and versions")
+	versions = report.get("versions") or []
+	versions = [versions] if isinstance(versions, str) else versions
+	latest = (report.get("dist-tags") or {}).get("latest")
+	if latest is not None and release_key(latest) is None:
+		raise ReleaseError(f"the registry's latest tag names {latest!r}, which is not a plain release version")
+	candidates = [v for v in [*versions, latest] if release_key(v) is not None]
+	return max(candidates, key=release_key) if candidates else None
+
+
+def dist_tag_for(version, newest):
+	"""None (npm's default, `latest`) for a new newest release, else BACKFILL_TAG."""
+	if release_key(version) is None:
+		raise ReleaseError(f"package.json version {version!r} is not a plain release version")
+	if newest is None or release_key(version) > release_key(newest):
+		return None
+	return BACKFILL_TAG
+
+
+def publish(npm="npm", dist_tag=None):
+	# No --tag for a newest release: npm's default is `latest`, and leaving it
+	# implicit keeps npm 11's own refusal as a second check behind this one.
+	published = run([npm, "publish", "--access", "public", *(["--tag", dist_tag] if dist_tag else [])])
 	if published.returncode:
 		raise ReleaseError(f"npm publish failed: {(published.stdout + published.stderr).strip()}")
 	return (published.stdout + published.stderr).strip()
@@ -156,11 +285,15 @@ def main(argv=None):
 		if state == "present":
 			print(f"{PACKAGE}@{version} is already on the registry; nothing to do", flush=True)
 			return 0
+		newest = newest_release(args.npm)
+		dist_tag = dist_tag_for(version, newest)
+		channel = f"dist-tag {dist_tag}, leaving latest on {newest}" if dist_tag else "dist-tag latest"
 		if args.dry_run:
-			print(f"would publish {PACKAGE}@{version}", flush=True)
+			print(f"would publish {PACKAGE}@{version} under {channel}", flush=True)
 			return 0
 
-		publish(args.npm)
+		print(f"publishing {PACKAGE}@{version} under {channel}", flush=True)
+		publish(args.npm, dist_tag)
 		# The upload is accepted and cannot be taken back, so nothing below may fail
 		# the release. Everything here only reports whether the registry is serving
 		# the version yet, and treating "not yet" as a failure marked three
