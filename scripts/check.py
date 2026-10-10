@@ -419,8 +419,10 @@ def main():
 	# would silently inherit the parent model, which is the failure this tier
 	# exists to prevent.
 	claude_agents = sorted((ROOT / "agents").glob("*.md"))
+	# Retired profiles are no longer installed; their sources may linger until deleted.
+	shipped_agents = [p.stem for p in claude_agents if p.stem not in installer.RETIRED_AGENTS]
 	check(
-		sorted(p.stem for p in claude_agents) == sorted(installer.CODEX_AGENTS),
+		sorted(shipped_agents) == sorted(installer.CODEX_AGENTS),
 		f"agents/: expected exactly the Claude twins of {installer.CODEX_AGENTS}, found {[p.stem for p in claude_agents]}",
 	)
 	for agent in claude_agents:
@@ -540,32 +542,59 @@ def main():
 						f"{openai_yaml.relative_to(ROOT)}: needs policy.allow_implicit_invocation false",
 					)
 
-	# 7. Injection is idempotent, and uninstall round-trips exactly.
+	# 7. Installer idempotency, through the shipped CLI. A sandboxed install, a
+	# rerun that must leave every byte alone, and an uninstall that must give the
+	# config directory back exactly as it was, user comments included. Checking
+	# the block helpers alone passed while the installer itself drifted.
+	import tempfile
 	block = installer.build_block(ROOT)
 	check(block.startswith(f'<leos-agent version="{canonical}">'), "block header must carry the version")
 
-	original = "# My notes\n\nSomething I wrote myself.\n"
-	once = installer.inject(original, block)
-	twice = installer.inject(once, block)
-	check(once == twice, "inject is not idempotent: second run differs from first")
-	check(original.strip() in once, "inject dropped pre-existing content")
-	# Uninstall normalizes the file to a single trailing newline, which restores
-	# the original exactly for any file that ended with one.
-	restored = installer.strip_block(once).rstrip("\n") + "\n"
-	check(restored == original, "uninstall did not restore the original content")
+	def snapshot(base):
+		return {p.relative_to(base).as_posix(): (p.read_bytes() if p.is_file() else None)
+			for p in sorted(base.rglob("*")) if not p.is_symlink()}
 
-	stale_block = installer.inject(original, '<leos-agent version="9.9.9">\nold payload\n</leos-agent>\n')
-	upgraded = installer.inject(stale_block, block)
-	check("old payload" not in upgraded, "inject did not replace an older version's block")
-	check(upgraded == once, "upgrading a stale block did not converge on the current content")
-	check(installer.inject("", block) == block, "inject into an empty file should yield just the block")
+	with tempfile.TemporaryDirectory(prefix="leo check ") as tmp:
+		sandbox = Path(tmp)
+		cfgs = {name: sandbox / name for name in ("codex", "opencode", "claude")}
+		for path in (*cfgs.values(), sandbox / "home"):
+			path.mkdir()
+		user_config = '{\n  // keep this comment\n  "theme": "dark",\n}\n'
+		(cfgs["opencode"] / "opencode.jsonc").write_text(user_config)
+		(cfgs["claude"] / "CLAUDE.md").write_text('# Mine\n\n<leos-agent version="9.9.9">\nold payload\n</leos-agent>\n')
+		env = {k: v for k, v in os.environ.items() if k not in ("OPENCODE_CONFIG", "CLAUDE_PLUGIN_ROOT", "PLUGIN_ROOT")}
+		env.update(HOME=str(sandbox / "home"), CODEX_HOME=str(cfgs["codex"]), OPENCODE_CONFIG_DIR=str(cfgs["opencode"]),
+			CLAUDE_CONFIG_DIR=str(cfgs["claude"]), HERMES_HOME=str(sandbox / "hermes"),
+			PI_CODING_AGENT_DIR=str(sandbox / "pi"), XDG_CONFIG_HOME=str(sandbox / "xdg"),
+			LEOS_AGENT_LOCAL_PATH=str(sandbox / "data"), LEOS_AGENT_ROOT=str(ROOT),
+			LEOS_AGENT_PRICE_REFRESH="off", PYTHONDONTWRITEBYTECODE="1")
 
-	# Content on both sides of the block survives, and no-trailing-newline works.
-	sandwich = "top\n\n" + block + "\nbottom\n"
-	check("top" in installer.inject(sandwich, block) and "bottom" in installer.inject(sandwich, block), "inject lost content around the block")
-	check(installer.strip_block(sandwich) == "top\n\n\nbottom\n", "strip_block mangled surrounding content")
-	no_newline = "note\n\n" + block.rstrip("\n")
-	check("note" in installer.strip_block(no_newline), "strip_block lost content when the block ends at EOF")
+		def install(harness, *flags):
+			result = subprocess.run([sys.executable, str(ROOT / "scripts" / "leo-install.py"), harness, *flags],
+				env=env, cwd=str(sandbox), capture_output=True, text=True, timeout=60)
+			check(result.returncode == 0, f"leo-install.py {harness} {' '.join(flags)} exited {result.returncode}: "
+				f"{(result.stdout + result.stderr).strip()[-400:]}")
+			return result
+
+		for harness in ("codex", "opencode"):
+			before = snapshot(cfgs[harness])
+			install(harness)
+			installed = snapshot(cfgs[harness])
+			check(installed != before, f"installer idempotency ({harness}): the install wrote nothing")
+			rerun = install(harness)
+			check(snapshot(cfgs[harness]) == installed, f"installer idempotency ({harness}): a rerun changed bytes")
+			check("\n0 target(s) changed" in rerun.stdout, f"installer idempotency ({harness}): a rerun reported changes")
+			install(harness, "--check")
+			install(harness, "--uninstall")
+			check(snapshot(cfgs[harness]) == before,
+				f"installer idempotency ({harness}): uninstall did not restore the config directory byte for byte")
+		check((cfgs["opencode"] / "opencode.jsonc").read_text() == user_config, "uninstall changed the user's JSONC")
+
+		install("claude")
+		migrated = (cfgs["claude"] / "CLAUDE.md").read_text()
+		check(migrated == "# Mine\n", "migration did not take back exactly the legacy block")
+		install("claude")
+		check((cfgs["claude"] / "CLAUDE.md").read_text() == migrated, "a second migration changed the file")
 
 	# 8. Malformed markers must raise rather than silently swallow user content.
 	dangling = "# mine\n<leos-agent>\nsecret note\n\nmore notes\n"

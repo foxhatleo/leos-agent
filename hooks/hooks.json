@@ -1,4 +1,5 @@
 {
+  "modules": ["./claude-spawn.js"],
   "hooks": {
     "SessionStart": [
       {
@@ -14,7 +15,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "[Tt]ask|[Aa]gent|[Ss]ubagent|[Dd]ispatch|[Dd]elegate|[Ss]pawn",
+        "matcher": "Agent|Task",
         "hooks": [
           {
             "type": "command",
@@ -52,6 +53,18 @@
           {
             "type": "command",
             "command": "LEOS_AGENT_HARNESS=claude python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/observe_agent.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "LEOS_AGENT_HARNESS=claude python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/link_agent.py\"",
             "timeout": 10
           }
         ]

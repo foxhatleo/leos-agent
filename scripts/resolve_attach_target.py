@@ -22,12 +22,17 @@ import subprocess
 import sys
 from hashlib import sha256
 
-PR_NUM_RE = re.compile(r"^#?(\d+)$")
-PR_URL_RE = re.compile(r"^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull/([1-9]\d*)$")
-TICKET_RE = re.compile(r"^([A-Za-z][A-Za-z0-9]*)-(\d+)$")
+PR_NUM_RE = re.compile(r"#?(\d+)", re.ASCII)
+PR_URL_RE = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull/([1-9]\d*)", re.ASCII)
+TICKET_RE = re.compile(r"([A-Za-z][A-Za-z0-9]*)-(\d+)", re.ASCII)
 SAFE_REF_RE = re.compile(r"^(?!-)[A-Za-z0-9][A-Za-z0-9._/-]*$")
+# The owner segment of a remote URL: scp-like `host:owner/repo`, or any
+# scheme's `/owner/repo` path. Host aliases from ssh config are fine.
+REMOTE_OWNER_RE = re.compile(r"(?:^[^/:@]+@[^/:]+:|^[^/:]+:(?!//)|://[^/]+/)([A-Za-z0-9_.-]+)/[^/]+?(?:\.git)?/?$")
 
-PR_FIELDS = "number,url,headRefName,baseRefName,state,title"
+# `gh pr list --head` matches the branch name only, so a fork's PR with the
+# same branch name comes back too; the owner fields tell the two apart.
+PR_FIELDS = "number,url,headRefName,baseRefName,state,title,isCrossRepository,headRepositoryOwner"
 
 
 def run(cmd, cwd=None):
@@ -71,14 +76,30 @@ def suggested_worktree(root, branch):
     return os.path.join(root, ".claude", "worktrees", f"{readable}-{digest}")
 
 
-def build_attach_command(workdir, pr_url, base_ref, branch):
-    """Build the intentional compound attach command with every value quoted."""
+def build_attach_command(workdir, pr_url, base_ref, branch, rtk=False):
+    """Build the intentional compound attach command with every value quoted.
+
+    rtk's Bash hook splits the command on `;` and rewrites the `gh pr create`
+    segment to `rtk gh pr create`, which runs the real gh and skips the stub
+    function. An `RTK_DISABLED=` assignment in that segment's prefix is rtk's
+    own opt-out, so it is added whenever rtk is configured."""
+    bypass = "RTK_DISABLED=1 " if rtk else ""
     return (
         'gh() { echo "$PR_URL"; }; '
         f"cd {shlex.quote(workdir)}; "
-        f"PR_URL={shlex.quote(pr_url)} gh pr create --draft "
+        f"{bypass}PR_URL={shlex.quote(pr_url)} gh pr create --draft "
         f"--base {shlex.quote(base_ref)} --head {shlex.quote(branch)}"
     )
+
+
+def rtk_configured():
+    """Whether a Claude settings file or plugin registers rtk's Bash hook."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import settings_probe
+        return settings_probe.output_compressors("claude")["configured"]
+    except Exception:
+        return False
 
 
 # --- environment checks ----------------------------------------------------
@@ -155,6 +176,56 @@ def all_known_branches():
     return names
 
 
+def push_remote(branch):
+    """The remote `git push` uses for this branch, in Git's own order."""
+    keys = ([f"branch.{branch}.pushRemote"] if branch else []) + ["remote.pushDefault"]
+    keys += [f"branch.{branch}.remote"] if branch else []
+    for key in keys:
+        rc, out, _ = run(["git", "config", "--get", key])
+        if rc == 0 and out:
+            return out
+    return "origin"
+
+
+def remote_owner(remote):
+    rc, url, _ = run(["git", "remote", "get-url", "--push", remote])
+    match = REMOTE_OWNER_RE.search(url) if rc == 0 else None
+    return match.group(1) if match else None
+
+
+def accepted_owners(repo, branch, cache=None):
+    """Whose PR heads count as this checkout's: the repo owner, plus the push
+    remote's owner when that differs, as in a fork whose PRs are cross-
+    repository from the user's own fork."""
+    cache = {} if cache is None else cache
+    if branch not in cache:
+        owners = {repo.split("/", 1)[0].lower()}
+        owner = remote_owner(push_remote(branch))
+        if owner:
+            owners.add(owner.lower())
+        cache[branch] = owners
+    return cache[branch]
+
+
+def head_owner(pr):
+    owner = pr.get("headRepositoryOwner")
+    login = owner.get("login") if isinstance(owner, dict) else None
+    return re.sub(r"[^A-Za-z0-9_.-]", "", login)[:39] if isinstance(login, str) else None
+
+
+def is_own(pr, owners):
+    """A head in this repo, or in an accepted owner's fork. A PR without the
+    owner fields (a deleted fork, an older gh) is not presumed ours."""
+    if pr.get("isCrossRepository") is False:
+        return True
+    login = head_owner(pr)
+    return bool(login) and login.lower() in owners
+
+
+def describe_foreign(prs):
+    return ", ".join(f"#{p.get('number')} ({head_owner(p) or 'unknown owner'})" for p in prs)
+
+
 # --- PR lookups ------------------------------------------------------------
 
 
@@ -170,7 +241,9 @@ def pr_by_number(number):
         return None, f"could not parse `gh pr view` output: {exc}"
 
 
-def prs_for_branch(branch):
+def prs_for_branch(branch, owners):
+    """(own, foreign, error): PRs whose head is this branch of an accepted
+    owner, and same-named heads from other forks, kept apart."""
     rc, out, err = run(
         [
             "gh", "pr", "list", "--head", branch, "--state", "all",
@@ -178,11 +251,13 @@ def prs_for_branch(branch):
         ]
     )
     if rc != 0:
-        return [], err or f"`gh pr list` failed for branch {branch}"
+        return [], [], err or f"`gh pr list` failed for branch {branch}"
     try:
-        return json.loads(out), None
+        prs = json.loads(out)
     except json.JSONDecodeError as exc:
-        return [], f"could not parse `gh pr list` output: {exc}"
+        return [], [], f"could not parse `gh pr list` output: {exc}"
+    prs = [p for p in prs if isinstance(p, dict)] if isinstance(prs, list) else []
+    return [p for p in prs if is_own(p, owners)], [p for p in prs if not is_own(p, owners)], None
 
 
 def prs_by_search(term):
@@ -240,7 +315,7 @@ def resolve(identifier, repo):
             die(err)
         return pr, f"resolved from PR URL #{number}"
 
-    num_match = PR_NUM_RE.match(ident)
+    num_match = PR_NUM_RE.fullmatch(ident)
     if num_match:
         number = num_match.group(1)
         pr, err = pr_by_number(number)
@@ -252,15 +327,15 @@ def resolve(identifier, repo):
     # branches (`DOCS-5943`) and kebab variants (`docs-6171`) both look like ticket ids.
     # An exact branch match is the more specific reading, so it wins; ticket search is the
     # fallback for ids that name no branch directly.
-    if TICKET_RE.match(ident):
+    if TICKET_RE.fullmatch(ident):
         if branch_exists_local(ident) or branch_exists_remote(ident):
-            return resolve_branch(ident), f"resolved from branch {ident} (ticket-shaped name)"
-        return resolve_ticket(ident), f"resolved from ticket {ident.upper()}"
+            return resolve_branch(ident, repo), f"resolved from branch {ident} (ticket-shaped name)"
+        return resolve_ticket(ident, repo), f"resolved from ticket {ident.upper()}"
 
-    return resolve_branch(ident), f"resolved from branch {ident}"
+    return resolve_branch(ident, repo), f"resolved from branch {ident}"
 
 
-def resolve_branch(branch):
+def resolve_branch(branch, repo):
     local = branch_exists_local(branch)
     remote = branch_exists_remote(branch)
     if not local and not remote:
@@ -269,11 +344,19 @@ def resolve_branch(branch):
             "Check the name (`git branch -a`), or pass a PR number or ticket id instead."
         )
 
-    prs, err = prs_for_branch(branch)
+    owners = accepted_owners(repo, branch)
+    prs, foreign, err = prs_for_branch(branch, owners)
     if err:
         die(err)
     if not prs:
         where = "locally and on origin" if local and remote else ("locally" if local else "on origin")
+        if foreign:
+            die(
+                f"branch `{branch}` exists {where} but has no pull request from "
+                f"{', '.join(sorted(owners))}. Same-named branches in other forks have PRs: "
+                f"{describe_foreign(foreign)}. Those are not this branch; pass a PR number "
+                "to attach to one deliberately."
+            )
         die(
             f"branch `{branch}` exists {where} but has no pull request "
             "(any state). Open a PR for it first — /attach-pr only attaches to an existing PR."
@@ -291,24 +374,35 @@ def resolve_branch(branch):
     return prs[0]
 
 
-def resolve_ticket(ticket):
-    """Ticket-tracker-agnostic: match the id against branch names and PR text."""
+def resolve_ticket(ticket, repo):
+    """Ticket-tracker-agnostic: match the id against branch names and PR text.
+    Heads in other owners' forks are set aside, as for a branch name."""
     key = ticket.upper()
-    found = {}
+    found, foreign, owners = {}, {}, {}
 
     for branch in all_known_branches():
         if key in branch.upper():
-            prs, _ = prs_for_branch(branch)
+            prs, others, _ = prs_for_branch(branch, accepted_owners(repo, branch, owners))
             for pr in prs:
                 found[pr["number"]] = pr
+            for pr in others:
+                foreign.setdefault(pr["number"], pr)
 
     for pr in prs_by_search(key):
         haystack = f"{pr.get('title', '')} {pr.get('headRefName', '')}".upper()
-        if key in haystack:
-            found.setdefault(pr["number"], pr)
+        if key in haystack and pr["number"] not in found:
+            if is_own(pr, accepted_owners(repo, pr.get("headRefName"), owners)):
+                found[pr["number"]] = pr
+            else:
+                foreign.setdefault(pr["number"], pr)
 
     prs = list(found.values())
     if not prs:
+        if foreign:
+            die(
+                f"`{key}` matches only pull requests from other forks: "
+                f"{describe_foreign(list(foreign.values()))}. Pass a PR number to attach to one deliberately."
+            )
         die(
             f"found no branch or pull request referencing `{key}` in this repo. "
             "If the ticket exists but no PR does yet, there is nothing to attach; "
@@ -364,9 +458,11 @@ def main():
         die("PR URL is not a canonical https://github.com/<owner>/<repo>/pull/<number> URL")
 
     workdir, kind = resolve_workdir(branch, root)
+    rtk = rtk_configured()
 
     payload = {
         "status": "ok",
+        "rtk_bypass": rtk,
         "note": note,
         "repo": repo,
         "branch": branch,
@@ -379,9 +475,18 @@ def main():
         "workdir_kind": kind,
         "repo_root": root,
         "suggested_worktree": suggested_worktree(root, branch),
+        "head_owner": head_owner(pr),
+        "cross_repository": pr.get("isCrossRepository"),
     }
+    # Branch and ticket lookups already set foreign heads aside; a PR number
+    # or URL is taken as asked, but a same-named local branch is not its head.
+    if not is_own(pr, accepted_owners(repo, branch)):
+        payload["warning"] = (
+            f"PR #{pr.get('number')} comes from {head_owner(pr) or 'an unknown owner'}'s fork, not this "
+            f"repo or the branch's push remote; any local `{branch}` here is a different branch."
+        )
     if workdir:
-        payload["attach_command"] = build_attach_command(workdir, pr_url, base_ref, branch)
+        payload["attach_command"] = build_attach_command(workdir, pr_url, base_ref, branch, rtk)
     emit(payload)
 
 

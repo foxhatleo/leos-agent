@@ -38,6 +38,62 @@ class JsoncEdits(unittest.TestCase):
                 edit.update_array(text, "instructions", ["a"])
 
 
+class RoundTrips(unittest.TestCase):
+    """Registering then unregistering a value must give back the original bytes:
+    erased characters used to become spaces, and an install/uninstall cycle
+    grew the file every time."""
+
+    LAYOUTS = ('{"model":"x"}', '{\n  "model": "x"\n}\n', '{}\n', '{\n  // c\n  "theme": "dark"\n}\n',
+               '{\n  "plugin": ["mine"]\n}\n', '{\n  "instructions": [\n    "a"\n  ],\n  "x": 1, // t\n}\n',
+               '{"plugin": [], "instructions": []}', '{\n  "x": 1 /* why */\n}\n', '{\n  "x": [\n    1\n  ],\n}\n')
+
+    def cycle(self, text):
+        _, spans, _ = edit.properties(text)
+        created = [k for k in ("instructions", "plugin") if k not in spans]
+        out = text
+        for key in ("instructions", "plugin"):
+            out = edit.update_array(out, key, ["ours-" + key])
+        back = out
+        for key in ("instructions", "plugin"):
+            back = edit.update_array(back, key, [], ["ours-" + key])
+            if key in created:
+                back = edit.drop_empty_array(back, key)
+        return out, back
+
+    def test_add_then_remove_restores_the_bytes(self):
+        for text in self.LAYOUTS:
+            with self.subTest(text=text):
+                out, back = self.cycle(text)
+                self.assertEqual(json.loads(edit.clean(out))["plugin"][-1], "ours-plugin")
+                self.assertEqual(back, text)
+
+    def test_insertions_follow_the_last_entry(self):
+        out, _ = self.cycle('{\n  "model": "x"\n}\n')
+        self.assertEqual(out, '{\n  "model": "x",\n  "instructions": ["ours-instructions"],\n'
+                              '  "plugin": ["ours-plugin"]\n}\n')
+        out, _ = self.cycle('{"model":"x"}')
+        self.assertEqual(out, '{"model":"x", "instructions": ["ours-instructions"], "plugin": ["ours-plugin"]}')
+        self.assertEqual(edit.update_array('{"a": [\n    "x"\n  ]}', "a", ["y"]), '{"a": [\n    "x",\n    "y"\n  ]}')
+
+    def test_a_trailing_line_comment_keeps_its_line(self):
+        text = '{\n  "x": 1 // note\n}\n'
+        out = edit.update_array(text, "plugin", ["p"])
+        self.assertIn('"x": 1, // note\n', out)
+        self.assertEqual(json.loads(edit.clean(out)), {"x": 1, "plugin": ["p"]})
+
+    def test_no_insertion_lands_inside_a_block_comment(self):
+        text = '{\n  "model": "x" /* m\n, ] */ }'
+        out = edit.update_array(text, "plugin", ["a"])
+        self.assertEqual(json.loads(edit.clean(out)), {"model": "x", "plugin": ["a"]})
+        self.assertIn("/* m\n, ] */", out)
+
+    def test_removal_never_joins_code_onto_a_line_comment(self):
+        text = '{"a": // c1\n [], "b": 1}'
+        out = edit.drop_empty_array(text, "a")
+        self.assertEqual(json.loads(edit.clean(out)), {"b": 1})
+        self.assertIn("// c1", out)
+
+
 class DropEmptyArrays(unittest.TestCase):
     """Uninstall must not leave behind a key the installer invented."""
 

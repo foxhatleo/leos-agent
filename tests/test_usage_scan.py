@@ -48,12 +48,35 @@ def assistant(request_id, content=None, **kw):
     return record
 
 
+OVERRIDES = ("CLAUDE_CONFIG_DIR", "CODEX_HOME", "HERMES_HOME", "PI_CODING_AGENT_DIR", "OPENCODE_CONFIG_DIR",
+             "OPENCODE_CONFIG", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "OPENCODE_DB")
+
+
+def sandbox(case, root):
+    """HOME, every harness override, the data root, managed settings and the
+    working directory all point into `root`: nothing reads real user files."""
+    env = mock.patch.dict(os.environ, {"HOME": str(root / "home"), "LEOS_AGENT_LOCAL_PATH": str(root / "local"),
+                                       "LEOS_AGENT_PRICE_REFRESH": "off"})
+    env.start()
+    case.addCleanup(env.stop)
+    for name in OVERRIDES:
+        os.environ.pop(name, None)
+    import settings_probe
+    managed = mock.patch.object(settings_probe, "MANAGED_DIRS", (str(root / "managed"),))
+    managed.start()
+    case.addCleanup(managed.stop)
+    (root / "work").mkdir(exist_ok=True)
+    case.addCleanup(os.chdir, os.getcwd())
+    os.chdir(str(root / "work"))
+
+
 class ScanCase(unittest.TestCase):
     def setUp(self):
         self.scan = load("usage_scan_test", "usage_scan.py")
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
+        sandbox(self, self.root)
         self.since = time.time() - 3600
 
     def write_jsonl(self, path, records):
@@ -328,6 +351,90 @@ class TestAccountingRegressions(ScanCase):
         with mock.patch.object(dispatch_log, "read", return_value=rows), mock.patch.object(dispatch_log, "summarise", side_effect=lambda x: x):
             result = self.scan.scan_guard(self.scan._iso_epoch("2026-08-01T00:00:00Z"), "claude")
         self.assertEqual(result, [rows[-1]])
+
+
+class TestTimestampsAndSources(ScanCase):
+    def test_every_iso_shape_a_harness_writes_parses_on_every_supported_python(self):
+        """3.9's fromisoformat refused 2-, 4- and 9-digit fractions and +0000,
+        so those messages fell out of the window there but not on 3.11+."""
+        utc = self.scan._iso_epoch("2026-10-01T12:00:00Z")
+        for text, delta in (("2026-10-01T12:00:00.12Z", 0.12), ("2026-10-01T12:00:00.123456789Z", 0.123456),
+                            ("2026-10-01T12:00:00.1234Z", 0.1234), ("2026-10-01T12:00:00+0000", 0),
+                            ("2026-10-01T12:00:00+00", 0), ("2026-10-01T12:00:00z", 0),
+                            ("2026-10-01T13:00:00.5+0100", 0.5), ("2026-10-01T07:00:00-05:00", 0),
+                            ("2026-10-01 12:00:00", 0), ("2026-10-01T12:00:00,25Z", 0.25)):
+            self.assertIsNotNone(self.scan._iso_epoch(text), text)
+            self.assertAlmostEqual(self.scan._iso_epoch(text), utc + delta, places=5, msg=text)
+        self.assertEqual(self.scan._iso_epoch("2026-10-01"), utc - 12 * 3600)
+        # Shapes outside the pattern are unknown on every version alike,
+        # rather than whatever one interpreter's fromisoformat makes of them.
+        for text in ("yesterday", "2026-10-01T12:00:00.Z", "2026-10-01T12.5", "20261001T120000Z",
+                     "2026-10-01T25:00:00Z", "٢026-10-01T12:00:00Z", "", None, 5):
+            self.assertIsNone(self.scan._iso_epoch(text), text)
+
+    def test_a_nanosecond_stamp_inside_the_window_is_counted(self):
+        record = assistant("r1", usage=usage(42))
+        record["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + ".123456789+0000"
+        self.write_jsonl(self.root / "projects" / "p" / "s.jsonl", [record])
+        data = self.scan.scan_claude(self.since, str(self.root / "projects"))
+        self.assertEqual(data["buckets"]["main"].input, 42)
+        self.assertNotIn("unknown_timestamp_records", data["diagnostics"])
+
+    def test_harness_home_overrides_are_honoured(self):
+        home = str(self.root / "h")
+        env = {"HERMES_HOME": "/srv/hermes", "PI_CODING_AGENT_DIR": "/srv/pi", "CLAUDE_CONFIG_DIR": "",
+               "CODEX_HOME": "/srv/codex", "XDG_DATA_HOME": "/srv/data", "OPENCODE_DB": "custom.db"}
+        paths = self.scan.source_paths(env, home)
+        self.assertEqual(paths["hermes"], "/srv/hermes")
+        self.assertEqual(paths["pi"], os.path.join("/srv/pi", "sessions"))
+        self.assertEqual(paths["codex"], os.path.join("/srv/codex", "sessions"))
+        # An empty override is unset, never a path relative to the cwd.
+        self.assertEqual(paths["claude"], os.path.join(home, ".claude", "projects"))
+        self.assertEqual(paths["opencode"], os.path.join("/srv/data", "opencode", "custom.db"))
+        defaults = self.scan.source_paths({}, home)
+        self.assertEqual(defaults["hermes"], os.path.join(home, ".hermes"))
+        self.assertEqual(defaults["pi"], os.path.join(home, ".pi", "agent", "sessions"))
+
+
+class TestAdvisorAndCompression(ScanCase):
+    def advisor_record(self, output):
+        """A response that consulted the advisor once. Top-level usage counts
+        the executor only; the advisor's tokens are in usage.iterations."""
+        record = assistant("req_a", content=[
+            {"type": "server_tool_use", "id": "srvtoolu_1", "name": "advisor", "input": {}},
+            {"type": "advisor_tool_result", "tool_use_id": "srvtoolu_1",
+             "content": {"type": "advisor_redacted_result", "encrypted_content": "x"}}],
+            usage=dict(usage(10, 400, 0, 50), iterations=[
+                {"type": "message", "input_tokens": 4, "output_tokens": 20},
+                {"type": "advisor_message", "model": "claude-opus-5", "input_tokens": 800,
+                 "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "output_tokens": output},
+                {"type": "message", "input_tokens": 6, "output_tokens": 30}]))
+        record["message"]["model"] = "claude-sonnet-5"
+        return record
+
+    def test_advisor_tokens_are_counted_once_under_the_advisor_model(self):
+        # Two streaming snapshots of one response; the later one is complete.
+        self.write_jsonl(self.root / "projects" / "p" / "s.jsonl", [self.advisor_record(900), self.advisor_record(1600)])
+        data = self.scan.scan_claude(self.since, str(self.root / "projects"))
+        executor, adviser = data["model_usage"]["claude-sonnet-5"]["main"], data["model_usage"]["claude-opus-5"]["main"]
+        self.assertEqual((executor["input"], executor["output"]), (10, 50))
+        self.assertEqual((adviser["input"], adviser["output"], adviser["requests"]), (800, 1600, 1))
+        self.assertEqual(data["advisor_calls"], 1)
+        self.assertEqual(data["dispatches"], [], "an advisor consultation is not a dispatch")
+
+    def test_a_configured_rtk_hook_is_reported_with_the_usage(self):
+        claude = self.root / "home" / ".claude"
+        self.write_jsonl(claude / "projects" / "p" / "s.jsonl", [assistant("r1")])
+        (claude / "settings.json").write_text(json.dumps({"hooks": {"PreToolUse": [
+            {"matcher": "Bash", "hooks": [{"type": "command", "command": "rtk hook claude"}]}]}}))
+        with mock.patch.dict(self.scan.SOURCES, {"claude": str(claude / "projects")}):
+            report = self.scan.collect(self.since, "claude")
+        self.assertEqual(report["harnesses"]["claude"]["output_compression"]["tools"], ["rtk"])
+        self.assertIn("output compression configured (rtk)", self.scan.render(report))
+        (claude / "settings.json").write_text("{}")
+        with mock.patch.dict(self.scan.SOURCES, {"claude": str(claude / "projects")}):
+            report = self.scan.collect(self.since, "claude")
+        self.assertNotIn("output_compression", report["harnesses"]["claude"])
 
 
 class TestSkillCost(unittest.TestCase):

@@ -76,6 +76,71 @@ class Transactions(unittest.TestCase):
             self.assertEqual(b.read_bytes(), b"old")
 
 
+class FailedCommits(unittest.TestCase):
+    def test_a_failed_commit_keeps_the_previous_backup(self):
+        """The backup is what --rollback undoes. A commit that fails part-way
+        must leave the last completed one in place, not its own."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            a, b = root / "a", root / "b"
+            backup = root / "backup.json"
+            tx = transaction.Transaction(backup)
+            tx.stage(a, b"first install")
+            tx.commit()
+            previous = backup.read_bytes()
+
+            tx = transaction.Transaction(backup)
+            tx.stage(a, b"second install")
+            tx.stage(b, b"new")
+            real = transaction.replace
+            def fail(path, data, mode=0o600):
+                if path == b:
+                    raise OSError(5, "Input/output error")
+                return real(path, data, mode)
+            with patch.object(transaction, "replace", side_effect=fail), self.assertRaisesRegex(OSError, str(b)):
+                tx.commit()
+            self.assertEqual(a.read_bytes(), b"first install")
+            self.assertEqual(backup.read_bytes(), previous)
+            self.assertEqual(transaction.rollback(backup), 1)
+            self.assertFalse(a.exists())
+
+    def test_an_interrupted_commit_is_rolled_back_from_its_pending_backup(self):
+        import base64
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            a = root / "a"
+            backup = root / "backup.json"
+            tx = transaction.Transaction(backup)
+            tx.stage(a, b"first")
+            tx.commit()
+            previous = backup.read_bytes()
+            # A crash after `a` was rewritten, before the pending backup was renamed.
+            a.write_bytes(b"second")
+            transaction.pending_path(backup).write_text(json.dumps({"schema": 1, "files": [
+                {"path": str(a), "before": base64.b64encode(b"first").decode(),
+                 "after_sha256": transaction.digest(b"second"), "mode": 0o600}]}))
+            self.assertEqual(transaction.rollback(backup), 1)
+            self.assertEqual(a.read_bytes(), b"first")
+            self.assertFalse(transaction.pending_path(backup).exists())
+            self.assertEqual(backup.read_bytes(), previous, "the completed backup must survive")
+
+    def test_missing_parents_are_created_only_inside_a_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            inside, outside = root / "cfg" / "agents" / "x.md", root / "elsewhere" / "deep" / "x.md"
+            (root / "cfg").mkdir()
+            tx = transaction.Transaction(root / "backup.json", boundaries=(root / "cfg",))
+            tx.stage(inside, b"ok")
+            tx.commit()
+            self.assertTrue(inside.is_file())
+            tx = transaction.Transaction(root / "backup.json", boundaries=(root / "cfg",))
+            tx.stage(outside, b"no")
+            with self.assertRaisesRegex(OSError, "refusing to create"):
+                tx.commit()
+            self.assertFalse((root / "elsewhere").exists())
+
+
 class SymlinkAndCleanup(unittest.TestCase):
     def test_a_write_follows_a_symlink_but_a_delete_removes_the_link(self):
         """Resolving is right for a write -- a dotfiles symlink keeps pointing
@@ -133,7 +198,9 @@ class SymlinkAndCleanup(unittest.TestCase):
                 tx.commit()
             self.assertEqual(transaction.os.readlink(link), "missing")
             self.assertFalse(later.exists())
-            self.assertEqual(transaction.rollback(tx.backup), 0)
+            # Nothing landed, so the failed commit publishes no backup at all.
+            self.assertFalse(tx.backup.exists())
+            self.assertFalse(transaction.pending_path(tx.backup).exists())
 
     def test_retargeted_link_is_a_concurrent_edit_even_with_identical_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:

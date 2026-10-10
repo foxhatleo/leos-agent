@@ -5,13 +5,17 @@ text. A report describes retained observations, not complete provider billing.
 
 | Harness | Source and normalization |
 |---|---|
-| Claude | Projects JSONL under CLAUDE_CONFIG_DIR or ~/.claude; main and subagent paths. Request/message IDs deduplicate repeated content blocks. Progressive usage snapshots keep maximum counters per response. Cache categories are already separate from ordinary input. |
+| Claude | Projects JSONL under CLAUDE_CONFIG_DIR or ~/.claude; main and subagent paths. Request/message IDs deduplicate repeated content blocks. Progressive usage snapshots keep maximum counters per response. Cache categories are already separate from ordinary input. Advisor sub-inferences are absent from top-level usage; their `usage.iterations` entries count under the advisor's model, and advisor calls are not dispatches. |
 | Codex | Rollout JSONL under CODEX_HOME or ~/.codex. Cumulative usage changes deduplicate repeated token events; pre-window events establish the baseline. Cached input is subtracted from total input. Output already includes reasoning. turn_context supplies model; session_meta subagent source attributes children. Missing cumulative data remains a gap. |
-| OpenCode | Read-only SQLite under XDG_DATA_HOME or ~/.local/share. Per-message created time defines the window, not a session's last update. New session_message rows take precedence over mirrored message IDs. Cache categories are separate; stored reasoning is added to output once. Session parent_id attributes children. |
+| OpenCode | Read-only SQLite under XDG_DATA_HOME or ~/.local/share, or OPENCODE_DB. Per-message created time defines the window, not a session's last update. New session_message rows take precedence over mirrored message IDs. Cache categories are separate; stored reasoning is added to output once. Session parent_id attributes children. |
 | Cursor, Hermes, Pi | Usage scanning is not implemented for their local schemas. Report unsupported; do not infer whether installed or used. |
 
-Malformed rows and unknown timestamps are counted as gaps. Unsupported database
-schemas report an error rather than successful zero usage. Interrupted requests
+ISO timestamps are normalised so every supported Python counts the same rows;
+any other shape, malformed rows, and unknown timestamps are counted as gaps.
+When rtk or a similar hook is configured, shell tool output reached the model
+already compressed: token counts and reference costs describe the compressed
+output, and present configuration does not show it covered the whole window.
+Unsupported database schemas report an error rather than successful zero usage. Interrupted requests
 and provider activity absent from local logs cannot be recovered. Files deleted
 or moved outside these locations are not included. Native forks that copy old
 history without stable shared request IDs can limit attribution; the report

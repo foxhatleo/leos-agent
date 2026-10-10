@@ -27,7 +27,10 @@ a cheaper model while preserving quality.
 | Parent-level | Exceptional work beyond premium capability that justifies delegation | Current parent | Current parent |
 
 Native profiles are `leo-cheap`, `leo-standard`, `leo-premium`, `leo-parent`, and
-`leo-reviewer`. `leo-runner` and `leo-executor` remain legacy aliases. Review
+`leo-reviewer`. The retired `leo-runner` and `leo-executor` profiles are gone,
+but the guard and logs still map those names to cheap and standard, and routing
+config still accepts its `runner` and `executor` keys. On Claude Code each
+worker profile caps its turns; a capped run returns its output marked partial. Review
 may use nested read-only lenses; ordinary workers do not delegate. Small
 reviews run locally, and larger reviews divide independent areas rather than
 requiring every lens to reread everything.
@@ -38,7 +41,9 @@ output would swell the parent's context; dependent chains stay local. Every
 delegation names the check that proves its result. Workers end their reply with
 `Result: done|partial|blocked|escalate` and `Verified: <evidence or none>`. When a
 result fails its check or reports escalate, the parent re-dispatches one tier up
-with a brief that begins `Escalation from <tier>:`, never the same tier again.
+with a brief that begins `Escalation from <tier>:`; it repeats a tier only after
+a transient tool error. `blocked` means the work needs a decision or permission,
+so the parent asks for it instead of escalating.
 Work that outlasts one context continues by handoff, not a deeper tree.
 
 Choose tiers by ambiguity, consequence, and how reliably results can be checked.
@@ -50,9 +55,18 @@ discouraged: use it only when premium is insufficient and substantial independen
 work justifies a separate worker. Otherwise do that work in the parent.
 The existing price ceiling applies to every tier; premium does not bypass it.
 
+The bundled catalog puts the large price gap in the cheap tier. Under the usual
+parents, Opus on Claude and Sol on Codex, premium costs the same as the parent
+(Opus) or is capped to it (Astra is priced above Sol), and on Codex the standard
+default is Sol itself. A child at the parent's price buys context isolation, not
+a lower rate, so the policy keeps that work local unless isolation matters.
+Cheap models also tend to spend more turns, so the cheap tier is for bounded work
+with a mechanical check. The policy batches small steps of the same shape into
+one dispatch and passes large briefs and diffs as file paths.
+
 The tier name is not a price ordering. For example, the bundled reference
-catalog prices GPT-5.6 Terra output above GPT-5.6 Sol output, so a Terra
-selection under a Sol parent is replaced with the parent where supported. Input/output crossover
+catalog prices GPT-6 Astra above GPT-6.1 Sol, so a premium Astra selection
+under a GPT-6.1 Sol parent is replaced with the parent where supported. Input/output crossover
 rates, unknown IDs, and ambiguous catalog matches are allowed with diagnostics,
 as configured by this project's policy. Thus the ceiling prevents **known**
 overselection, not every possible billing outcome.
@@ -75,21 +89,34 @@ operation.
 
 | Harness | Policy delivery | Model control | Outcome signal | Important limit |
 |---|---|---|---|---|
-| Claude Code | SessionStart, including forks | Agent/Task argument correction; native profiles | SubagentStop final message, child transcript fallback, child usage from transcript | The first dispatch may precede parent transcript persistence; missing parent data permits dispatch with a diagnostic. Forced settings/provider substitutions also limit enforcement. |
-| Codex | Separate native SessionStart hook | Tier-enforcing explicit spawn selection; model-free native profiles | SubagentStop final message, rollout fallback, cumulative token counts | Hooks need native trust. Other/customized profiles can still override spawn settings. Encrypted briefs make the escalation marker unobservable; recorded as such. |
-| Cursor | Native always-apply rule | Installed user agents; resolved subagentStart model ceiling | Status token only; no child text, so no outcome and no usage | No invented Task model argument; hook diagnostics distinguish planned models from completion. Worker no-delegation is instruction-only: no per-agent tool restriction, and no parent-agent identity at subagentStart. |
-| OpenCode | One registered rendered instruction | Native agent selection, confirmed through the SDK | `tool.execute.after` output of `task`, joined by call id; no usage | Task has no model field; source/config paths must remain valid. |
-| Hermes | Frozen system-prompt section | Global native delegation-model ceiling when parent/model are observable | `subagent_stop` and `post_tool_call` when the installed build fires them; no usage | Native delegation has one global model, not separate per-task tiers. Older builds skip post-tool hooks for built-in tools; the report then says no completion signal was observed. |
-| Pi | Extension caches rendered body per session | Advisory policy and extension-dependent dispatch checks | `tool_result` text and usage for a tool named `subagent` | No native per-spawn model guarantee for third-party subagent tools. |
+| Claude Code | SessionStart, including forks | `agent.spawn` model setting on builds where it covers teammates too ([hooks/README.md](hooks/README.md#claude-agentspawn-mod)), else Agent/Task argument correction; native profiles | SubagentStop final message, child transcript fallback, child usage from transcript | On the Agent/Task path the first dispatch may precede parent transcript persistence; missing parent data permits dispatch with a diagnostic. Forced settings/provider substitutions also limit enforcement. |
+| Codex | Separate native SessionStart hook | Tier-enforcing explicit spawn selection; model-free native profiles | SubagentStop final message, rollout fallback, cumulative token counts | Hooks need native trust. A renamed multi-agent tool namespace is not matched. Other/customized profiles can still override spawn settings. Encrypted briefs make the escalation marker unobservable; recorded as such. |
+| Cursor | Native always-apply rule | Installed user agents; resolved subagentStart model ceiling | subagentStop summary and status, joined by call id; no usage | No invented Task model argument; hook diagnostics distinguish planned models from completion. Worker no-delegation is instruction-only: no per-agent tool restriction, and no parent-agent identity at subagentStart. |
+| OpenCode | One registered rendered instruction | Native agent selection, confirmed through the SDK | `tool.execute.after` output of a foreground `task`, joined by call id, child model from task metadata; no usage | Task has no model field; a correction that cannot be applied blocks the task. A slash-command subtask's own model is not visible to the guard. Source/config paths must remain valid. |
+| Hermes | Frozen system-prompt section | Global native delegation-model ceiling when parent/model are observable | `subagent_stop` per child (`post_tool_call` only when the build lacks it); no usage | Native delegation has one global model, not separate per-task tiers. Older builds skip post-tool hooks for built-in tools; the report then says no completion signal was observed. |
+| Pi | Extension caches rendered body per session | Advisory policy; dispatches are logged without a model check | `tool_result` text and usage for a tool named `subagent` | No native per-spawn model guarantee for third-party subagent tools. |
 
-Completion capture reads the last 4 KiB of a worker's final text for its
-`Result:` and `Verified:` lines and drops the text. The dispatch log stores the
-outcome enum, a verified tri-state, a source token, token counts, the tier, and
-the escalation source tier; never brief or result text. `dispatch_log.py report`
-joins completions to dispatches by call id, then agent id, then the nearest
-preceding same-tier dispatch, and prints outcome and verification rates per
-tier, escalation chains, summed child usage, and which harnesses supplied no
-signal.
+Completion capture reads the last 4 KiB of a worker's final text, or of the
+report a Claude child handed back through its hand-back tool, for its
+`Result:` and `Verified:` lines and drops the text. On Claude Code and Codex, a
+leo-* worker whose final message lacks those lines is asked once, at its first
+SubagentStop, to restate its report with them; guard modes `warn` and `off`
+skip the prompt. The dispatch log stores the outcome enum, a verified
+tri-state, a source token, token and turn counts, the tier, and the escalation
+source tier; never brief or result text. `dispatch_log.py report` joins
+completions to dispatches by call id; on Claude, whose SubagentStop has none,
+through a PostToolUse row linking each Agent call to the child it started;
+and only without either, by the nearest preceding same-session dispatch of
+the same tier. The report prints
+outcome and verification counts per tier beside the dispatches that sent no
+completion signal, escalation chains and tier counts over dispatches that ran,
+summed child usage and turns, reference cost per verified success from catalog
+prices (an estimate, not a bill), and which harnesses supplied no signal.
+Some hosts send none for background children: Claude Code background subagents
+on some builds and in the VS Code extension, OpenCode background tasks, and
+Cursor background subagents. Claude Code's SessionEnd hooks share a 1.5 s budget that
+plugin timeouts cannot raise, so late-transcript reconciliation runs in a
+detached process.
 
 Portable skills are registered on all six. Native capability differences are
 reported rather than presented as full enforcement parity. Policy, pricing,
@@ -104,9 +131,13 @@ No OpenAI or Anthropic marketplace submission is needed: use this repository
 as your own plugin source or a local checkout.
 
 Install **only the harness you intend to configure**. Native plugin discovery
-and the integration installer are separate steps. Run the installer again
-after upgrades or model-mapping changes, because native profiles and copied
-OpenCode resources may need refreshing.
+and the integration installer are separate steps. The installer writes files
+only for Codex, Cursor and OpenCode; on Claude Code, Hermes and Pi it only
+removes a `<leos-agent>` block an older release left in the harness's global
+instruction file, so on a fresh machine it has nothing to do there. Where it
+writes files, run it again after upgrades or model-mapping changes. It needs
+the harness's config directory to exist already (run the harness once), and
+never creates one.
 
 ### Claude Code
 
@@ -115,10 +146,11 @@ claude plugin marketplace add foxhatleo/leos-agent
 claude plugin install leos-agent@leos-agent --scope user
 ```
 
-Then invoke the plugin's `install` skill in Claude. To upgrade, refresh the
-marketplace and plugin through Claude's plugin manager, then run `install`
-again and start a new session. Third-party marketplace auto-update settings may
-be disabled; do not assume every client updates itself.
+Start a new session; the plugin supplies agents, hooks and skills. If an older
+release wrote a policy block into `~/.claude/CLAUDE.md`, run `/leos-agent:install`
+once to take it out. To upgrade, refresh the marketplace and plugin through
+Claude's plugin manager and start a new session. Third-party marketplace
+auto-update settings may be disabled; do not assume every client updates itself.
 
 ### Codex
 
@@ -127,11 +159,13 @@ codex plugin marketplace add foxhatleo/leos-agent
 codex plugin add leos-agent@leos-agent
 ```
 
-Invoke the plugin's `install` skill to install native agent TOMLs. Review the
-current hook definitions in `/hooks`; enabling a plugin does not trust its
-hooks automatically. On upgrade, refresh the marketplace/plugin, rerun
-`install`, and review any changed hook definition. The project does not bypass
-that native trust boundary.
+Then run the install skill in a Codex session by mentioning `$leos-agent:install`
+(or pick it from `/skills`). It is required here: it writes the cheap,
+standard, premium, parent and reviewer agent TOMLs into `~/.codex/agents`.
+Review the current hook definitions in `/hooks`; enabling a plugin does not
+trust its hooks automatically. On upgrade, refresh the marketplace/plugin,
+rerun `$leos-agent:install`, and review any changed hook definition. The
+project does not bypass that native trust boundary.
 
 ### Cursor
 
@@ -157,23 +191,44 @@ git clone https://github.com/foxhatleo/leos-agent ~/.local/share/leos-agent
 python3 ~/.local/share/leos-agent/scripts/leo-install.py opencode
 ```
 
-The installer registers the checkout's plugin URI, one rendered instruction,
-native agent profiles, and skill/reference copies. It preserves JSONC comments
-and unrelated configuration. Upgrade that checkout with `git pull --ff-only`
-and rerun the same command. The npm package is also published as `leos-agent`;
-if using a package cache, resolve its actual root and rerun the installer when
-that path changes. Do not assume a fixed cache directory layout.
+Then restart OpenCode. The installer registers the checkout's plugin URI and
+one rendered instruction in the active config (`OPENCODE_CONFIG`, else
+`opencode.jsonc`, else `opencode.json`), and copies native agent profiles and
+skill/reference copies with the checkout's absolute path baked in. It preserves
+JSONC comments and unrelated configuration, and uninstall edits the same file
+the install did. Inside OpenCode the install skill is `/leo-install`. Upgrade the
+checkout with `git pull --ff-only`, rerun the same command, and restart.
+
+The npm package is also published as `leos-agent`:
+
+```sh
+opencode plugin leos-agent --global
+root="${XDG_CACHE_HOME:-$HOME/.cache}/opencode/packages/leos-agent/node_modules/leos-agent"
+python3 "$root/scripts/leo-install.py" opencode
+```
+
+Run from OpenCode's package cache, the installer keeps the `leos-agent`
+package entry rather than linking into the cache, so OpenCode can fetch the
+package again after cleaning it. The skill copies still point into the cache:
+rerun the installer whenever that directory changes (a pinned
+`leos-agent@<version>` spec gets its own directory).
 
 ### Hermes
 
-Use Hermes's local-plugin directory under your active HERMES_HOME/profile to
-install this repository as `plugins/leos-agent`, then enable it through Hermes's
-plugin manager. Run the registered `leo-install` command. The native plugin
-registers portable skills, one frozen policy section, and dispatch diagnostics.
-Hermes supports the policy for deciding whether to delegate, but not per-task
-model tiers. The installer preserves its native delegation-model setting;
-saved cheap/standard/premium mappings are not applied. The guard can still check known
-child/parent prices when both models are observable.
+```sh
+hermes plugins install foxhatleo/leos-agent --enable
+```
+
+This installs into `$HERMES_HOME/plugins/leos-agent` (default
+`~/.hermes/plugins/leos-agent`). For a local checkout instead, clone it there and
+run `hermes plugins enable leos-agent`. Start a new session. The native plugin
+registers portable skills, one frozen policy section, dispatch diagnostics, and
+the `/leo-install` command; that command only removes a block an older release
+left in `SOUL.md`. Hermes supports the policy for deciding whether to delegate,
+but not per-task model tiers. The installer preserves its native
+delegation-model setting; saved cheap/standard/premium mappings are not applied.
+The guard can still check known child/parent prices when both models are
+observable.
 
 ### Pi
 
@@ -181,11 +236,12 @@ child/parent prices when both models are observable.
 pi install git:github.com/foxhatleo/leos-agent
 ```
 
-Invoke the installed `install` skill for `pi`, then start a new session.
-Package metadata provides skill discovery once; the extension does not register
-the same skills a second time. Upgrade through Pi's package manager and rerun
-`install`. A subagent extension is required for delegation; this project does
-not pretend that every such extension accepts model overrides.
+Start a new session. Package metadata provides skill discovery once; the
+extension does not register the same skills a second time. If an older release
+wrote a policy block into `~/.pi/agent/AGENTS.md`, run `/skill:install` once to
+take it out. Upgrade through Pi's package manager. A subagent extension is
+required for delegation; this project does not pretend that every such
+extension accepts model overrides.
 
 ### Installer controls
 
@@ -199,22 +255,37 @@ python3 scripts/leo-install.py <harness> --uninstall
 ```
 
 Normal installation stages and validates all changes first, writes a private
-backup, and rolls back earlier writes if an operation fails. Rollback refuses
-intervening edits and can recover a partially applied installation. Only owned
-entries/files are managed. Unchanged legacy copies are recognized by complete
-content hashes; edited or unrelated files are preserved. `--force` is for a
-specific conflict you explicitly intend to replace.
+backup to `~/.leos-agent-local/install-backups/<harness>.json`, and rolls back
+earlier writes if an operation fails; a failed run leaves the previous backup in
+place. `--rollback` undoes the last install or uninstall, refuses intervening
+edits, and can recover a partially applied installation.
+
+Ownership is by content, not by the "Managed by leos-agent" header. Each install
+records the sha256 of every file it writes in `leos-agent-paths.json` in the
+harness config directory, and a file is replaced or removed only while it
+still matches that receipt, this release's copy, or a copy an earlier release
+wrote. On install, an edited copy or a file leos-agent never wrote is a
+conflict that stops the run (`--force` replaces that file); an edited copy from
+a release older than v12 is reported as `preserved` and the rest continues. On
+uninstall, anything not provably ours is `preserved`, and `--force` does not
+change that. Copies of the retired `leo-runner` and `leo-executor` profiles are
+removed when unchanged and preserved otherwise.
 
 Run `--uninstall` before removing the native plugin/source. It removes owned
-integration artifacts, not routing preferences, handoffs, or logs. Supported
-config overrides include CODEX_HOME, CLAUDE_CONFIG_DIR, HERMES_HOME,
-PI_CODING_AGENT_DIR, OPENCODE_CONFIG_DIR, OPENCODE_CONFIG, and XDG_CONFIG_HOME.
+integration artifacts and registrations, and deletes an OpenCode config file
+only if the install created it and nothing else is left in it. It keeps
+routing preferences, handoffs, logs, and its backup. Supported config overrides
+are CODEX_HOME, CLAUDE_CONFIG_DIR, HERMES_HOME, PI_CODING_AGENT_DIR,
+OPENCODE_CONFIG_DIR, OPENCODE_CONFIG, and XDG_CONFIG_HOME; each must be an
+absolute path, and an empty one counts as unset.
 
 ## Per-machine model routing
 
 Data lives in `~/.leos-agent-local`, or LEOS_AGENT_LOCAL_PATH, outside versioned
 plugin caches. Configure concrete provider/harness IDs rather than assuming
-that a familiar alias exists everywhere:
+that a familiar alias exists everywhere. Claude is the exception: its Agent
+tool accepts only `haiku`, `sonnet`, `opus`, or `fable`, so `routing.py`
+refuses any other Claude model:
 
 ```sh
 python3 scripts/routing.py set --harness claude --cheap haiku --standard sonnet
@@ -229,7 +300,9 @@ Unknown model identifiers are retained and diagnosed, not silently corrected
 to a different dispatch ID. Parent-level always means the current parent.
 
 Guard modes are `LEOS_AGENT_DISPATCH_GUARD=on` (default), `warn` (log proposed
-corrections/blocks), and `off`. Unrelated tools and third-party MCP tools are
+corrections/blocks), and `off`; `0`, `false`, `no`, and `disabled` also mean
+off. Any other value keeps the guard on and marks each logged dispatch with an
+`unrecognized-guard-mode` diagnostic. Unrelated tools and third-party MCP tools are
 not routed. Failures are logged distinctly and fail open; this is not a
 security boundary. Native or organization-level model substitutions may still
 require investigation of actual execution.
@@ -240,7 +313,7 @@ require investigation of actual execution.
 |---|---|
 | install | Configure this harness's native artifacts; preview/check/uninstall/rollback. |
 | doctor | Check installation, pricing, model references, and runtime evidence without paid calls. |
-| tune-routing | Configure tiers and diagnose actual native model selection. |
+| tune-routing | Configure tiers and diagnose actual native model selection; opt into Claude Code's advisor. |
 | review-usage | Mechanical usage scan with reference-cost estimates and explicit gaps. |
 | review-pr | Review a pinned GitHub PR; stage comments/replies as pending. |
 | handoff / handon | Save concise context pointers and resume after checking drift. |
@@ -260,11 +333,14 @@ python3 scripts/measure_context.py --check
 python3 scripts/pricing.py resolve claude-sonnet-5
 ```
 
-Default policy bodies are about 2.4–2.5 KB, with a 2.6 KB component budget.
+Default policy bodies are about 2.5 KB, with a 2.6 KB component budget.
 Measurement counts metadata separately and treats bytes/4 only as a rough
 prose-token proxy. Harness wrappers, history, tools, cache behavior, and child
 work are outside that static measurement. No assertion is made that instruction
-overhead always pays for itself.
+overhead always pays for itself. `claude plugin details leos-agent` lists hooks
+as having no model context cost, so its estimate leaves out the policy the
+SessionStart hook injects; `measure_context.py` counts it. On Claude Code,
+`/skill-doctor` reports what each skill's listing costs and how often it runs.
 
 Usage scanning handles Claude streaming duplicates, Codex cumulative/cache
 accounting, and OpenCode message-time usage. Cursor/Hermes/Pi usage schemas are
@@ -273,14 +349,24 @@ unknown cache/model costs remain explicit. Compaction pre-context counts are
 not discarded tokens. Requested/corrected/blocked dispatches are distinct from
 observed child models. Missing/rotated logs do not prove a broken install.
 
-PR review pins the full head SHA; it never silently moves line anchors or
-retries old findings against a new head. Replacing a pending review requires
+PR review pins the full head SHA and reads code only at it, from GitHub, never
+from a local checkout; it never silently moves line anchors or retries old
+findings against a new head. Replacing a pending review requires
 an unchanged ownership receipt and saves recovery data. New comments/replies
 remain pending. Only verified addressed threads rooted by the authenticated
 user can be auto-resolved; resolution is public and requires SHA-bound evidence.
-Every changed non-generated file is read before staging. Neutral always comes
-with a pending comment; CI never affects the verdict. A ready-to-merge verdict
-stands until the PR diff changes, so a merge from the base keeps it.
+Every changed non-generated file is read before staging; after a complete
+review whose draft is no longer pending, a new head re-reads only the files
+whose patch changed. Each finding is
+re-checked at the SHA before staging, and the repository's own CLAUDE.md,
+AGENTS.md and REVIEW.md rules count only when quoted. Review runs at the
+standard tier; a consequential PR or an escalation runs it at premium. Neutral
+and seriously-problematic always come with a pending comment; CI never affects
+the verdict. A ready-to-merge verdict stands until the PR diff changes, hunk
+line numbers aside: a merge from the base keeps it unless the base touched
+lines within three of a PR hunk or a file GitHub sends no patch for. An
+optional cross-model lens, off unless the user enables it, sends the pinned
+diff to a second provider's CLI.
 Watchers use cross-process leases, bounded retries, and completion reports;
 emission alone never records a PR as reviewed. A head waiting on the user's
 decision is parked without spending retries.

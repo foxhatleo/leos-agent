@@ -75,6 +75,7 @@ class TestPackGuard(unittest.TestCase):
                 target = package / name
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(ROOT / name, target)
+            (base / "config").mkdir()  # the installer never creates a harness config dir
             env = {**os.environ, "LEOS_AGENT_ROOT": str(package),
                    "OPENCODE_CONFIG_DIR": str(base / "config"),
                    "OPENCODE_CONFIG": str(base / "config" / "opencode.jsonc"),

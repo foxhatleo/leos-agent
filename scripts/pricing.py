@@ -16,7 +16,6 @@ import subprocess
 import sys
 import time
 from urllib.parse import urljoin, urlparse
-from urllib.request import urlopen
 
 from state import _data_root, atomic_write
 
@@ -25,6 +24,16 @@ BUNDLED = Path(__file__).resolve().parents[1] / "payload" / "model-prices.json"
 FAMILIES = ("claude", "gpt", "deepseek", "kimi", "glm", "qwen")
 MAX_BYTES = 8 * 1024 * 1024
 TTL = 86400
+# The widest version gap an estimate may bridge: one major step, or any
+# distance within the same major version up to that.
+NEARBY_VERSION_GAP = Decimal(1)
+# Keys of a conditional rate row that are prices. Every other key is a
+# condition. Only a prompt-size threshold has an ordering the comparison can
+# evaluate point by point; any other condition falls back to rate ranges.
+PRICE_KEYS = frozenset(("prompt", "completion", "input_cache_read", "input_cache_write", "input_cache_write_1h",
+                        "web_search", "image", "image_output", "audio", "audio_output", "request",
+                        "internal_reasoning"))
+THRESHOLD = "min_prompt_tokens"
 
 
 class PricingError(ValueError):
@@ -75,6 +84,11 @@ variants, sizes, paid/free endpoints, or unknown provider prefixes.
     variant = (tail[:match.start()] + tail[match.end():]).strip("-") if match else tail
     variant = re.sub(r"-+", "-", variant)
     return family, variant, version
+
+
+def _version_number(version):
+    """(6, 5) -> 6.5, (6,) -> 6: the version as written, for distances."""
+    return Decimal(".".join(str(part) for part in version)) if version else Decimal(0)
 
 
 def snapshot(raw, fetched_at=None):
@@ -162,16 +176,22 @@ def resolve(name, catalog=None):
         return Match(name, "unknown")
     family, variant, version = key
     nearby = []
+    current = _version_number(version)
     for row in rows:
         item = identity(row["id"])
         if not item or item[:2] != (family, variant) or not item[2] or row["id"].startswith("~"):
             continue
-        other = item[2] + (0,) * (2 - len(item[2]))
-        current = version + (0,) * (2 - len(version))
-        if version and (abs(other[0] - current[0]) > 1 or
-                        (other[0] == current[0] and abs(other[1] - current[1]) > 2)):
-            continue
-        distance = (abs(other[0] - current[0]), abs(other[1] - current[1])) if version else (-other[0], -other[1])
+        other = _version_number(item[2])
+        if version:
+            # One numeric gap for every family: 6.5 sits 0.5 from 6 and 0.9
+            # from 5.6. An equal gap prefers the same major version, so 5 is
+            # estimated from 5.5 rather than from 4.5.
+            gap = abs(other - current)
+            if gap > NEARBY_VERSION_GAP:
+                continue
+            distance = (gap, item[2][0] != version[0])
+        else:
+            distance = (-other, False)
         nearby.append((distance, row))
     if not nearby:
         return Match(name, "unknown")
@@ -182,12 +202,39 @@ def resolve(name, catalog=None):
     return Match(name, "estimated" if version else "alias", winners[0])
 
 
+def _steps(match):
+    """Sorted (threshold, rate row) prompt-size tiers, or None for any other condition."""
+    steps = []
+    for override in match.pricing.get("overrides", []):
+        conditions = {k: v for k, v in override.items() if k not in PRICE_KEYS}
+        threshold = conditions.get(THRESHOLD)
+        if set(conditions) != {THRESHOLD} or isinstance(threshold, bool) or not isinstance(threshold, int) or threshold <= 0:
+            return None
+        steps.append((threshold, override))
+    if len({threshold for threshold, _ in steps}) != len(steps):
+        return None
+    return sorted(steps, key=lambda step: step[0])
+
+
+def _rates_at(match, steps, tokens):
+    """Prompt and completion rates for a request of `tokens` prompt tokens."""
+    active = match.pricing
+    for threshold, override in steps:
+        if threshold <= tokens:
+            active = override
+    return [decimal(active.get(key, match.pricing.get(key))) for key in ("prompt", "completion")]
+
+
 def compare(child, parent, catalog=None):
     """Return allowed/over-ceiling/unknown with auditable reference matches.
 
-Conditional rates are compared as ranges: only unambiguous dominance enforces
-the ceiling. Search/image charges are reported by accounting, not assumed for
-every text request. Fixed request/reasoning fees make this comparison unknown.
+Prompt-size tiers are compared at every threshold either model has, with both
+models priced for the same request. A child priced at or above the parent at
+the base rate is over the ceiling even when a long-prompt tier crosses over:
+the base rate is what ordinary dispatches pay. Other conditional rates are
+compared as ranges, so only unambiguous dominance enforces the ceiling.
+Search/image charges are reported by accounting, not assumed for every text
+request. Fixed request/reasoning fees make this comparison unknown.
 """
     catalog = catalog if catalog is not None else load()
     c, p = resolve(child, catalog), resolve(parent, catalog)
@@ -217,10 +264,25 @@ every text request. Fixed request/reasoning fees make this comparison unknown.
     cr, pr = ranges(c), ranges(p)
     if cr is None or pr is None:
         return report
+    cs, ps = _steps(c), _steps(p)
+    if cs is not None and ps is not None:
+        points = sorted({0} | {t for t, _ in cs} | {t for t, _ in ps})
+        rates = [pair for point in points
+                 for pair in zip(_rates_at(c, cs, point), _rates_at(p, ps, point))]
+        if any(None in pair for pair in rates):
+            return report
+        base = rates[:2]
+        if all(cv <= pv for cv, pv in rates):
+            report["status"] = "allowed"
+        elif all(cv >= pv for cv, pv in rates) and any(cv > pv for cv, pv in rates):
+            report["status"] = "over-ceiling"
+        elif all(cv >= pv for cv, pv in base) and any(cv > pv for cv, pv in base):
+            report["status"] = "over-ceiling"
+            report["basis"] = "base-rate"
+        return report
+
     def schedule(match):
-        return [json.dumps({k: v for k, v in override.items()
-                            if k not in ("prompt", "completion", "input_cache_read", "input_cache_write")},
-                           sort_keys=True)
+        return [json.dumps({k: v for k, v in override.items() if k not in PRICE_KEYS}, sort_keys=True)
                 for override in match.pricing.get("overrides", [])]
 
     if schedule(c) == schedule(p):
@@ -241,8 +303,12 @@ every text request. Fixed request/reasoning fees make this comparison unknown.
     return report
 
 
-def refresh(force=False, opener=urlopen):
+def refresh(force=False, opener=None):
     """Nonblocking lock, bounded HTTP, atomic replacement; retain old on error."""
+    if opener is None:
+        # Imported here: every dispatch loads this module, and only a refresh
+        # needs an HTTP client.
+        from urllib.request import urlopen as opener
     path = cache_path()
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd = os.open(str(path) + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
