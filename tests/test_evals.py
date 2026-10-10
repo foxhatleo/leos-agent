@@ -11,6 +11,8 @@ line.
 The runner evaluates grader regexes as JavaScript. Python's `re` agrees with it
 on the subset the patterns are held to here, so that subset is enforced as well.
 """
+import contextlib
+import io
 import json
 import os
 import re
@@ -23,6 +25,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 EVALS = ROOT / "evals"
 sys.path.insert(0, str(ROOT / "scripts"))
+import emit_payload  # noqa: E402
 import outcome  # noqa: E402
 import pricing  # noqa: E402
 import routing_engine  # noqa: E402
@@ -54,6 +57,9 @@ PROMPT_KEYS = {"schema_version", "name", "description", "tags", "plugins", "runs
 CASE_KEYS = {"schema_version", "name", "description", "tags", "plugins", "runs", "expected_outcome",
              "execution", "context", "graders"}
 CONTEXT_KEYS = {"scaffold_script", "history_file", "add_dirs"}
+# case.yaml's `execution:` takes the prompt.md run fields plus the prompt.
+EXECUTION_KEYS = {"prompt", "model", "max_turns", "timeout_seconds", "allowed_tools", "append_system_prompt", "env"}
+ENV_KEY_RE = re.compile(r"EVAL_[A-Z0-9_]*")
 GRADER_KEYS = {"type", "weight", "arm"}
 TYPE_KEYS = {
     "regex": {"pattern", "flags", "match", "target"},
@@ -104,6 +110,10 @@ def scalar(text, where):
         return float(text)
     if text in ("true", "false"):
         return text == "true"
+    if text.lower() in ("on", "off", "yes", "no", "y", "n"):
+        # A boolean to YAML 1.1 readers and a string to 1.2 ones: an env value
+        # written bare could reach the run as false, or fail its string schema.
+        raise ValueError(f"{where}: quote {text!r}; YAML readers disagree on whether it is a boolean")
     if not text or text[0] in "{}&*!|>%@`#?:-,]" or ": " in text or " #" in text or text.endswith(":"):
         raise ValueError(f"{where}: unsupported or ambiguous YAML scalar {text!r}")
     return text
@@ -377,7 +387,7 @@ class SuiteLayout(unittest.TestCase):
                 self.assertTrue(1 <= meta["timeout_seconds"] <= 3600)
                 if "runs" in meta:
                     self.assertTrue(1 <= meta["runs"] <= 50)
-                self.assertTrue(all(re.fullmatch(r"EVAL_[A-Z0-9_]*", k) for k in meta.get("env", {})))
+                self.assertTrue(all(ENV_KEY_RE.fullmatch(k) for k in meta.get("env", {})))
                 # Nothing beyond the read-only set, so no case needs --allow-tools
                 # and no run needs the OS sandbox.
                 self.assertLessEqual(set(meta["allowed_tools"]), READ_ONLY_TOOLS)
@@ -390,6 +400,12 @@ class SuiteLayout(unittest.TestCase):
                 self.assertEqual(data["schema_version"], "1.1")
                 self.assertEqual(data["name"], name)
                 self.assertLessEqual(set(data), CASE_KEYS)
+                execution = data.get("execution", {})
+                self.assertLessEqual(set(execution), EXECUTION_KEYS)
+                # A record of strings; any key outside EVAL_* fails the run.
+                for key, value in execution.get("env", {}).items():
+                    self.assertTrue(ENV_KEY_RE.fullmatch(key), key)
+                    self.assertIsInstance(value, str)
                 for rel in data["plugins"]:
                     self.assertEqual((case_dir / rel).resolve(), ROOT)
                     self.assertTrue((case_dir / rel / ".claude-plugin" / "plugin.json").is_file())
@@ -651,6 +667,60 @@ class WorkerContractGrader(unittest.TestCase):
                       "catalog, media, search\nVerified: read them\nResult: done", "catalog, media, search"):
             with self.subTest(reply=reply):
                 self.assertFalse(regex_passes(self.grader, self.trace(reply)))
+
+
+def run_env(case):
+    """The environment a case gives its run, as the installed runner merges it:
+    prompt.md frontmatter replaces case.yaml's `execution:` field by field, so
+    a frontmatter `env` would replace the case.yaml one whole."""
+    if "env" in case["meta"]:
+        return dict(case["meta"]["env"])
+    return dict(case["case"].get("execution", {}).get("env", {}))
+
+
+class RunEnvironment(unittest.TestCase):
+    """Every run starts in a fresh home with no price catalog, where the
+    plugin's SessionStart hook would start a background price refresh: network
+    I/O in each of the suite's thirty runs. Only an allowlist of the shell and
+    EVAL_* variables reach a run, so LEOS_AGENT_PRICE_REFRESH=off cannot."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.cases = load_suite()
+
+    def session_start(self, case_env):
+        """emit_payload's SessionStart hook with the run's environment as its
+        whole environment: no shell LEOS_AGENT_* variables, HOME and the Claude
+        config in a fresh temporary home. Returns the refreshes it started."""
+        with tempfile.TemporaryDirectory() as home:
+            env = {"PATH": os.environ.get("PATH", ""), "HOME": home, "CLAUDE_CONFIG_DIR": os.path.join(home, ".claude"),
+                   "XDG_CONFIG_HOME": os.path.join(home, ".config"),
+                   "LEOS_AGENT_LOCAL_PATH": os.path.join(home, ".leos-agent-local"),
+                   "CLAUDE_PLUGIN_ROOT": str(ROOT), **case_env}
+            event = {"session_id": "eval-run", "hook_event_name": "SessionStart", "source": "startup",
+                     "model": "claude-sonnet-5-5", "cwd": home, "transcript_path": os.path.join(home, "t.jsonl")}
+            with mock.patch.dict(os.environ, env, clear=True), \
+                    mock.patch.object(pricing, "refresh_background") as refresh, \
+                    mock.patch.object(sys, "stdin", io.StringIO(json.dumps(event))), \
+                    contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(emit_payload.main([]), 0)
+            self.assertTrue(out.getvalue().strip(), "the policy is still delivered")
+            return refresh.call_count
+
+    def test_no_run_starts_a_price_refresh(self):
+        self.assertEqual(self.session_start({}), 1, "a fresh home without the opt-out refreshes")
+        for name, case in self.cases.items():
+            with self.subTest(case=name):
+                env = run_env(case)
+                self.assertTrue(all(ENV_KEY_RE.fullmatch(key) for key in env))
+                self.assertEqual(self.session_start(env), 0)
+
+    def test_the_prefixed_opt_out_means_what_the_plain_one_does(self):
+        for env, refreshes in (({"LEOS_AGENT_PRICE_REFRESH": "off"}, 0), ({"EVAL_LEOS_AGENT_PRICE_REFRESH": "off"}, 0),
+                               ({"EVAL_LEOS_AGENT_PRICE_REFRESH": "on"}, 1), ({"EVAL_LEOS_AGENT_PRICE_REFRESH": ""}, 1),
+                               ({"EVAL_PRICE_REFRESH": "off"}, 1)):
+            with self.subTest(env=env):
+                self.assertEqual(self.session_start(env), refreshes)
 
 
 if __name__ == "__main__":

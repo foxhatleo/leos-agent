@@ -384,7 +384,10 @@ symlink escapes are refused by the helper.
 `evals/` is a [`claude plugin eval`](https://code.claude.com/docs/en/plugin-evals)
 suite for the delegation policy on Claude Code. Each case runs three times with
 the plugin and three times without it, every run in a fresh temporary home, so
-the plugin's default tiers apply rather than your `routing.json`. Fixtures are
+the plugin's default tiers apply rather than your `routing.json`. A run receives
+only `EVAL_*` variables beside an allowlist of your shell, so each case sets
+`EVAL_LEOS_AGENT_PRICE_REFRESH=off`, which the SessionStart hook honours like
+`LEOS_AGENT_PRICE_REFRESH=off`; no run starts a price refresh. Fixtures are
 small read-only directories inside each case. No case needs `--scaffold` or
 `--allow-tools`, and every grader is a regex or tool-use check, so no judge
 model is called.

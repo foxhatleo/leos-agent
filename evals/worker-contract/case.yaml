@@ -3,3 +3,6 @@ name: worker-contract
 plugins: ["../.."]
 context:
   add_dirs: [manifests]
+execution:
+  env:
+    EVAL_LEOS_AGENT_PRICE_REFRESH: "off"

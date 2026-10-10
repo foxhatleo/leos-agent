@@ -27,6 +27,8 @@ Env:
   LEOS_AGENT_HARNESS   overrides harness detection
   LEOS_AGENT_ROOT      overrides the plugin root
   LEOS_AGENT_PAYLOAD   set to "off" to emit nothing
+  LEOS_AGENT_PRICE_REFRESH, EVAL_LEOS_AGENT_PRICE_REFRESH
+                       either set to "off" starts no price refresh at SessionStart
 """
 
 import json
@@ -92,8 +94,8 @@ def main(argv=None):
             try:
                 import session_models
                 session_models.remember(event, harness)
-                if os.environ.get("LEOS_AGENT_PRICE_REFRESH") != "off":
-                    import pricing
+                import pricing
+                if not pricing.refresh_disabled():
                     pricing.refresh_background()
             except Exception as exc:
                 _breadcrumb(f"session metadata unavailable: {exc}")
