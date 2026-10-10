@@ -148,36 +148,6 @@ class Signals(unittest.TestCase):
         self.assertEqual(session_models.transcript_stats(str(path)),
                          {"usage": {"input": 13, "output": 857, "cache_read": 500}, "complete": True, "turns": 2})
 
-    def test_child_usage_agrees_with_the_usage_scan(self):
-        import usage_scan
-        stamp = "2026-10-01T10:00:00Z"
-        claude = self.root / "claude" / "proj" / "sess" / "subagents" / "agent-k.jsonl"
-        claude.parent.mkdir(parents=True)
-        claude.write_text("\n".join(json.dumps(r) for r in [
-            {"type": "assistant", "timestamp": stamp, "requestId": "r1", "message": {"id": "m1", "model": "haiku", "content": [],
-                                                                                     "usage": {"input_tokens": 4, "output_tokens": 1, "cache_creation_input_tokens": 90}}},
-            {"type": "assistant", "timestamp": stamp, "requestId": "r1", "message": {"id": "m1", "model": "haiku", "content": [],
-                                                                                     "usage": {"input_tokens": 4, "output_tokens": 60, "cache_creation_input_tokens": 90}}},
-        ]) + "\n")
-        scanned = usage_scan.scan_claude(0, str(self.root / "claude"))["model_usage"]["haiku"]["subagent"]
-        usage = session_models.transcript_stats(str(claude))["usage"]
-        self.assertEqual({k: usage.get(k, 0) for k in ("input", "cache_read", "cache_write", "output")},
-                         {k: scanned[k] for k in ("input", "cache_read", "cache_write", "output")})
-        codex = self.root / "codex" / "sessions" / "rollout-kid.jsonl"
-        codex.parent.mkdir(parents=True)
-        totals = [(100, 60, 9), (250, 200, 30)]
-        codex.write_text("\n".join(json.dumps(r) for r in [
-            {"type": "session_meta", "timestamp": stamp, "payload": {"source": {"subagent": {}}}},
-            {"type": "turn_context", "timestamp": stamp, "payload": {"model": "gpt-5.6-luna"}}] + [
-            {"type": "event_msg", "timestamp": stamp, "payload": {"type": "token_count", "info": {
-                "total_token_usage": {"input_tokens": i, "cached_input_tokens": c, "output_tokens": o},
-                "last_token_usage": {"input_tokens": i, "cached_input_tokens": c, "output_tokens": o}}}} for i, c, o in totals]) + "\n")
-        scanned = usage_scan.scan_codex(0, str(self.root / "codex" / "sessions"))["model_usage"]["gpt-5.6-luna"]["subagent"]
-        stats = session_models.transcript_stats(str(codex))
-        self.assertEqual({k: stats["usage"].get(k, 0) for k in ("input", "cache_read", "cache_write", "output")},
-                         {k: scanned[k] for k in ("input", "cache_read", "cache_write", "output")})
-        self.assertEqual(stats["turns"], 2)
-
     def test_a_handed_back_report_supplies_the_outcome(self):
         # In auto mode a child reports through the hand-back tool; its last
         # message is only closing text (docs: SubagentStop input).
@@ -194,6 +164,22 @@ class Signals(unittest.TestCase):
         row = dispatch_log.read()[-1]
         self.assertEqual((row["outcome"], row["verified"], row["outcome_source"]), ("partial", True, "handback"))
         self.assertNotIn(b"PRIVATE_REPORT", self.raw())
+
+    def test_a_refused_hand_back_delivered_nothing(self):
+        # A PreToolUse denial writes the call and an error result; only a call
+        # that went through carries the report the parent received.
+        path = self.root / "refused.jsonl"
+        call = {"type": "assistant", "message": {"id": "m1", "model": "haiku", "content": [
+            {"type": "tool_use", "id": "toolu_1", "name": "SubagentHandback", "input": {"message": "Result: done"}}]}}
+        denied = {"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "toolu_1", "is_error": True, "content": "not delivered"}]}}
+        path.write_text(json.dumps(call) + "\n" + json.dumps(denied) + "\n")
+        self.assertEqual(session_models.transcript_handback_text(str(path)), "")
+        again = {"type": "assistant", "message": {"id": "m2", "model": "haiku", "content": [
+            {"type": "tool_use", "id": "toolu_2", "name": "SubagentHandback", "input": {"message": "Result: done\nVerified: pytest"}}]}}
+        with open(path, "a") as fh:
+            fh.write(json.dumps(again) + "\n")  # its result is not flushed yet: still a delivery
+        self.assertEqual(session_models.transcript_handback_text(str(path)), "Result: done\nVerified: pytest")
 
     def test_session_end_backfills_an_outcome_that_flushed_late(self):
         parent = self.root / "late.jsonl"
@@ -316,9 +302,27 @@ class ContractPrompt(unittest.TestCase):
         ]
         for event, harness in cases:
             self.assertIsNone(observe_agent.observe(event, harness), (event.get("agent_type"), harness))
-        for mode in ("off", "warn"):
+        for mode in ("off", "warn", "0", "false", "disabled"):
             with patch.dict(os.environ, {"LEOS_AGENT_DISPATCH_GUARD": mode}):
                 self.assertIsNone(observe_agent.observe(self.stop(), "claude"), mode)
+
+    def test_every_spelling_of_on_keeps_the_prompt(self):
+        # The guard's own reading of LEOS_AGENT_DISPATCH_GUARD, not a second one.
+        for mode in ("on", "1", "true", "yes", "", "unrecognised"):
+            with patch.dict(os.environ, {"LEOS_AGENT_DISPATCH_GUARD": mode}):
+                self.assertIsNotNone(observe_agent.contract_prompt(self.stop(), "claude"), mode)
+
+    def test_a_refused_hand_back_still_gets_its_one_stop_prompt(self):
+        child = self.root / "parent/subagents/agent-c1.jsonl"
+        child.parent.mkdir(parents=True)
+        child.write_text("\n".join(json.dumps(r) for r in (
+            {"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": "toolu_1", "name": "SubagentHandback", "input": {"message": "no lines"}}]}},
+            {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_1", "is_error": True}]}},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "I changed the parser and the tests pass."}]}},
+        )) + "\n")
+        self.assertIsNotNone(observe_agent.contract_prompt(self.stop(permission_mode="auto"), "claude"))
+        self.assertIsNone(observe_agent.contract_prompt(self.stop(permission_mode="auto", active=True), "claude"))
 
     def test_a_handed_back_report_is_never_prompted_again(self):
         child = self.root / "parent/subagents/agent-c1.jsonl"

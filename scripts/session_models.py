@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 import time
 
+import accounting
 from state import _data_root, atomic_write
 
 
@@ -139,8 +140,10 @@ def transcript_handback_text(path, limit=4096):
     """The report a Claude child delivered through its hand-back tool, clamped, or "".
 
     A child that reports through that tool stops with closing text, if any, as
-    its last message; the report is the tool call's `message` input. Reads at
-    most HANDBACK_READ_LIMIT from the end; returns in memory only.
+    its last message; the report is the tool call's `message` input. A call
+    whose result is an error, such as one a PreToolUse hook denied, delivered
+    nothing and is skipped. Reads at most HANDBACK_READ_LIMIT from the end;
+    returns in memory only.
     """
     if not isinstance(path, str) or not path:
         return ""
@@ -151,15 +154,22 @@ def transcript_handback_text(path, limit=4096):
             lines = handle.read().splitlines()
     except OSError:
         return ""
+    refused = set()  # results follow their calls, so a backward scan meets them first
     for line in reversed(lines):
         try:
             entry = json.loads(line)
         except ValueError:
             continue
-        message = entry.get("message") if isinstance(entry, dict) and entry.get("type") == "assistant" else None
+        message = entry.get("message") if isinstance(entry, dict) and entry.get("type") in ("assistant", "user") else None
         content = message.get("content") if isinstance(message, dict) else None
         for part in reversed(content if isinstance(content, list) else []):
-            if not (isinstance(part, dict) and part.get("type") == "tool_use" and part.get("name") == HANDBACK_TOOL):
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "tool_result" and part.get("is_error") is True:
+                refused.add(part.get("tool_use_id"))
+            if entry["type"] != "assistant" or part.get("type") != "tool_use" or part.get("name") != HANDBACK_TOOL:
+                continue
+            if part.get("id") is not None and part.get("id") in refused:
                 continue
             report = part["input"].get("message") if isinstance(part.get("input"), dict) else None
             if isinstance(report, str) and report.strip():
@@ -168,26 +178,15 @@ def transcript_handback_text(path, limit=4096):
 
 
 USAGE_READ_LIMIT = 16 * 1024 * 1024
-_CLAUDE_USAGE = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens")
-_CODEX_USAGE = ("input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens")
-_FIELDS = ("input", "cache_read", "cache_write", "output")
-
-
-def _count(value):
-    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
 
 
 def transcript_stats(path):
     """{"usage", "complete", "turns"} for one child transcript; usage None when unreadable.
 
-    The accounting is usage_scan's, so the dispatch report and the usage scan
-    agree about the same child. Claude writes streaming snapshots of one
-    request under one requestId (message id when absent), and each category
-    keeps its largest snapshot. Codex token_count totals are cumulative and
-    its input includes cached input, so deltas are summed with the cached part
-    moved out of input. A turn is one model request. A file over
-    USAGE_READ_LIMIT is not read; a delta that cannot be established marks the
-    usage incomplete.
+    Counted by the usage scan's own rules (accounting.py), so the dispatch
+    report and the usage scan agree about the same child. A turn is one model
+    request. A file over USAGE_READ_LIMIT is not read; a Codex request that
+    cannot be established marks the usage incomplete.
     """
     stats = {"usage": None, "complete": False, "turns": None}
     if not isinstance(path, str) or not path:
@@ -200,7 +199,7 @@ def transcript_stats(path):
     except OSError:
         return stats
     claude, codex = {}, []
-    previous, complete = None, True
+    deltas, complete = accounting.CodexDeltas(), True
     for index, line in enumerate(lines):
         try:
             entry = json.loads(line)
@@ -209,39 +208,24 @@ def transcript_stats(path):
         if not isinstance(entry, dict):
             continue
         message = entry.get("message") if entry.get("type") == "assistant" else None
-        if isinstance(message, dict) and isinstance(message.get("usage"), dict) and message["usage"]:
-            key = entry.get("requestId") or message.get("id") or index
-            values = tuple(_count(message["usage"].get(k)) for k in _CLAUDE_USAGE)
-            prior = claude.get(key)
-            claude[key] = tuple(max(a, b) for a, b in zip(prior, values)) if prior else values
+        values = accounting.claude_usage(message) if isinstance(message, dict) else None
+        if values is not None:
+            key = accounting.claude_key(entry, message, index)
+            claude[key] = accounting.keep_largest(claude.get(key), values)
             continue
         payload = entry.get("payload") if isinstance(entry.get("payload"), dict) else None
         if not payload or payload.get("type") != "token_count":
             continue
-        info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
-        total = info.get("total_token_usage") or payload.get("total_token_usage")
-        last = info.get("last_token_usage")
-        if not isinstance(total, dict):
-            continue  # a rate-limit-only event; there is no count to dedupe
-        current = tuple(_count(total.get(k)) for k in _CODEX_USAGE)
-        if current == previous:
-            continue
-        if previous is not None and all(a >= b for a, b in zip(current, previous)):
-            delta = tuple(a - b for a, b in zip(current, previous))
-        elif isinstance(last, dict):
-            delta = tuple(_count(last.get(k)) for k in _CODEX_USAGE)
-        else:
-            previous, complete = current, False
-            continue
-        previous = current
-        if any(delta):
-            inp, read, write, out = delta
-            codex.append((max(0, inp - read - write), read, write, out))
+        delta, gap = deltas.step(payload)
+        if gap == accounting.MISSING_BASELINE:
+            complete = False
+        if delta is not None and any(delta):
+            codex.append(accounting.codex_request(delta))
     requests = codex or list(claude.values())
     if not requests:
         stats["complete"] = complete
         return stats
-    usage = dict(zip(_FIELDS, (sum(column) for column in zip(*requests))))
+    usage = dict(zip(accounting.TOKEN_KEYS, (sum(column) for column in zip(*requests))))
     for key in ("cache_read", "cache_write"):
         if not usage[key]:
             del usage[key]

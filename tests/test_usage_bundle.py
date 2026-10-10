@@ -80,8 +80,8 @@ class TestContents(BundleCase):
         names = set(self.build("--since", "7d").namelist())
         for expected in ("README.md", "usage-7d.json", "usage-7d.txt", "environment.txt", "plugin.json",
                          "sources.md", "routing-show.txt", "guard-report.txt", "model-prices.json",
-                         "scanner/usage_scan.py", "scanner/settings_probe.py", "scanner/dispatch_log.py",
-                         "scanner/pricing.py"):
+                         "scanner/usage_scan.py", "scanner/accounting.py", "scanner/settings_probe.py",
+                         "scanner/dispatch_log.py", "scanner/pricing.py"):
             self.assertIn(expected, names)
         for harness in self.bundle.routing.HARNESSES:
             self.assertIn("doctor-%s.json" % harness, names)

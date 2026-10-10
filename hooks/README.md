@@ -46,9 +46,25 @@ one non-empty reply goes to a leo-* child whose final message lacks the
 `Result:`/`Verified:` lines: on a first stop (`stop_hook_active` false) it asks
 once for the report restated with them, as `additionalContext` on Claude and
 `decision: block` on Codex, and records the child at its next stop. A Claude
-child that reported through its hand-back tool is never asked. Guard modes
+child whose report went through its hand-back tool is never asked. Guard modes
 `warn` and `off` disable the prompt. Claude PostModelSwitch refreshes its
 parent-model cache. Codex supplies its active model directly in tool-hook events.
+
+In auto mode a Claude child reports through its `SubagentHandback` tool, so
+its final message is not the report. A PreToolUse hook matched on that tool,
+`scripts/handback_contract.py`, judges the report as it is handed back: when a
+leo-* worker's report lacks either line, it denies the call, and Claude Code
+returns the denial reason to the child as the tool's error, asking for the
+same report again with both lines. It refuses each child at most once: the
+first refusal creates that child's marker under `~/.leos-agent-local/handbacks/`,
+which no later call can create again, so the next hand-back goes through
+whatever it says, and when no marker can be written nothing is refused. The
+agent type comes from the hook input, else from the child transcript's
+metadata sidecar. Other agents, the main thread, and guard modes `warn` and
+`off` pass untouched; the hook never grants permission and fails open. A
+refused call delivered nothing, so the observer reads only hand-backs that
+went through, and a child whose only hand-back was refused can still get its
+one SubagentStop prompt.
 
 Completion signals share one contract. Every adapter sends the observer a
 SubagentStop-shaped event carrying at most the last 4 KiB of the child's final
@@ -61,9 +77,10 @@ foreground result and for a background launch, and reads nothing else. The
 report joins Claude completions through that row and guesses the nearest
 preceding dispatch only when no link exists. `scripts/outcome.py` reduces the
 child's text to `Result:`/`Verified:` tokens and the text is discarded; `usage` is taken from the
-event or, on Claude and Codex, summed from the child transcript by the usage
-scan's rules, with a turn count. A Claude child that reports through its
-hand-back tool is read from that report. Cursor's subagentStop carries the
+event or, on Claude and Codex, summed from the child transcript with a turn
+count. The usage scan and the report count and price tokens by one set of
+rules, `scripts/accounting.py`. A Claude child that reports through its
+hand-back tool is read from the report that went through. Cursor's subagentStop carries the
 child's `summary`, call id and child conversation id; without a summary the
 row says status-only. Background Cursor subagents may send no subagentStop or
 null fields. OpenCode uses `tool.execute.after` on `task`, taking the agent from

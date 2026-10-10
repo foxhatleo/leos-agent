@@ -143,7 +143,9 @@ The policy in `rules/preferences.md` applies to work on this repo too.
   unknown evidence, not proof of a failed install or a successful correction.
 - Usage scans must deduplicate streaming messages, handle cumulative and cached
   tokens per provider, and use message-time usage. Pre-compaction context is not
-  discarded tokens; reference-cost estimates are not bills.
+  discarded tokens; reference-cost estimates are not bills. These counting and
+  reference-cost rules live once, in `scripts/accounting.py`, shared by the
+  usage scan and the dispatch report; extend them there, never in a copy.
 - Verify harness/library facts against installed binaries and current official
   docs online. APIs change quickly; recall and an old session are insufficient.
 
