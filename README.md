@@ -114,7 +114,7 @@ a worker reports through the hand-back tool instead, its first report without
 them is refused once and the worker is asked to hand it back with both lines.
 Guard modes `warn` and `off` skip both. The dispatch log stores the outcome enum, a verified
 tri-state, a source token, token and turn counts, the tier, the escalation
-source tier, and on Claude whether the child's hand-back was refused; never
+source tier, and on Claude whether a leo-* worker's hand-back was refused; never
 brief or result text. A Claude `leo-lens` is logged under the tier of the
 model it ran on: cheap on the configured cheap model, otherwise standard.
 `dispatch_log.py report` joins

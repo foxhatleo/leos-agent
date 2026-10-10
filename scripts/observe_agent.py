@@ -90,17 +90,21 @@ def lens_tier(agent, harness, model):
     return routing_engine.run_tier(agent, harness, model) if routing_engine.tiered_by_model(agent, harness) else None
 
 
-def contract_refused(harness, session, child):
-    """Whether the hand-back check refused this child's report once.
+def contract_refused(event, harness, session, child):
+    """Whether the hand-back check refused this child's report once, or None
+    for a child it never judges, whose row then carries no flag.
 
-    Claude is the one harness with that check, so every other harness gets
-    None, as does an event without the session and child ids the marker is
-    keyed by. A refusal is counted beside the outcome, never as one.
+    The check runs only on Claude and judges only this plugin's tier workers,
+    by the agent type it reads (handback_contract.judged). An event without
+    the session and child ids the marker is keyed by also gets None. A
+    refusal is counted beside the outcome, never as one.
     """
     if harness != "claude" or not session or not child:
         return None
-    from handback_contract import marker_path
-    return os.path.exists(marker_path(session, child))
+    import handback_contract
+    if not handback_contract.judged(handback_contract.agent_type(event)):
+        return None
+    return os.path.exists(handback_contract.marker_path(session, child))
 
 
 def contract_prompt(event, harness):
@@ -245,7 +249,7 @@ def observe(event, harness):
     tier = lens_tier(agent, harness, model or declared)
     if tier:
         row["tier"] = tier
-    refused = contract_refused(harness, session, child)
+    refused = contract_refused(event, harness, session, child)
     if refused is not None:
         row["contract_refused"] = refused
     dispatch_log.append(row)

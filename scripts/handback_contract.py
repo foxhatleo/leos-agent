@@ -53,6 +53,15 @@ def agent_type(event):
     return value if isinstance(value, str) else ""
 
 
+def judged(agent):
+    """Whether the check judges a hand-back from `agent`: one of this plugin's
+    tier agents. The observer records a refusal flag for exactly these."""
+    if not agent.rsplit(":", 1)[-1].startswith("leo-"):
+        return False  # decided before any routing code loads
+    from routing_engine import tier_for
+    return tier_for(agent) is not None
+
+
 def marker_path(session, child):
     """Where one child's refusal is remembered. The observer checks the same
     path to record that the child was refused (observe_agent.contract_refused)."""
@@ -95,11 +104,7 @@ def refusal(event, harness):
         return None
     if outcome.contract_met(outcome.parse(report[-outcome.TAIL_BYTES:])):
         return None
-    agent = agent_type(event)
-    if not agent.rsplit(":", 1)[-1].startswith("leo-"):
-        return None
-    from routing_engine import tier_for
-    if tier_for(agent) is None or not first_refusal(session, child):
+    if not judged(agent_type(event)) or not first_refusal(session, child):
         return None
     return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                    "permissionDecisionReason": REFUSAL}}

@@ -176,15 +176,34 @@ class RecordedRefusal(Host):
         self.assertIn("hand-back refused 1", dispatch_log.render(summary))
         self.assertIn(b'"contract_refused": true', (self.data / "dispatch.jsonl").read_bytes())
 
-    def test_only_a_claude_row_that_names_its_child_carries_the_flag(self):
+    def test_only_a_claude_tier_worker_that_names_its_child_carries_the_flag(self):
         self.assertFalse(self.hand_back(BARE)[0])
         observe_agent.observe(dict(self.stop("c1"), stop_hook_active=True), "codex")  # past its own one prompt
         self.assertNotIn("contract_refused", dispatch_log.read()[-1])
         nameless = {k: v for k, v in self.stop("c1").items() if k != "agent_id"}
         observe_agent.observe(nameless, "claude")
         self.assertNotIn("contract_refused", dispatch_log.read()[-1])
-        observe_agent.observe(self.stop("other"), "claude")
-        self.assertIs(dispatch_log.read()[-1]["contract_refused"], False)
+        # The agents the check judges get a boolean; every other child gets no key.
+        for n, (agent, flag) in enumerate((("leos-agent:leo-cheap", False), ("leo-standard", False),
+                                           ("leos-agent:leo-lens", False), ("general-purpose", None), ("Explore", None),
+                                           ("other-plugin:leo-cheap", None), ("leos-agent:leo-unknown", None))):
+            with self.subTest(agent=agent):
+                observe_agent.observe(dict(self.stop("o%d" % n, agent=agent), stop_hook_active=True), "claude")
+                self.assertEqual(dispatch_log.read()[-1].get("contract_refused", "absent"),
+                                 "absent" if flag is None else flag)
+
+    def test_the_flag_follows_the_agent_type_the_check_read(self):
+        # With no agent type on the stop event, the transcript sidecar names it, as for the check.
+        sidecar = self.child_transcript("s1").with_suffix(".meta.json")
+        sidecar.parent.mkdir(parents=True)
+        sidecar.write_text(json.dumps({"agentType": "leos-agent:leo-premium"}))
+        self.assertFalse(self.hand_back(BARE, child="s1", agent=None)[0])
+        stop = {k: v for k, v in self.stop("s1").items() if k != "agent_type"}
+        observe_agent.observe(dict(stop, stop_hook_active=True), "claude")
+        self.assertIs(dispatch_log.read()[-1]["contract_refused"], True)
+        sidecar.write_text(json.dumps({"agentType": "general-purpose"}))
+        observe_agent.observe(dict(stop, stop_hook_active=True), "claude")
+        self.assertNotIn("contract_refused", dispatch_log.read()[-1])
 
 
 class PassThrough(Host):

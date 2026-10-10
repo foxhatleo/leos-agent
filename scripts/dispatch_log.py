@@ -52,8 +52,9 @@ MAX_BYTES = 1 << 20
 # v3 added tier, escalation_from, outcome, verified, outcome_source, usage;
 # completion rows may also carry turns, a count of the child's model requests;
 # a Claude leo-lens completion, its tier, from the model it ran on; and a
-# Claude completion, contract_refused, whether the hand-back check refused the
-# child's report once. An optional field is read as absent on older rows.
+# Claude leo-* tier worker's completion, contract_refused, whether the
+# hand-back check refused its report once. An optional field is read as
+# absent on older rows.
 # The reader branches on this so "predates instrumentation" is never confused
 # with "the worker emitted no Result line".
 RECORD_VERSION = 3

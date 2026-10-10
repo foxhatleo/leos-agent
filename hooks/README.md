@@ -64,10 +64,11 @@ metadata sidecar. Other agents, the main thread, and guard modes `warn` and
 `off` pass untouched; the hook never grants permission and fails open. A
 refused call delivered nothing, so the observer reads only hand-backs that
 went through, and a child whose only hand-back was refused can still get its
-one SubagentStop prompt. At the child's stop the observer checks for its marker
-(`handback_contract.marker_path`) and records the boolean `contract_refused`
-on its completion row; no other harness has the check or the field. The report
-counts refused children per tier beside the outcomes, never as an outcome.
+one SubagentStop prompt. At a leo-* worker's stop the observer checks for its
+marker (`handback_contract.marker_path`) and records the boolean
+`contract_refused` on its completion row. Children the check never judges and
+other harnesses get no field. The report counts refused children per tier
+beside the outcomes, never as an outcome.
 
 Completion signals share one contract. Every adapter sends the observer a
 SubagentStop-shaped event carrying at most the last 4 KiB of the child's final
