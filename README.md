@@ -100,8 +100,10 @@ Completion capture reads the last 4 KiB of a worker's final text, or of the
 report a Claude child handed back through its hand-back tool, for its
 `Result:` and `Verified:` lines and drops the text. On Claude Code and Codex, a
 leo-* worker whose final message lacks those lines is asked once, at its first
-SubagentStop, to restate its report with them; guard modes `warn` and `off`
-skip the prompt. The dispatch log stores the outcome enum, a verified
+SubagentStop, to restate its report with them. In Claude Code auto mode, where
+a worker reports through the hand-back tool instead, its first report without
+them is refused once and the worker is asked to hand it back with both lines.
+Guard modes `warn` and `off` skip both. The dispatch log stores the outcome enum, a verified
 tri-state, a source token, token and turn counts, the tier, and the escalation
 source tier; never brief or result text. `dispatch_log.py report` joins
 completions to dispatches by call id; on Claude, whose SubagentStop has none,
@@ -111,7 +113,8 @@ the same tier. The report prints
 outcome and verification counts per tier beside the dispatches that sent no
 completion signal, escalation chains and tier counts over dispatches that ran,
 summed child usage and turns, reference cost per verified success from catalog
-prices (an estimate, not a bill), and which harnesses supplied no signal.
+prices (an estimate, not a bill), and which harnesses supplied no signal. It
+counts and prices a child's tokens by the usage scan's own rules.
 Some hosts send none for background children: Claude Code background subagents
 on some builds and in the VS Code extension, OpenCode background tasks, and
 Cursor background subagents. Claude Code's SessionEnd hooks share a 1.5 s budget that

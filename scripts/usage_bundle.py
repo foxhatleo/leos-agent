@@ -30,7 +30,8 @@ from state import _data_root  # noqa: E402
 # Never in the bundle: transcripts, prompt text, and the raw dispatch log,
 # which carries prompt heads when LEOS_AGENT_DISPATCH_LOG_PROMPTS=1. The
 # rendered guard summary goes in instead.
-SNAPSHOT_SOURCES = ("usage_scan.py", "settings_probe.py", "dispatch_log.py", "pricing.py", "routing_engine.py", "routing.py")
+SNAPSHOT_SOURCES = ("usage_scan.py", "accounting.py", "settings_probe.py", "dispatch_log.py", "pricing.py",
+                    "routing_engine.py", "routing.py")
 COPIED_FILES = ((".claude-plugin/plugin.json", "plugin.json"),
                 ("skills/review-usage/reference/sources.md", "sources.md"))
 CLI_VERSIONS = (("claude", ["claude", "--version"]), ("codex", ["codex", "--version"]),

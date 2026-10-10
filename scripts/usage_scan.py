@@ -17,9 +17,10 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import accounting  # noqa: E402
 import settings_probe  # noqa: E402
 
-TOKEN_KEYS = ("input", "cache_read", "cache_write", "output")
+TOKEN_KEYS = accounting.TOKEN_KEYS
 # Rows a harness writes for its own bookkeeping, not a model anyone is billed
 # for. Claude Code's "<synthetic>" assistant rows carry no usage; report them
 # as internal rather than as an unknown model with an unpriced subtotal.
@@ -103,8 +104,7 @@ def _iso_epoch(text):
     return stamp.timestamp()
 
 
-def count(value):
-    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+count = accounting.count
 
 
 class Totals:
@@ -222,7 +222,7 @@ def _scan_claude_file(path, bucket, since, out, seen, dispatch_seen, advisor_cal
         message = rec.get("message")
         if not isinstance(message, dict):
             continue
-        key = rec.get("requestId") or message.get("id") or (path, index)
+        key = accounting.claude_key(rec, message, (path, index))
         content = message.get("content")
         for block in content if isinstance(content, list) else []:
             if not isinstance(block, dict) or block.get("type") != "tool_use" or block.get("name") not in DISPATCH_TOOLS:
@@ -238,19 +238,19 @@ def _scan_claude_file(path, bucket, since, out, seen, dispatch_seen, advisor_cal
             prompt = args.get("prompt")
             out["dispatches"].append({"agent": args.get("subagent_type") or "-", "model": args.get("model"),
                                       "prompt_bytes": len(prompt.encode("utf-8", "replace")) if isinstance(prompt, str) else 0})
-        usage = message.get("usage")
-        if not isinstance(usage, dict) or not usage:
+        values = accounting.claude_usage(message)
+        if values is None:
             continue
         session = rec.get("sessionId") or path
-        _merge(seen, key, bucket, message.get("model"), _claude_values(usage), session)
+        _merge(seen, key, bucket, message.get("model"), values, session)
         # Advisor sub-inferences are billed at the advisor's rates and are not
         # in the top-level counters; usage.iterations carries them per model.
         advisors, calls = collections.defaultdict(lambda: (0, 0, 0, 0)), 0
-        iterations = usage.get("iterations")
+        iterations = message["usage"].get("iterations")
         for item in iterations if isinstance(iterations, list) else []:
             if isinstance(item, dict) and item.get("type") == "advisor_message":
                 model = item.get("model") if isinstance(item.get("model"), str) and item.get("model") else "unknown"
-                advisors[model] = tuple(a + b for a, b in zip(advisors[model], _claude_values(item)))
+                advisors[model] = tuple(a + b for a, b in zip(advisors[model], accounting.claude_values(item)))
                 calls += 1
         for model, values in advisors.items():
             _merge(seen, (key, "advisor", model), bucket, model, values, session)
@@ -258,19 +258,10 @@ def _scan_claude_file(path, bucket, since, out, seen, dispatch_seen, advisor_cal
             advisor_calls[key] = max(advisor_calls.get(key, 0), calls)
 
 
-CLAUDE_USAGE_KEYS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens")
-
-
-def _claude_values(usage):
-    return tuple(count(usage.get(k)) for k in CLAUDE_USAGE_KEYS)
-
-
 def _merge(seen, key, bucket, model, values, session):
     if key in seen:
         old_bucket, model, previous, session = seen[key]
-        # Streaming snapshots are cumulative per response, not new requests.
-        # Keep the greatest observed counter for each category.
-        seen[key] = old_bucket, model, tuple(max(a, b) for a, b in zip(previous, values)), session
+        seen[key] = old_bucket, model, accounting.keep_largest(previous, values), session
     else:
         seen[key] = bucket, model, values, session
 
@@ -294,11 +285,10 @@ def scan_codex(since, root=None):
         return None
     out = new_scan()
     out["subagent_events"] = 0
-    keys = ("input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens")
     paths = {path for directory in roots for path in glob.glob(os.path.join(directory, "**", "rollout-*.jsonl"), recursive=True)}
     out["coverage"] = "Local rollout JSONL files in sessions and archived_sessions; other history formats are not measured."
     for path in sorted(paths):
-        previous, model, bucket = None, None, "main"
+        deltas, model, bucket = accounting.CodexDeltas(), None, "main"
         for rec in records(path, out):
             payload = rec.get("payload")
             if not isinstance(payload, dict):
@@ -317,32 +307,16 @@ def scan_codex(since, root=None):
                 continue
             if payload.get("type") != "token_count":
                 continue
-            info = payload.get("info") or {}
-            total, last = info.get("total_token_usage"), info.get("last_token_usage")
-            if not isinstance(total, dict):
-                out["diagnostics"]["missing_cumulative_usage"] += 1
-                continue  # repeated last-only events cannot be safely deduplicated
-            current = tuple(count(total.get(k)) for k in keys)
-            if current == previous:
+            # Every event steps the baseline, pre-window ones included.
+            delta, gap = deltas.step(payload)
+            if gap:
+                out["diagnostics"][gap] += 1
+            if delta is None or not in_window(rec, since, out) or not any(delta):
                 continue
-            if previous is not None and all(a >= b for a, b in zip(current, previous)):
-                values = tuple(a - b for a, b in zip(current, previous))
-            elif isinstance(last, dict):
-                values = tuple(count(last.get(k)) for k in keys)
-                if previous is not None:
-                    out["diagnostics"]["cumulative_resets"] += 1
-            else:
-                previous = current
-                out["diagnostics"]["missing_initial_delta"] += 1
-                continue
-            previous = current  # even pre-window events establish the baseline
-            if not in_window(rec, since, out) or not any(values):
-                continue
-            inp, read, write, output = values
+            inp, read, write, _output = delta
             if read + write > inp:
                 out["diagnostics"]["cache_exceeds_input"] += 1
-            # Codex input includes cached input; output already includes reasoning.
-            add_usage(out, bucket, model, (max(0, inp - read - write), read, write, output), path)
+            add_usage(out, bucket, model, accounting.codex_request(delta), path)
     return finish(out)
 
 
@@ -457,26 +431,13 @@ def routing_compliance(dispatches):
 
 def reference_cost(model, buckets, catalog):
     import pricing
-    from decimal import Decimal
     amounts = {key: sum(role[key] for role in buckets.values()) for key in TOKEN_KEYS}
     if model in INTERNAL_MODELS:
         return {"requested": model, "status": "internal", "reference_model": None,
                 "minimum_usd": 0.0, "maximum_usd": 0.0, "unpriced_tokens": sum(amounts.values())}
     match = pricing.resolve(model, catalog)
-    result = {**match.report(), "minimum_usd": 0.0, "maximum_usd": 0.0, "unpriced_tokens": 0}
-    low, high = Decimal(0), Decimal(0)
-    for key, rate_key in zip(TOKEN_KEYS, ("prompt", "input_cache_read", "input_cache_write", "completion")):
-        if not amounts[key]:
-            continue
-        rates = [match.pricing] + match.pricing.get("overrides", [])
-        values = [pricing.decimal(row.get(rate_key, match.pricing.get(rate_key))) for row in rates]
-        if None in values:
-            result["unpriced_tokens"] += amounts[key]
-            continue
-        low += amounts[key] * min(values)
-        high += amounts[key] * max(values)
-    result.update(minimum_usd=float(low), maximum_usd=float(high))
-    return result
+    low, high, unpriced = accounting.reference_range(match, amounts)
+    return {**match.report(), "minimum_usd": float(low), "maximum_usd": float(high), "unpriced_tokens": unpriced}
 
 
 def _utc(stamp):
