@@ -311,6 +311,14 @@ model an agent whose definition names none runs on when `model` is omitted.
             updated = copy.deepcopy(args)
             updated["subagent_type"] = "leo-parent"
             result.update(action="correct", reason="native-profile-over-ceiling", updated_input=updated)
+        elif harness == "hermes":
+            # Hermes has no native agents and delegate_task takes no model:
+            # every delegate runs on delegation.model, or inherits the parent
+            # when that is unset.
+            result.update(action="block", reason="native-profile-over-ceiling", retry=(
+                "Hermes runs every delegate on delegation.model in config.yaml, which is over the parent, and "
+                "delegate_task cannot name another model. Do this work in the current session, or ask the user to "
+                "set delegation.model within the parent's price, or unset it so delegates inherit the parent."))
         else:
             result.update(action="block", reason="native-profile-over-ceiling",
                           retry="Use the parent-level native agent, or perform the work in the current parent.")

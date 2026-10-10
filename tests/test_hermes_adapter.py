@@ -28,6 +28,21 @@ class HermesAdapter(unittest.TestCase):
         self.assertEqual(result["action"], "block")
         self.assertNotIn("PRIVATE", repr(self.adapter._PARENTS))
 
+    def test_a_blocked_delegate_is_told_only_what_hermes_supports(self):
+        # Pinned on purpose: this text is all the model can act on. Hermes has
+        # no native agents and delegate_task takes no model, so the remedies are
+        # doing the work here or changing the one delegation.model.
+        self.adapter._on_request_model(model="claude-haiku-4-5", task_id="t")
+        with patch.object(self.adapter, "_native_delegation_model", return_value="claude-opus-5"):
+            result = self.adapter._on_pre_tool_call("delegate_task", {"goal": "inspect"}, task_id="t")
+        self.assertEqual(result, {"action": "block", "message": (
+            "[leo routing] native-profile-over-ceiling. Hermes runs every delegate on delegation.model in "
+            "config.yaml, which is over the parent, and delegate_task cannot name another model. Do this work in "
+            "the current session, or ask the user to set delegation.model within the parent's price, or unset it "
+            "so delegates inherit the parent.")})
+        for phrase in ("native agent", "parent-level"):
+            self.assertNotIn(phrase, result["message"])
+
     def test_unrelated_tool_does_not_launch_process(self):
         with patch.object(self.adapter, "_python") as run:
             self.assertIsNone(self.adapter._on_pre_tool_call("terminal", {}))

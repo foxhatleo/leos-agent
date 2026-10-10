@@ -107,7 +107,11 @@ adapters only supply observations and translate supported actions.
 Hermes blocks a tool when a `pre_tool_call` callback raises or outlives
 `plugins.hook_callback_timeout`, so the callback catches every error and bounds
 the guard at 10 s. Hermes spawns whenever `delegate_task`'s action, trimmed and
-lowercased, is empty or `spawn`; the guard reads it the same way.
+lowercased, is empty or `spawn`; the guard reads it the same way. Hermes has no
+native agents and `delegate_task` takes no model: every delegate runs on
+`delegation.model`, or on the parent when that is unset. When it is priced over
+the parent, the block says to do the work in the current session or to have
+the user lower or unset `delegation.model`.
 
 OpenCode executes the `args` object it passes to `tool.execute.before`, so a
 correction edits that object in place, and one that cannot be applied blocks the
