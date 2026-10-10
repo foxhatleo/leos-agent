@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { register } from '../../hooks/claude-spawn.js';
@@ -33,6 +33,29 @@ const deepFreeze = (value) => {
 const preToolUseCommands = () => JSON.parse(readFileSync(join(root, 'hooks/hooks.json'), 'utf8')).hooks.PreToolUse
   .filter((entry) => new RegExp(`^(?:${entry.matcher})$`).test('Agent'))
   .flatMap((entry) => entry.hooks.map((hook) => hook.command));
+
+// Each agent definition's `model` as Claude Code 2.1.296 has it: Explore and
+// Plan are built in as `inherit`, general-purpose and claude name none, and the
+// leo tiers carry theirs in frontmatter.
+const DEFINED = { Explore: 'inherit', Plan: 'inherit' };
+for (const file of readdirSync(join(root, 'agents')).filter((name) => name.endsWith('.md'))) {
+  const model = /^model:\s*(\S+)/m.exec(readFileSync(join(root, 'agents', file), 'utf8'))?.[1];
+  if (model) DEFINED[`leos-agent:${file.slice(0, -3)}`] = model;
+}
+
+/**
+ * The model a spawn settles on, in Claude Code 2.1.296's order: the spawn's own
+ * model, then the definition's, then CLAUDE_CODE_SUBAGENT_MODEL (trimmed; empty
+ * or `inherit` is unset), then the parent. With CLAUDE_CODE_SUBAGENT_MODEL_FORCE
+ * on, the setting, or else the parent, replaces the first two.
+ */
+function childModel(input, env) {
+  const setting = env.CLAUDE_CODE_SUBAGENT_MODEL?.trim();
+  const fallback = setting && setting !== 'inherit' ? setting : input.parentModel;
+  if (['1', 'true', 'yes', 'on'].includes(env.CLAUDE_CODE_SUBAGENT_MODEL_FORCE?.trim().toLowerCase())) return fallback;
+  const chosen = input.model ?? DEFINED[input.subagentType];
+  return chosen === 'inherit' ? input.parentModel : chosen ?? fallback;
+}
 
 let counter = 0;
 
@@ -94,7 +117,7 @@ function claudeCode({ env = {}, loadMod = true, root: pluginRoot = root, run, ve
   // The bottom of agent.spawn: pinned fields must arrive as raised.
   const spawnWith = (raised, origin = engine) => chain('agent.spawn', raised, async (input) => {
     for (const key of PINNED) assert.deepEqual(input[key], raised[key], `pinned ${key} was rewritten`);
-    return { model: input.model ?? raised.parentModel, agentId: `a${counter}` };
+    return { model: childModel(input, processEnv), agentId: `a${counter}` };
   }, origin).then((result) => (result.deny ? { refused: result.deny, by: 'agent.spawn' } : { child: result.model }));
 
   return {
@@ -271,6 +294,34 @@ test('an unavailable or broken guard fails open with a debug line and no row', a
     assert.equal(cc.debug.length, 1);
     assert.equal(cc.debug[0].options?.to, 'debug');
     assert.equal(cc.rows().length, 0);
+  }
+});
+
+test('an unforced CLAUDE_CODE_SUBAGENT_MODEL runs agents that name no model, capped at the parent', async () => {
+  const cases = [
+    // The setting, the model's Agent call, the parent, the model the child runs on, the row's reason.
+    ['haiku', { subagent_type: 'general-purpose', prompt: 'List the files' }, 'claude-opus-5-5', 'haiku', 'subagent-model-setting'],
+    ['haiku', { prompt: 'List the files' }, 'claude-opus-5-5', 'haiku', 'subagent-model-setting'],
+    ['opus', { subagent_type: 'general-purpose', prompt: 'Review the diff' }, 'claude-sonnet-5', 'sonnet', 'over-ceiling'],
+    ['opus', { subagent_type: 'claude', prompt: 'Review the diff' }, 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
+      'sonnet', 'over-ceiling'],
+    // A definition outranks the setting: Explore inherits, so it gets the standard tier.
+    ['haiku', { subagent_type: 'Explore', prompt: 'Find the parser' }, 'claude-opus-5-5', 'sonnet', 'explicit-tier-default'],
+    ['opus', { subagent_type: 'leos-agent:leo-cheap', prompt: 'Rename a symbol' }, 'claude-sonnet-5', 'haiku',
+      'explicit-tier-default'],
+  ];
+  for (const [setting, input, parentModel, child, reason] of cases) {
+    // A settings file's env is in the Claude Code process environment, which
+    // both the command hooks and the mod's process.run inherit.
+    const env = { CLAUDE_CODE_SUBAGENT_MODEL: setting };
+    const modded = claudeCode({ env });
+    await modded.start();
+    for (const cc of [modded, claudeCode({ env, loadMod: false })]) {
+      const label = `${setting}: ${JSON.stringify(input)} under ${parentModel}${cc === modded ? ' via agent.spawn' : ''}`;
+      assert.deepEqual(await cc.agentCall(input, { parentModel }), { child }, label);
+      assert.deepEqual(cc.rows().map((row) => row.reason), [reason], label);
+    }
+    assert.equal(modded.runs.length, 1);
   }
 });
 

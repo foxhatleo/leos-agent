@@ -77,7 +77,9 @@ Prices come from the public [OpenRouter model catalog](https://openrouter.ai/doc
 including Claude, GPT, DeepSeek, Kimi, GLM, and Qwen families. Exact IDs and
 recognized aliases are preferred. Nearby versions of the same variant can use
 an explicitly labeled estimate; sizes, cheap/pro variants, and free endpoints
-are not conflated. A price alias never changes the identifier sent to a harness.
+are not conflated. Claude's Amazon Bedrock and Google Cloud Agent Platform
+(Vertex AI) IDs take the first-party model's price, so the ceiling also holds
+under those parents. A price alias never changes the identifier sent to a harness.
 Public prices do not establish account access, model availability, negotiated
 rates, or subscription-credit accounting.
 
@@ -300,6 +302,13 @@ python3 scripts/leo-install.py <harness>
 `model` and optional `effort`. Legacy `runner`/`executor` keys remain readable.
 Unknown model identifiers are retained and diagnosed, not silently corrected
 to a different dispatch ID. Parent-level always means the current parent.
+
+On Claude Code, `CLAUDE_CODE_SUBAGENT_MODEL` keeps its native role as a default.
+A general-purpose or claude dispatch that names no model runs on it instead of
+the standard tier, capped at the parent's price; the leo tiers, and Explore and
+Plan (defined as `inherit`), keep their own model. With
+`CLAUDE_CODE_SUBAGENT_MODEL_FORCE` on, the setting replaces every tier, and the
+guard only blocks a forced model priced above the parent.
 
 Guard modes are `LEOS_AGENT_DISPATCH_GUARD=on` (default), `warn` (log proposed
 corrections/blocks), and `off`; `0`, `false`, `no`, and `disabled` also mean

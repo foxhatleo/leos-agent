@@ -50,7 +50,10 @@ class Sandboxed(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, env)
         patcher.start()
         self.addCleanup(patcher.stop)
-        os.environ.pop("LEOS_AGENT_HARNESS", None)
+        # The guard honours Claude's subagent-model settings, which a gate run
+        # inside a session can inherit.
+        for name in ("LEOS_AGENT_HARNESS", "CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL_FORCE"):
+            os.environ.pop(name, None)
         self.guard = load("dispatch_guard_enforcement", "scripts/dispatch_guard.py")
         self.catalog = json.loads(pricing.BUNDLED.read_text())
 
