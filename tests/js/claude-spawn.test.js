@@ -66,10 +66,15 @@ let counter = 0;
  * refuses the call), then raises agent.spawn with the deeply frozen input
  * below, and the child runs on whatever model agent.spawn settled.
  */
-function claudeCode({ env = {}, loadMod = true, root: pluginRoot = root, run, version = '2.1.296' } = {}) {
+function claudeCode({ env = {}, loadMod = true, root: pluginRoot = root, run, version = '2.1.296', prices } = {}) {
   const storage = join(sandbox, `data-${++counter}`);
   const work = join(sandbox, `work-${counter}`);
   mkdirSync(work, { recursive: true });
+  if (prices) {
+    // The price cache the guard reads before the bundled catalog.
+    mkdirSync(storage, { recursive: true });
+    writeFileSync(join(storage, 'model-prices.json'), JSON.stringify(prices));
+  }
   const processEnv = { ...baseEnv, LEOS_AGENT_LOCAL_PATH: storage, ...env };
   const hooks = {};
   const debug = [];
@@ -320,6 +325,31 @@ test('an unforced CLAUDE_CODE_SUBAGENT_MODEL runs agents that name no model, cap
       const label = `${setting}: ${JSON.stringify(input)} under ${parentModel}${cc === modded ? ' via agent.spawn' : ''}`;
       assert.deepEqual(await cc.agentCall(input, { parentModel }), { child }, label);
       assert.deepEqual(cc.rows().map((row) => row.reason), [reason], label);
+    }
+    assert.equal(modded.runs.length, 1);
+  }
+});
+
+test('under a parent with no alias an over-ceiling model is dropped, so an inheriting agent runs on the parent', async () => {
+  // A priced Claude parent whose ID names no family: Agent has no alias to cap at.
+  const bundled = JSON.parse(readFileSync(join(root, 'payload/model-prices.json'), 'utf8'));
+  const prices = { ...bundled, models: [...bundled.models,
+    { id: 'anthropic/claude-mythos-preview', pricing: { prompt: '0.000001', completion: '0.000005' } }] };
+  const parentModel = 'claude-mythos-preview';
+  const cases = [
+    // leo-lens is defined as `inherit`; dropping its model keeps it read-only, where
+    // the guard once refused it and pointed at the writable leo-parent.
+    [{ subagent_type: 'leos-agent:leo-lens', model: 'opus', prompt: 'Lens: the auth paths' }, 'over-ceiling'],
+    [{ subagent_type: 'leos-agent:leo-lens', prompt: 'Lens: the auth paths' }, 'inherits-parent'],
+    [{ subagent_type: 'general-purpose', model: 'opus', prompt: 'Investigate' }, 'over-ceiling'],
+  ];
+  for (const [input, reason] of cases) {
+    const modded = claudeCode({ prices });
+    await modded.start();
+    for (const cc of [modded, claudeCode({ prices, loadMod: false })]) {
+      const label = `${JSON.stringify(input)}${cc === modded ? ' via agent.spawn' : ''}`;
+      assert.deepEqual(await cc.agentCall(input, { parentModel }), { child: parentModel }, label);
+      assert.deepEqual(cc.rows().map((row) => [row.reason, row.agent]), [[reason, input.subagent_type]], label);
     }
     assert.equal(modded.runs.length, 1);
   }

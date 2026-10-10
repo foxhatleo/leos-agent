@@ -4,8 +4,8 @@
  * Thin adapter. scripts/dispatch_guard.py --json makes the decision
  * (routing_engine.route()) and writes the one dispatch row; this file maps
  * the event, applies the answer, and fails open. No network, no model call,
- * and it never grants tool permission: it only sets the child's model or
- * refuses the spawn.
+ * and it never grants tool permission: it only sets or clears the child's
+ * model, or refuses the spawn.
  *
  * Precedence with the PreToolUse command guard: session.start sets
  * LEOS_AGENT_CLAUDE_SPAWN_MOD to this plugin's root in the Claude Code process.
@@ -53,11 +53,19 @@ export function blockText(result) {
   return `[leo routing] BLOCKED: ${result?.reason ?? 'model choice required'}. ${result?.retry ?? DEFAULT_RETRY}`;
 }
 
-/** One guard decision as the engine takes it: `{ deny }`, `{ model }`, or `{}` to leave the spawn alone. */
+/**
+ * One guard decision as the engine takes it: `{ deny }`, `{ model }`, or `{}` to leave the spawn alone.
+ * `{ model: undefined }` drops the call's model, as the command guard's updatedInput does when the
+ * parent has no alias to cap at: the agent's definition then decides, and an inheriting one runs on
+ * the parent.
+ */
 export function answerFor(e, result) {
   if (result?.action === 'block') return { deny: blockText(result) };
-  const model = result?.action === 'correct' ? result.updated_input?.model : undefined;
+  const updated = result?.action === 'correct' ? result.updated_input : undefined;
+  if (!updated || typeof updated !== 'object') return {};
+  const { model } = updated;
   if (typeof model === 'string' && model && model !== e.model) return { model };
+  if (model === undefined && e.model !== undefined) return { model: undefined };
   return {};
 }
 
@@ -109,6 +117,6 @@ export const register = (on) => {
       $.ui.log(`routing bridge failed; spawn allowed without a price check: ${error?.message ?? error}`, { to: 'debug' });
     }
     if (answer.deny) return { deny: answer.deny };
-    return next(answer.model ? { ...e, model: answer.model } : e);
+    return next(Object.hasOwn(answer, 'model') ? { ...e, model: answer.model } : e);
   });
 };

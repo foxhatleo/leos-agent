@@ -38,7 +38,10 @@ Claude Code removes its Edit, Write and Agent tools, and the reviewer sets its
 cheap or standard tier with the dispatch's `model`. OpenCode denies it `edit`
 and `task` and Cursor marks it `readonly`; there and on Codex it is a
 standard-tier profile, and a cheap lens uses `leo-cheap`. A Codex lens runs in
-the session's own sandbox. Bash stays available for reading the PR. Ordinary
+the session's own sandbox. The price guard never moves a lens to another
+profile: where it cannot hold a lens within the reviewer's price, it refuses
+the lens and the reviewer reviews that area itself. Bash stays available for
+reading the PR. Ordinary
 workers do not delegate. Small reviews run locally, and larger reviews divide
 independent areas rather than requiring every lens to reread everything.
 

@@ -18,6 +18,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import pricing  # noqa: E402
 import routing_engine  # noqa: E402
 import session_models  # noqa: E402
 from test_dispatch_guard import GuardCase, dispatch_event  # noqa: E402
@@ -234,6 +235,48 @@ class TestSubagentModelSetting(ClaudeCase):
         code, _model, row = self.hook(self.with_parent(dispatch_event(), "claude-sonnet-5-5"),
                                       CLAUDE_CODE_SUBAGENT_MODEL="opus", CLAUDE_CODE_SUBAGENT_MODEL_FORCE="1")
         self.assertEqual((code, row["reason"]), (2, "forced-model-over-ceiling"))
+
+
+class TestLensUnderAnAliaslessParent(ClaudeCase):
+    """A parent whose ID names no family has no Agent alias to cap a child at.
+    leo-lens inherits in its definition, so the hook sends it without `model`
+    and it runs on the parent, rather than refusing it with advice to use the
+    writable leo-parent."""
+
+    def setUp(self):
+        super().setUp()
+        catalog = json.loads(pricing.BUNDLED.read_text(encoding="utf-8"))
+        priced = pricing.snapshot({"data": catalog["models"] + [
+            {"id": "anthropic/claude-mythos-preview", "pricing": {"prompt": "0.000001", "completion": "0.000005"}}]})
+        (self.data / "model-prices.json").write_text(json.dumps(priced), encoding="utf-8")
+
+    def lens(self, model=None, parent="claude-mythos-preview"):
+        return self.with_parent(dispatch_event(agent="leos-agent:leo-lens", prompt="Lens: the auth paths", model=model),
+                                parent)
+
+    def test_an_over_ceiling_lens_model_is_dropped_whatever_the_setting(self):
+        for setting in ({}, {"CLAUDE_CODE_SUBAGENT_MODEL": "opus"}):
+            with self.subTest(setting=setting):
+                code, out, err = self.run_cli(self.lens("opus"), **setting)
+                self.assertEqual((code, err), (0, ""))
+                sent = json.loads(out)["hookSpecificOutput"]["updatedInput"]
+                self.assertEqual(sent, {"subagent_type": "leos-agent:leo-lens", "prompt": "Lens: the auth paths"})
+                row = self.log_lines()[-1]
+                self.assertEqual((row["decision"], row["reason"], row["effective_model"]),
+                                 ("correct", "over-ceiling", "claude-mythos-preview"))
+                # Named no model, the over-ceiling standard fill is skipped.
+                self.assertEqual(self.run_cli(self.lens(), **setting), (0, "", ""))
+                self.assertEqual(self.log_lines()[-1]["reason"], "inherits-parent")
+
+    def test_a_forced_setting_over_the_parent_never_points_a_lens_at_leo_parent(self):
+        code, out, err = self.run_cli(self.lens(parent="claude-sonnet-5-5"),
+                                      CLAUDE_CODE_SUBAGENT_MODEL="opus", CLAUDE_CODE_SUBAGENT_MODEL_FORCE="1")
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("forced-model-over-ceiling", err)
+        self.assertNotIn("leo-parent", err)
+        code, out, _err = self.run_cli(self.lens("opus"), CLAUDE_CODE_SUBAGENT_MODEL="haiku",
+                                       CLAUDE_CODE_SUBAGENT_MODEL_FORCE="1")
+        self.assertEqual((code, out, self.log_lines()[-1]["reason"]), (0, "", "forced-model-setting"))
 
 
 class TestErrorRows(ClaudeCase):
