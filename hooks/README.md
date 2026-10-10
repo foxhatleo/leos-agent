@@ -136,8 +136,9 @@ without a cross-region prefix) and Agent Platform (Vertex AI) IDs
 first-party ID. When the parent's ID names no family, an inheriting agent
 gets no `model` and so runs on the parent. It fills a missing model only for
 built-in agents that would inherit (general-purpose, claude, Explore, Plan) and
-for the cheap, standard, and premium leo tiers. leo-parent and forks run on the
-parent; other plugins' agents keep their own model.
+for the cheap, standard, and premium leo tiers; leo-lens, whose definition
+inherits, gets the standard tier when the reviewer names no model. leo-parent
+and forks run on the parent; other plugins' agents keep their own model.
 
 Claude Code takes a child's model from the call's `model`, then the agent
 definition, then `CLAUDE_CODE_SUBAGENT_MODEL`, then the parent. The guard reads

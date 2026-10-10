@@ -78,7 +78,7 @@ OPENCODE_COMMANDS = ("review-pr", "handoff", "handon")
 # Codex plugins cannot package custom agent definitions directly, so these are
 # copied into ~/.codex/agents. Keep this tuple authoritative: check.py and the
 # installer tests derive the expected payload from it.
-CODEX_AGENTS = ("leo-cheap", "leo-standard", "leo-premium", "leo-parent", "leo-reviewer")
+CODEX_AGENTS = ("leo-cheap", "leo-standard", "leo-premium", "leo-parent", "leo-reviewer", "leo-lens")
 
 # Profiles earlier releases installed and this one no longer ships. Their copies
 # are taken back on receipt or full-content evidence only, and their sources may
@@ -733,6 +733,10 @@ def native_agent(root, name, harness, config):
 	_, frontmatter, body = text.split("---", 2)
 	description = re.search(r"(?m)^description: (.+)$", frontmatter).group(1)
 	model = agent_model(name, harness, config)
+	# A Claude profile that denies Edit and Write (leo-lens) is read-only; render
+	# that with each harness's own control rather than as prose alone.
+	denied = re.search(r"(?m)^disallowedTools:(.*)$", frontmatter)
+	read_only = bool(denied) and {"Edit", "Write"} <= {tool.strip() for tool in denied.group(1).split(",")}
 	fields = "---\n# Managed by leos-agent.\nname: " + name + "\ndescription: " + json.dumps(description) + "\n"
 	if harness == "opencode":
 		fields += "mode: subagent\n"
@@ -746,6 +750,11 @@ def native_agent(root, name, harness, config):
 		# never delegate, and OpenCode can enforce that per agent.
 		if name != "leo-reviewer":
 			fields += "permission:\n  task: deny\n"
+			# OpenCode's edit permission covers its edit, write and apply_patch tools.
+			if read_only:
+				fields += "  edit: deny\n"
+	elif harness == "cursor" and read_only:
+		fields += "readonly: true\n"
 	# Omit the key rather than inventing a value. "inherit" is Claude Code's
 	# frontmatter, not a model identifier Cursor would resolve, and writing it
 	# claimed a routing decision no harness was making. Unconfigured now means the

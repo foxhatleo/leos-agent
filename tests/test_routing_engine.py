@@ -96,6 +96,17 @@ class RoutingEngine(unittest.TestCase):
         capped = self.route("codex", {"agent_type": "leo-premium", "model": "gpt-6.1-sol"}, "gpt-6.1-sol")
         self.assertEqual(capped["action"], "allow")
 
+    def test_a_codex_lens_is_held_to_the_standard_tier(self):
+        # Codex layers the leo-lens role after the spawn's model, and the guard
+        # holds the profile to its tier, so a cheap lens there is leo-cheap.
+        cheap = self.route("codex", {"agent_type": "leo-lens", "model": "gpt-6-luna", "message": "x"}, "gpt-6-astra")
+        self.assertEqual((cheap["action"], cheap["reason"]), ("block", "tier-selection-required"))
+        self.assertIn("gpt-6.1-sol", cheap["retry"])
+        standard = self.route("codex", {"agent_type": "leo-lens", "model": "gpt-6.1-sol", "message": "x"}, "gpt-6-astra")
+        self.assertEqual(standard["action"], "allow")
+        as_cheap = self.route("codex", {"agent_type": "leo-cheap", "model": "gpt-6-luna", "message": "x"}, "gpt-6-astra")
+        self.assertEqual(as_cheap["action"], "allow")
+
     def test_only_owned_profiles_are_recognized(self):
         self.assertEqual(engine.tier_for("leos-agent:leo-runner"), "cheap")
         for name in ("leo-made-up", "other:leo-cheap", "path/leo-standard"):
@@ -171,6 +182,28 @@ class ClaudeModelOrder(unittest.TestCase):
         pinned = self.route({"subagent_type": "leos-agent:leo-premium"}, "claude-mythos-preview", catalog=catalog)
         self.assertEqual(pinned["action"], "block")
         self.assertIn("leo-parent", pinned["retry"])
+
+    def test_a_lens_runs_at_the_tier_the_reviewer_names_within_its_price(self):
+        # leo-lens inherits in its definition, so the call's `model` is the
+        # tier; a sonnet reviewer dispatches lenses as procedure.md describes.
+        reviewer = "claude-sonnet-5-5"
+        for model in ("haiku", "sonnet"):
+            with self.subTest(model=model):
+                named = self.route({"subagent_type": "leos-agent:leo-lens", "model": model}, reviewer)
+                self.assertEqual((named["action"], named["reason"]), ("allow", "within-ceiling"))
+                self.assertEqual(named["effective_model"], model)
+                self.assertIsNone(named["updated_input"])
+        over = self.route({"subagent_type": "leos-agent:leo-lens", "model": "opus"}, reviewer)
+        self.assertEqual((over["action"], over["reason"]), ("correct", "over-ceiling"))
+        self.assertEqual(over["updated_input"]["model"], "sonnet")
+        # Without a model the guard names the configured standard tier rather
+        # than letting the definition inherit the reviewer's model.
+        unnamed = self.route({"subagent_type": "leos-agent:leo-lens"}, "claude-opus-5-5")
+        self.assertEqual((unnamed["action"], unnamed["reason"]), ("correct", "explicit-tier-default"))
+        self.assertEqual(unnamed["updated_input"]["model"], "sonnet")
+        configured = self.route({"subagent_type": "leos-agent:leo-lens"}, "claude-opus-5-5",
+                                config={"claude": {"standard": {"model": "haiku", "effort": None}}})
+        self.assertEqual(configured["updated_input"]["model"], "haiku")
 
     def test_a_fork_runs_on_the_parent_and_is_never_corrected(self):
         for args in ({"subagent_type": "fork"}, {"subagent_type": "fork", "model": "opus"}):

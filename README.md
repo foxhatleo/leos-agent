@@ -26,16 +26,21 @@ a cheaper model while preserving quality.
 | Premium | Difficult diagnosis, cross-module design, complex implementation, consequential review | Opus | GPT-6 Astra |
 | Parent-level | Exceptional work beyond premium capability that justifies delegation | Current parent | Current parent |
 
-Native profiles are `leo-cheap`, `leo-standard`, `leo-premium`, `leo-parent`, and
-`leo-reviewer`. The retired `leo-runner` and `leo-executor` profiles are gone,
-but the guard and logs still map those names to cheap and standard, and routing
-config still accepts its `runner` and `executor` keys. Worker profiles cap their
-turns on Claude Code, where a capped run returns its output marked partial, and
-on OpenCode as `steps`, past which the worker loses its tools and answers in
-text. The Codex and Cursor profiles carry no turn cap. Review
-may use nested read-only lenses; ordinary workers do not delegate. Small
-reviews run locally, and larger reviews divide independent areas rather than
-requiring every lens to reread everything.
+Native profiles are `leo-cheap`, `leo-standard`, `leo-premium`, `leo-parent`,
+`leo-reviewer`, and `leo-lens`. The retired `leo-runner` and `leo-executor`
+profiles are gone, but the guard and logs still map those names to cheap and
+standard, and routing config still accepts its `runner` and `executor` keys.
+Worker profiles cap their turns on Claude Code, where a capped run returns its
+output marked partial, and on OpenCode as `steps`, past which the worker loses
+its tools and answers in text. The Codex and Cursor profiles carry no turn cap.
+Review may use nested lenses through `leo-lens`, the read-only lens profile.
+Claude Code removes its Edit, Write and Agent tools, and the reviewer sets its
+cheap or standard tier with the dispatch's `model`. OpenCode denies it `edit`
+and `task` and Cursor marks it `readonly`; there and on Codex it is a
+standard-tier profile, and a cheap lens uses `leo-cheap`. A Codex lens runs in
+the session's own sandbox. Bash stays available for reading the PR. Ordinary
+workers do not delegate. Small reviews run locally, and larger reviews divide
+independent areas rather than requiring every lens to reread everything.
 
 Delegation is decided by decomposition, not by guessing at size. A step is
 delegated when it is independent of the parent's next step or when its tool

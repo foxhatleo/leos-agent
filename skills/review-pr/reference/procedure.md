@@ -136,16 +136,25 @@ a violation only when the finding quotes the exact rule it breaks. Rules about
 style are `nit:`; rules about behaviour are ordinary findings. For a large PR
 this can be a lens of its own; otherwise fold it into an area.
 
-Standard-tier lenses handle diagnosis and design. Cheap-tier lenses suit
-bounded factual checks with a clear answer, not blanket safety judgments.
-Every child is capped to its parent's known price; use parent-level only for
-complexity that warrants it. If nesting or model control is unavailable, do
-sequential work and report the limitation honestly.
+Lenses run as the read-only `leo-lens` profile. Standard-tier lenses handle
+diagnosis and design. Cheap-tier lenses suit bounded factual checks with a
+clear answer, not blanket safety judgments. Every child is capped to its
+parent's known price; use parent-level only for complexity that warrants it.
+If nesting or model control is unavailable, do sequential work and report the
+limitation honestly. If the guard refuses a lens, review that area yourself
+rather than retrying it on a writable profile.
 
-On Claude, name the lens's agent type (for example `leos-agent:leo-standard`),
-never `fork`, and collect every lens result before staging. Where the Agent
-tool offers `run_in_background`, pass `false`. Where it does not, fork mode is
-on: lenses run in the background and Claude Code holds you open until each
+On Claude, dispatch `leos-agent:leo-lens`, never `fork`, and set its tier with
+`model`: the cheap or standard model that
+`python3 "<plugin-root>/scripts/routing.py" render --harness claude` prints.
+Its tools exclude Edit, Write and Agent. On Codex, OpenCode and Cursor,
+`leo-lens` carries the standard tier; a cheap-tier lens there is `leo-cheap`,
+briefed with the same read-only rules. Without `leo-lens` (Hermes, Pi), the
+brief alone carries them.
+
+Collect every lens result before staging. On Claude, where the Agent tool
+offers `run_in_background`, pass `false`. Where it does not, fork mode is on:
+lenses run in the background and Claude Code holds you open until each
 reports, so keep working, then wait for every completion notice. Fork mode
 forced on in a `-p` or SDK run (`CLAUDE_CODE_FORK_SUBAGENT=1`) does not hold
 you; there, review those areas sequentially. Never return while a lens is

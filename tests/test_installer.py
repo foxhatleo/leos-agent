@@ -858,6 +858,19 @@ class TestOpenCodeRoutingRule(InstallerCase):
                 else:
                     self.assertIn("\npermission:\n  task: deny\n", frontmatter)
 
+    def test_only_the_review_lens_is_denied_edits(self):
+        """OpenCode hides its edit, write and apply_patch tools under
+        permission.edit deny. The lens keeps bash for its gh and git reads."""
+        self.assertClean(self.run_harness("opencode"), "install")
+        for name in self.installer.CODEX_AGENTS:
+            frontmatter = (self.cfg("opencode") / "agents" / f"{name}.md").read_text().split("---", 2)[1]
+            with self.subTest(agent=name):
+                self.assertNotIn("bash:", frontmatter)
+                if name == "leo-lens":
+                    self.assertIn("\npermission:\n  task: deny\n  edit: deny\n", frontmatter)
+                else:
+                    self.assertNotIn("edit:", frontmatter)
+
     def test_config_points_to_exactly_one_rendered_policy(self):
         self.run_harness("opencode", config=self.CONFIG)
         cfg = json.loads((self.cfg("opencode") / "opencode.json").read_text())
@@ -909,6 +922,36 @@ class TestCursorRoutingRule(InstallerCase):
         self.assertIn("do not spawn further agents", worker.lower())
         reviewer = (self.cfg("cursor") / "agents/leo-reviewer.md").read_text()
         self.assertIn("delegate bounded specialist lenses", reviewer)
+
+    def test_the_review_lens_is_marked_readonly_and_round_trips(self):
+        """`readonly: true` is the agent frontmatter Cursor's own plugin
+        templates use; no other profile gets it."""
+        self.write_config('{"cursor": {"standard": "provider/standard-model"}}')
+        self.assertClean(self.run_harness("cursor"), "install")
+        lens = self.cfg("cursor") / "agents/leo-lens.md"
+        fields = lens.read_text().split("---", 2)[1]
+        self.assertIn("\nreadonly: true\n", fields)
+        self.assertIn('\nmodel: "provider/standard-model"\n', fields)
+        for name in self.installer.CODEX_AGENTS:
+            if name != "leo-lens":
+                with self.subTest(agent=name):
+                    self.assertNotIn("readonly", (self.cfg("cursor") / f"agents/{name}.md").read_text().split("---", 2)[1])
+        self.assertFalse(any(r.changed for r in self.run_harness("cursor")))
+        self.assertClean(self.run_harness("cursor", uninstall=True), "uninstall")
+        self.assertFalse(lens.exists())
+
+    def test_a_users_own_leo_lens_is_never_taken_over(self):
+        lens = self.cfg("cursor") / "agents/leo-lens.md"
+        lens.parent.mkdir(parents=True)
+        mine = "---\nname: leo-lens\ndescription: my lens\n---\nmine\n"
+        lens.write_text(mine)
+        results = self.by_target(self.run_harness("cursor"))
+        self.assertEqual(results[self.label(lens)].status, "conflict")
+        # The transaction writes nothing until the user moves their file.
+        self.assertFalse((self.cfg("cursor") / "agents/leo-cheap.md").exists())
+        self.assertEqual(lens.read_text(), mine)
+        self.assertEqual(self.by_target(self.run_harness("cursor", uninstall=True))[self.label(lens)].status, "preserved")
+        self.assertEqual(lens.read_text(), mine)
 
     def test_configured_profiles_round_trip_and_keep_provider_identifiers(self):
         self.write_config('{"cursor": {"runner": "provider/cheap-model"}}')

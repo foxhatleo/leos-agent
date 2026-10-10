@@ -58,6 +58,28 @@ class TestRouting(unittest.TestCase):
                 self.assertTrue({"Read", "Edit", "Write", "Bash"} <= tools)
                 self.assertNotIn("Agent", tools)
 
+    def test_the_review_lens_cannot_edit_or_delegate_and_takes_its_tier_from_the_dispatch(self):
+        # Claude Code resolves a subagent's model from the call's `model` first,
+        # then the definition; `inherit` keeps a lens dispatched without one at
+        # or below its caller. Read-only is the tool list, not the prompt.
+        fields = frontmatter_keys((ROOT / "agents" / "leo-lens.md").read_text(encoding="utf-8"))
+        self.assertEqual(fields["model"], "inherit")
+        self.assertEqual({t.strip() for t in fields["tools"].split(",")}, {"Read", "Grep", "Glob", "Bash"})
+        self.assertTrue({"Agent", "Edit", "Write"} <= {t.strip() for t in fields["disallowedTools"].split(",")})
+        self.assertRegex(fields.get("maxTurns", ""), r"^[1-9][0-9]*$")
+        # Codex applies a role after the spawn's model override, so a pinned
+        # model here would replace the tier the reviewer asked for.
+        text = (ROOT / "payload" / "codex-agents" / "leo-lens.toml").read_text(encoding="utf-8")
+        self.assertNotIn("model =", text)
+        self.assertNotIn("model_reasoning_effort =", text)
+        sys.path.insert(0, str(ROOT / "scripts"))
+        try:
+            import routing_engine
+        finally:
+            sys.path.pop(0)
+        self.assertEqual(routing_engine.tier_for("leos-agent:leo-lens"), "standard")
+        self.assertIsNone(routing_engine.tier_for("another-plugin:leo-lens"))
+
     def test_claude_workers_cap_turns_no_lower_than_the_tier_below(self):
         caps = []
         for name in WORKERS:

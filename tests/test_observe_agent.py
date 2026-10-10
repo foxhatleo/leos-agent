@@ -282,6 +282,14 @@ class ContractPrompt(unittest.TestCase):
         self.assertEqual(self.run_hook(self.stop(active=True), "claude"), {})
         self.assertEqual([(r["outcome"], r["agent"]) for r in self.rows()], [("unknown", "leos-agent:leo-cheap")])
 
+    def test_a_lens_report_is_held_to_the_worker_contract(self):
+        report = json.dumps({"status": "done", "covered_paths": ["src/a.py"], "gaps": [], "findings": []})
+        lens = "leos-agent:leo-lens"
+        self.assertIsNotNone(observe_agent.observe(self.stop(text=report, agent=lens), "claude"))
+        closed = report + "\nResult: done\nVerified: ghreview.py extract at the pinned SHA"
+        self.assertIsNone(observe_agent.observe(self.stop(text=closed, agent=lens), "claude"))
+        self.assertEqual([(r["agent"], r["outcome"]) for r in self.rows()], [(lens, "done")])
+
     def test_codex_gets_its_block_decision(self):
         reply = self.run_hook(self.stop(agent="leo-standard"), "codex")
         self.assertEqual(reply["decision"], "block")

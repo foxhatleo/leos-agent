@@ -27,7 +27,7 @@ The repo root *is* the plugin. Six manifests sit side by side over one tree:
 |---|---|
 | `rules/preferences.md` | The always-loaded policy. Cursor reads it raw as an always-apply rule; every other harness renders it live through `scripts/emit_payload.py` or a native hook. |
 | `skills/` | Portable skills. `skills-claude/` holds the two Claude-only ones. `reference/` subdirectories hold deferred procedure text. |
-| `agents/` | Claude Code agent profiles (`leo-cheap`, `leo-standard`, `leo-premium`, `leo-parent`, `leo-reviewer`). The retired `leo-runner`/`leo-executor` names have no profile but still map to cheap/standard in routing code. |
+| `agents/` | Claude Code agent profiles (`leo-cheap`, `leo-standard`, `leo-premium`, `leo-parent`, `leo-reviewer`, and the read-only review lens `leo-lens`, whose tier comes from the dispatch's `model`). The retired `leo-runner`/`leo-executor` names have no profile but still map to cheap/standard in routing code. |
 | `payload/` | Codex agent TOMLs, the bundled price catalog, legacy-copy hashes. |
 | `hooks/` | Native hook manifests per harness. Scripts they call live in `scripts/` so npm installs ship them. |
 | `scripts/` | Installer, guard, routing engine, diagnostics, release tooling. Stdlib-only Python, Python 3.9 floor. |
@@ -198,7 +198,8 @@ The policy in `rules/preferences.md` applies to work on this repo too.
 - **Codex** uses native `/hooks` trust for changed hook definitions; do not
   bypass it or assume enabling a plugin approves hooks. Batch related releases.
   `spawn_agent` selects the model by `model` and `reasoning_effort`; `agent_type`,
-  offered once roles exist, layers its role config after them. Multi-agent v2
+  offered once roles exist, layers its role config after them. A role cannot
+  set `sandbox_mode`: a child keeps its parent's sandbox. Multi-agent v2
   hooks name the tool `collaborationspawn_agent`. Use `fork_turns="none"` for fresh
   context. Customized profiles can override spawn selection. Encrypted or absent
   rollout briefs are unavailable data, not zero-length work.
