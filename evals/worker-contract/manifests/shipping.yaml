@@ -1,0 +1,4 @@
+name: shipping
+owner: logistics
+tier: 3
+oncall: "#shipping-oncall"

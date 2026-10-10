@@ -1,0 +1,9 @@
+# Service limits for recommendations, reviewed quarterly.
+
+[service]
+name = "recommendations"
+owner = "ml"
+
+[limits]
+timeout_ms = 3500
+retries = 2

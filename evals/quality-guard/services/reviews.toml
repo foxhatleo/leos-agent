@@ -1,0 +1,9 @@
+# Service limits for reviews, reviewed quarterly.
+
+[service]
+name = "reviews"
+owner = "content"
+
+[limits]
+timeout_ms = 900
+retries = 2

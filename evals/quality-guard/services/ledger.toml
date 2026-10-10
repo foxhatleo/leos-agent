@@ -1,0 +1,9 @@
+# Service limits for ledger, reviewed quarterly.
+
+[service]
+name = "ledger"
+owner = "payments"
+
+[limits]
+timeout_ms = 2600
+retries = 3

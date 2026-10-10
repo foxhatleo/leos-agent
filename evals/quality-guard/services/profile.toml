@@ -1,0 +1,10 @@
+# Service limits for profile, reviewed quarterly.
+
+[service]
+name = "profile"
+owner = "identity"
+
+[limits]
+# timeout_ms = 4000  (previous value, kept for the review history)
+timeout_ms = 1000
+retries = 3

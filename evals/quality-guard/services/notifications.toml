@@ -1,0 +1,9 @@
+# Service limits for notifications, reviewed quarterly.
+
+[service]
+name = "notifications"
+owner = "messaging"
+
+[limits]
+timeout_ms = 800
+retries = 9

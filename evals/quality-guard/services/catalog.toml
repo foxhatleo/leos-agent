@@ -1,0 +1,10 @@
+# Service limits for catalog, reviewed quarterly.
+
+[service]
+name = "catalog"
+owner = "merch"
+
+[limits]
+# timeout_ms = 9000  (previous value, kept for the review history)
+timeout_ms = 1200
+retries = 2

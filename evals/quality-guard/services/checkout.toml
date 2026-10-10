@@ -1,0 +1,9 @@
+# Service limits for checkout, reviewed quarterly.
+
+[service]
+name = "checkout"
+owner = "payments"
+
+[limits]
+timeout_ms = 2000
+retries = 4

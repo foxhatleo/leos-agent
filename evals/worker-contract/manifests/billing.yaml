@@ -1,0 +1,4 @@
+name: billing
+owner: payments-team
+tier: 2
+oncall: "#billing-oncall"

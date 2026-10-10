@@ -1,0 +1,9 @@
+# Service limits for auth, reviewed quarterly.
+
+[service]
+name = "auth"
+owner = "identity"
+
+[limits]
+timeout_ms = 2500
+retries = 3

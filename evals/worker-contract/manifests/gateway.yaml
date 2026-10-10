@@ -1,0 +1,4 @@
+name: gateway
+owner: edge-team
+tier: 2
+oncall: "#gateway-oncall"

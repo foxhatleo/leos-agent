@@ -1,0 +1,4 @@
+name: ledger
+owner: payments-team
+tier: 1
+oncall: "#ledger-oncall"

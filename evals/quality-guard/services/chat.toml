@@ -1,0 +1,9 @@
+# Service limits for chat, reviewed quarterly.
+
+[service]
+name = "chat"
+owner = "messaging"
+
+[limits]
+timeout_ms = 4000
+retries = 2

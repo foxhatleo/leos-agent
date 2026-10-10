@@ -1,0 +1,9 @@
+# Service limits for sessions, reviewed quarterly.
+
+[service]
+name = "sessions"
+owner = "identity"
+
+[limits]
+timeout_ms = 600
+retries = 4
