@@ -17,6 +17,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import settings_probe  # noqa: E402
 
 TOKEN_KEYS = ("input", "cache_read", "cache_write", "output")
 # Rows a harness writes for its own bookkeeping, not a model anyone is billed
@@ -28,18 +29,38 @@ INTERNAL_MODELS = frozenset(("<synthetic>",))
 # transcripts. Both appear in one history, so both are counted.
 DISPATCH_TOOLS = ("Agent", "Task")
 
-HOME = os.path.expanduser("~")
-SOURCES = {
-    "claude": os.path.join(os.environ.get("CLAUDE_CONFIG_DIR", os.path.join(HOME, ".claude")), "projects"),
-    "codex": os.path.join(os.environ.get("CODEX_HOME", os.path.join(HOME, ".codex")), "sessions"),
-    "opencode": os.path.join(os.environ.get("XDG_DATA_HOME", os.path.join(HOME, ".local", "share")), "opencode", "opencode.db"),
-    "cursor": os.path.join(HOME, ".cursor"),
-    "hermes": os.path.join(HOME, ".hermes"),
-    "pi": os.path.join(HOME, ".pi", "agent", "sessions"),
-}
+def source_paths(env=None, home=None):
+    """Where each harness keeps local history, under the installer's config
+    directory overrides and defaults (HERMES_HOME, PI_CODING_AGENT_DIR, ...)."""
+    env = os.environ if env is None else env
+    home = home or os.path.expanduser("~")
+
+    def config(harness):
+        return settings_probe.config_dir(harness, env, home)
+
+    data = os.path.expanduser(env.get("XDG_DATA_HOME") or os.path.join(home, ".local", "share"))
+    return {
+        "claude": os.path.join(config("claude"), "projects"),
+        "codex": os.path.join(config("codex"), "sessions"),
+        # OpenCode joins a relative OPENCODE_DB under its data directory and
+        # uses an absolute one as is; ":memory:" leaves no file to read.
+        "opencode": os.path.join(data, "opencode", env.get("OPENCODE_DB") or "opencode.db"),
+        "cursor": config("cursor"),
+        "hermes": config("hermes"),
+        "pi": os.path.join(config("pi"), "sessions"),
+    }
+
+
+SOURCES = source_paths()
 
 DURATION_RE = re.compile(r"^(\d+)([hdw])$")
 _SECONDS = {"h": 3600, "d": 86400, "w": 604800}
+# Python 3.9's fromisoformat accepts only 3- or 6-digit fractions and a
+# colon-separated offset; 3.11+ accepts any precision, `+0000`, and `+00`.
+# Normalise to the common subset so a message counts the same on every
+# supported interpreter instead of dropping out of the window on 3.9.
+_STAMP_RE = re.compile(r"(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}(?::\d{2}(?::\d{2})?)?)(?:[.,](\d+))?(Z|[+-]\d{2}(?::?\d{2})?)?)?",
+                       re.IGNORECASE | re.ASCII)
 
 
 def parse_since(text):
@@ -52,8 +73,25 @@ def parse_since(text):
 def _iso_epoch(text):
     if not isinstance(text, str):
         return None
+    # Rebuild every stamp in the one shape all supported versions parse alike;
+    # a shape outside the pattern is unknown, not left to the interpreter.
+    match = _STAMP_RE.fullmatch(text.strip())
+    if not match:
+        return None
+    date, clock, fraction, offset = match.groups()
+    if fraction and clock.count(":") != 2:
+        return None  # a fraction belongs to seconds
+    text = date + ("T" + clock if clock else "")
+    if fraction:
+        # Truncate, as 3.11+ does for digits past microseconds.
+        text += "." + (fraction + "00000")[:6]
+    if offset and offset.upper() == "Z":
+        text += "+00:00"
+    elif offset:
+        digits = offset[1:].replace(":", "")
+        text += offset[0] + digits[:2] + ":" + (digits[2:] or "00")
     try:
-        stamp = datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
+        stamp = datetime.datetime.fromisoformat(text)
     except (ValueError, OverflowError):
         return None
     # Every harness here writes UTC. Reading a naive stamp as UTC restores the
@@ -144,7 +182,7 @@ def scan_claude(since, root=None):
     if not os.path.isdir(root):
         return None
 
-    seen, dispatch_seen = {}, set()
+    seen, dispatch_seen, advisor_calls = {}, set(), {}
     for project in sorted(os.listdir(root)):
         base = os.path.join(root, project)
         if not os.path.isdir(base):
@@ -160,16 +198,18 @@ def scan_claude(since, root=None):
             except OSError:
                 continue
             before = len(seen)
-            _scan_claude_file(path, bucket, since, out, seen, dispatch_seen)
+            _scan_claude_file(path, bucket, since, out, seen, dispatch_seen, advisor_calls)
             if bucket == "subagent" and len(seen) > before:
                 out["agent_types"][_agent_type(path)] += 1
     for bucket, model, values, session in seen.values():
         add_usage(out, bucket, model, values, session)
     out["agent_types"] = dict(out["agent_types"])
+    if advisor_calls:
+        out["advisor_calls"] = sum(advisor_calls.values())
     return finish(out)
 
 
-def _scan_claude_file(path, bucket, since, out, seen, dispatch_seen):
+def _scan_claude_file(path, bucket, since, out, seen, dispatch_seen, advisor_calls):
     for index, rec in enumerate(records(path, out)):
         if rec.get("type") != "assistant" and rec.get("subtype") != "compact_boundary":
             continue
@@ -201,16 +241,38 @@ def _scan_claude_file(path, bucket, since, out, seen, dispatch_seen):
         usage = message.get("usage")
         if not isinstance(usage, dict) or not usage:
             continue
-        values = tuple(count(usage.get(k)) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens"))
-        if key in seen:
-            old_bucket, model, previous, session = seen[key]
-            # Streaming snapshots are cumulative per response, not new requests.
-            # Keep the greatest observed counter for each category.
-            values = tuple(max(a, b) for a, b in zip(previous, values))
-            seen[key] = old_bucket, model, values, session
-        else:
-            seen[key] = bucket, message.get("model"), values, rec.get("sessionId") or path
+        session = rec.get("sessionId") or path
+        _merge(seen, key, bucket, message.get("model"), _claude_values(usage), session)
+        # Advisor sub-inferences are billed at the advisor's rates and are not
+        # in the top-level counters; usage.iterations carries them per model.
+        advisors, calls = collections.defaultdict(lambda: (0, 0, 0, 0)), 0
+        iterations = usage.get("iterations")
+        for item in iterations if isinstance(iterations, list) else []:
+            if isinstance(item, dict) and item.get("type") == "advisor_message":
+                model = item.get("model") if isinstance(item.get("model"), str) and item.get("model") else "unknown"
+                advisors[model] = tuple(a + b for a, b in zip(advisors[model], _claude_values(item)))
+                calls += 1
+        for model, values in advisors.items():
+            _merge(seen, (key, "advisor", model), bucket, model, values, session)
+        if calls:
+            advisor_calls[key] = max(advisor_calls.get(key, 0), calls)
 
+
+CLAUDE_USAGE_KEYS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens")
+
+
+def _claude_values(usage):
+    return tuple(count(usage.get(k)) for k in CLAUDE_USAGE_KEYS)
+
+
+def _merge(seen, key, bucket, model, values, session):
+    if key in seen:
+        old_bucket, model, previous, session = seen[key]
+        # Streaming snapshots are cumulative per response, not new requests.
+        # Keep the greatest observed counter for each category.
+        seen[key] = old_bucket, model, tuple(max(a, b) for a, b in zip(previous, values)), session
+    else:
+        seen[key] = bucket, model, values, session
 
 
 def _agent_type(path):
@@ -417,6 +479,29 @@ def reference_cost(model, buckets, catalog):
     return result
 
 
+def _utc(stamp):
+    if isinstance(stamp, bool) or not isinstance(stamp, (int, float)):
+        return None
+    try:
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stamp))
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def output_compression(harness):
+    """A Bash-output compressor such as rtk shrinks tool output before the
+    model reads it, so these counts are post-compression. Present config does
+    not show it was active for the whole window. Never fatal to the scan."""
+    try:
+        probe = settings_probe.output_compressors(harness)
+    except Exception:
+        return None
+    if not probe.get("configured"):
+        return None
+    return {"tools": sorted({row["tool"] for row in probe["found"]}),
+            "note": "Shell tool output is counted after compression; compare costs only with sessions under the same setup."}
+
+
 def collect(since, only=None, catalog=None):
     import pricing
     # A caller that archives the catalog passes the one it loaded, so the
@@ -424,6 +509,7 @@ def collect(since, only=None, catalog=None):
     catalog = pricing.load() if catalog is None else catalog
     report = {"since": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(since)), "harnesses": {},
               "pricing": {"source": catalog.get("source"), "fetched_at": catalog.get("fetched_at"),
+                          "fetched_at_utc": _utc(catalog.get("fetched_at")),
                           "basis": "Current reference text-token rates; conditional rates shown as ranges. Not historical bills. Excludes non-token fees and negotiated/subscription pricing."},
               "savings": {"status": "not measured", "reason": "No comparable task baseline; delegation share is not savings."}}
     scanners = {"claude": scan_claude, "codex": scan_codex, "opencode": scan_opencode}
@@ -447,6 +533,9 @@ def collect(since, only=None, catalog=None):
             data["subagent_token_share"] = round(sub / (main + sub), 3) if main + sub else 0
             data["reference_cost"] = {model: reference_cost(model, usage, catalog) for model, usage in data["model_usage"].items()}
             data["status"] = "partial" if data.get("diagnostics") else "ok"
+            compression = output_compression(name)
+            if compression:
+                data["output_compression"] = compression
         report["harnesses"][name] = data
     claude = report["harnesses"].get("claude") or {}
     report["routing"] = routing_compliance(claude.pop("dispatches", []))
@@ -470,6 +559,11 @@ def render(report):
                          (model, cost["minimum_usd"], cost["maximum_usd"], cost["status"], cost["unpriced_tokens"]))
         if data.get("reported_cost_records"):
             lines.append("  harness-reported cost $%.4f; may reflect reference prices rather than billing" % data["reported_cost_usd"])
+        if data.get("advisor_calls"):
+            lines.append("  %d advisor consultation(s), counted under the advisor's model at its rates" % data["advisor_calls"])
+        if data.get("output_compression"):
+            lines.append("  output compression configured (%s): %s" % (", ".join(data["output_compression"]["tools"]),
+                                                                       data["output_compression"]["note"]))
         if data.get("compactions"):
             lines.append("  %d compactions; %d pre-compaction context tokens (not tokens discarded)" % (data["compactions"], data["precompact_tokens"]))
         if data.get("diagnostics"):

@@ -5,9 +5,10 @@ Every commit on main becomes a release, so the only thing two runs can collide
 over is the pair of refs a release is made of: the commit carrying the new
 version and the tag naming it. Preparing one therefore reduces to a single
 compare-and-swap -- bump, verify, commit, tag, then push the branch and the tag
-in one atomic transaction. The remote accepts that push only if main is still
-exactly where this run found it, so a run that loses the race has changed
-nothing at all, locally or remotely.
+in one atomic transaction, leased on the commit this run built on. The remote
+accepts that push only if main is still exactly where this run found it -- not
+merely somewhere the release commit fast-forwards -- so a run that loses the
+race has changed nothing at all, locally or remotely.
 
 A loser defers instead of retrying, and that is the important decision here.
 The push that beat it starts its own workflow run, and that run releases the
@@ -141,16 +142,26 @@ def create_tag(tag, root=ROOT, name=DEFAULT_AUTHOR_NAME, email=DEFAULT_AUTHOR_EM
 	)
 
 
-def atomic_push(remote, branch, tag, root=ROOT):
-	"""Move the branch and the tag together, or move neither.
+def atomic_push(remote, branch, tag, expected, root=ROOT):
+	"""Move the branch and the tag together, or move neither, and only from `expected`.
 
 	--atomic is what makes the outcome binary. Without it a rejected branch
 	update can still leave the tag published, and a tag whose commit is not on
 	main fails the release workflow's own ancestor check -- a stuck release that
 	has to be cleaned up by hand.
+
+	The lease is the compare half of the swap. A plain push accepts any
+	fast-forward, so if main had been force-moved back to an ancestor of
+	`expected`, the release commit would still fast-forward it and quietly
+	re-land everything that force-push removed. With an explicit expected value
+	the remote applies the update only while main is exactly `expected`. It
+	forces nothing: the release commit is a child of `expected`, so whenever the
+	lease holds the update is a fast-forward anyway. A broken lease is reported
+	as "stale info", which classify_rejection already treats as a race.
 	"""
 	result = git(
-		"push", "--atomic", remote, f"HEAD:refs/heads/{branch}", f"refs/tags/{tag}",
+		"push", "--atomic", f"--force-with-lease=refs/heads/{branch}:{expected}",
+		remote, f"HEAD:refs/heads/{branch}", f"refs/tags/{tag}",
 		root=root, check=False,
 	)
 	return result.returncode == 0, (result.stdout + result.stderr).strip()
@@ -248,7 +259,7 @@ def main(argv=None):
 		commit = commit_release(version, released_sha, name=args.author_name, email=args.author_email)
 		create_tag(tag, name=args.author_name, email=args.author_email)
 
-		pushed, output = atomic_push(args.remote, args.branch, tag)
+		pushed, output = atomic_push(args.remote, args.branch, tag, released_sha)
 		if pushed:
 			emit_outputs(args.github_output, tag)
 			print(f"released {tag} at {commit}", flush=True)
@@ -257,8 +268,9 @@ def main(argv=None):
 		verdict = classify_rejection(output)
 		if verdict == "raced":
 			# Nothing moved: the push was atomic, so the tag was rejected with the
-			# branch. The commit that beat this one has its own run queued, and it
-			# releases a tip that already contains everything this run was carrying.
+			# branch. Whatever moved main -- a newer commit, or a force-push back to
+			# an older one -- started a run of its own, which releases that tip; this
+			# run's commit is either already inside it or was deliberately withdrawn.
 			undo_local(tag, released_sha)
 			emit_outputs(args.github_output, "")
 			print(

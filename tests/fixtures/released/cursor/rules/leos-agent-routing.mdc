@@ -1,0 +1,9 @@
+---
+description: leos-agent model routing for this machine.
+alwaysApply: true
+---
+This supersedes the model-routing dispatch line in Leo's agent operating
+preferences:
+
+No cheaper profile is configured here: use the current model, and say
+routing could not be applied.

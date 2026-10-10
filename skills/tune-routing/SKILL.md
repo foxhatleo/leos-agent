@@ -9,7 +9,8 @@ argument-hint: "[model preferences]"
 
 Configure only the current harness or one the user explicitly named. Resolve the
 absolute plugin root from `LEOS_AGENT_ROOT`, `CLAUDE_PLUGIN_ROOT`, `PLUGIN_ROOT`,
-or the nearest ancestor containing `rules/preferences.md`.
+or, when those are unset in the shell, the nearest ancestor of this skill file
+containing `rules/preferences.md`.
 
 1. Read current settings and diagnostics:
 
@@ -53,6 +54,12 @@ or the nearest ancestor containing `rules/preferences.md`.
    current files, not native model availability or execution. Start/reload the
    harness as its native configuration requires. Do not claim routing active
    solely because its stanza rendered.
+
+Claude Code only, opt-in: the advisor is a stronger model the main model
+consults at decision points, not a delegated worker or a tier. Offer it only
+when asked or when long tasks fail on planning; read `reference/advisor.md`
+first. Show the change with `python3 "<plugin-root>/scripts/claude_advisor.py"
+set <model>` and add `--apply` only on the user's explicit request.
 
 Live probes are optional and **never automatic**. Obtain authorization and a
 spending cap, then use a tiny bounded task and inspect actual model observations.
