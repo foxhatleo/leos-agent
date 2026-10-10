@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "files": [
+    {
+      "path": "{home}/.codex/agents/leo-cheap.toml",
+      "before": null,
+      "after_sha256": "1b7f667eb91a7331fb3d10472bbcd7b706146f6ff2be042895f517b49cef6cf3",
+      "mode": 420
+    },
+    {
+      "path": "{home}/.codex/agents/leo-standard.toml",
+      "before": null,
+      "after_sha256": "af4c7cc6edcdced06ca74f0807705c277d60afe53ffdb607ec75faab2a05875a",
+      "mode": 420
+    },
+    {
+      "path": "{home}/.codex/agents/leo-premium.toml",
+      "before": null,
+      "after_sha256": "25f39fe057376c2ba8a4d68e26f1e0157a299e8f9ac8e94a15b144d8d29a9d46",
+      "mode": 420
+    },
+    {
+      "path": "{home}/.codex/agents/leo-parent.toml",
+      "before": null,
+      "after_sha256": "aa14fa805aa9c1673cf2aabdb68c2f7f93b85f6288a86ad49e5dad4f047a8908",
+      "mode": 420
+    },
+    {
+      "path": "{home}/.codex/agents/leo-reviewer.toml",
+      "before": null,
+      "after_sha256": "b46f530235613eff546324881d89306e13994c32dbb838ddbe388a017a8c284e",
+      "mode": 420
+    },
+    {
+      "path": "{home}/.codex/leos-agent-paths.json",
+      "before": null,
+      "after_sha256": "1bd080a80c986b908518b0c9fae6cc10fd74a08c3d27f62e616fc36d89fdf67e",
+      "mode": 420
+    }
+  ]
+}

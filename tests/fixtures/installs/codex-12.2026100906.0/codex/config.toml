@@ -1,0 +1,4 @@
+model = "gpt-6.1-sol"
+
+[features]
+multi_agent = true

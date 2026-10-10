@@ -1,0 +1,5 @@
+{
+ "about": "~/.codex and ~/.leos-agent-local exactly as `python3 scripts/leo-install.py codex` from release 12.2026100906.0 left them on a machine whose Codex config.toml held only a model and features.multi_agent. The backup's paths are written as {home}.",
+ "release": "12.2026100906.0",
+ "commit": "585e1cc"
+}

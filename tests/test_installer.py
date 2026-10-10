@@ -1151,5 +1151,99 @@ class TestLegacyMigration(unittest.TestCase):
                 self.assertIn(hashlib.sha256(fixture.read_bytes()).hexdigest(), hashes)
 
 
+class TestUpgradeFromRelease(unittest.TestCase):
+    """A Codex install a real release left behind, upgraded by this checkout's CLI.
+
+    tests/fixtures/installs/codex-12.2026100906.0 is ~/.codex and
+    ~/.leos-agent-local as that release's own installer wrote them. The upgrade
+    runs as a user would run it, `python3 scripts/leo-install.py codex`, with
+    only HOME pointing at the seeded tree.
+    """
+
+    RELEASE = Path(__file__).resolve().parent / "fixtures" / "installs" / "codex-12.2026100906.0"
+    RETIRED = ("leo-runner", "leo-executor")
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.base = Path(tmp.name).resolve()
+
+    def seed(self, name):
+        home = self.base / name
+        shutil.copytree(self.RELEASE / "codex", home / ".codex")
+        shutil.copytree(self.RELEASE / "leos-agent-local", home / ".leos-agent-local")
+        backup = home / ".leos-agent-local" / "install-backups" / "codex.json"
+        backup.write_text(backup.read_text().replace("{home}", str(home)))
+        return home
+
+    def install(self, home, *extra):
+        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home),
+               "LEOS_AGENT_PRICE_REFRESH": "off", "PYTHONDONTWRITEBYTECODE": "1"}
+        return subprocess.run([sys.executable, str(ROOT / "scripts" / "leo-install.py"), "codex", *extra],
+                              env=env, capture_output=True, text=True, timeout=120)
+
+    def payload_agents(self):
+        return sorted(p.name for p in (ROOT / "payload" / "codex-agents").glob("*.toml"))
+
+    def test_an_upgrade_replaces_owned_profiles_and_keeps_the_users_files(self):
+        home = self.seed("upgraded")
+        codex = home / ".codex"
+        mine = {"agents/my-helper.toml": b'name = "my-helper"\ndescription = "mine"\n',
+                "AGENTS.md": b"# my notes\n"}
+        for rel, data in mine.items():
+            (codex / rel).write_bytes(data)
+        config = (codex / "config.toml").read_bytes()
+        old_receipt = json.loads((codex / "leos-agent-paths.json").read_text())["files"]
+        # Copies from releases before receipts, still on disk.
+        for name in self.RETIRED:
+            shutil.copy(FIXTURES / "codex" / "agents" / f"{name}.toml", codex / "agents")
+
+        done = self.install(home)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+        agents = sorted(p.name for p in (codex / "agents").glob("leo-*.toml"))
+        self.assertEqual(agents, self.payload_agents())
+        self.assertIn("leo-lens.toml", agents)  # added after that release
+        for name in self.RETIRED:
+            self.assertFalse((codex / "agents" / f"{name}.toml").exists(), name)
+        for rel, data in mine.items():
+            self.assertEqual((codex / rel).read_bytes(), data, rel)
+        self.assertEqual((codex / "config.toml").read_bytes(), config)
+
+        # The receipt names exactly the profiles now on disk, by their new bytes.
+        receipt = json.loads((codex / "leos-agent-paths.json").read_text())["files"]
+        self.assertEqual(receipt, {f"agents/{name}": hashlib.sha256((codex / "agents" / name).read_bytes()).hexdigest()
+                                   for name in agents})
+        self.assertNotEqual(receipt, old_receipt)
+        # Same bytes as a fresh install of this checkout.
+        fresh = self.base / "fresh"
+        (fresh / ".codex").mkdir(parents=True)
+        self.assertEqual(self.install(fresh).returncode, 0)
+        for name in agents:
+            self.assertEqual((codex / "agents" / name).read_bytes(),
+                             (fresh / ".codex" / "agents" / name).read_bytes(), name)
+        # The rollback record now describes this install, under this home.
+        backup = json.loads((home / ".leos-agent-local" / "install-backups" / "codex.json").read_text())
+        recorded = {Path(entry["path"]).name for entry in backup["files"]}
+        self.assertLessEqual({"leo-lens.toml", "leo-cheap.toml"}, recorded)
+        self.assertTrue(all(entry["path"].startswith(str(home)) for entry in backup["files"]))
+
+        # A second run changes nothing.
+        before = tree(home, skip=())
+        again = self.install(home)
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertEqual(tree(home, skip=()), before)
+
+    def test_an_edited_profile_stops_the_upgrade_before_anything_is_written(self):
+        home = self.seed("edited")
+        cheap = home / ".codex" / "agents" / "leo-cheap.toml"
+        cheap.write_text(cheap.read_text() + "# my tweak\n")
+        before = tree(home, skip=())
+        done = self.install(home)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("conflict", done.stdout)
+        self.assertEqual(tree(home, skip=()), before)
+
+
 if __name__ == "__main__":
     unittest.main()
