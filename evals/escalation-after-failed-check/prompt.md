@@ -1,5 +1,6 @@
 ---
 description: A staged cheap-tier result that fails its named check. The failure is fixed in the prompt so it is deterministic; what is measured is the parent's response. With the plugin it should re-dispatch one tier up with a brief that begins with the escalation marker, and never retry the cheap tier.
+model: opus
 tags: [routing, escalation]
 max_turns: 12
 timeout_seconds: 300

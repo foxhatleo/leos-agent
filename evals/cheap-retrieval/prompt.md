@@ -1,5 +1,6 @@
 ---
-description: An independent, output-heavy retrieval step. With the plugin the parent should hand the bulk reading to the cheap tier and still return the right answer.
+description: An independent retrieval over short write-ups with traps. Checking a cheap worker's list would mean rereading them, so the policy's verifiability gate keeps the read local; the cheap-delegation indicator reports whether that changes. Scored on the right answer.
+model: opus
 tags: [routing]
 max_turns: 12
 timeout_seconds: 300

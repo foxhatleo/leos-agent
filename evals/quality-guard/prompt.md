@@ -1,5 +1,6 @@
 ---
 description: Correctness only. Its one grader is scored in both arms, so a negative delta here means the plugin made the answer worse on this task.
+model: sonnet
 tags: [quality]
 max_turns: 10
 timeout_seconds: 240

@@ -428,6 +428,17 @@ class SuiteLayout(unittest.TestCase):
                 self.assertNotIn("add_dirs", context)
                 self.assertTrue(fixture_dirs(case_dir), "every case reads fixtures")
 
+    def test_every_case_pins_a_parent_with_a_cheaper_tier_below_it(self):
+        # Unpinned, a run takes the account's default model, so the suite
+        # measured whatever that was (Sonnet 5.5 on 2026-10-10). A cheap parent
+        # has no cheaper tier to delegate to. Escalation goes one tier above
+        # cheap, to standard; under a standard parent that is the parent's own
+        # price, which the policy keeps local, so that case needs a premium one.
+        for name, case in self.cases.items():
+            with self.subTest(case=name):
+                self.assertIn(case["meta"].get("model"), ("sonnet", "opus"))
+        self.assertEqual(self.cases["escalation-after-failed-check"]["meta"]["model"], "opus")
+
     def test_every_case_stages_its_fixtures_into_the_workspace(self):
         # Claude Code 2.1.296 turns add_dirs into Read/Glob/Grep allow rules
         # only, never --add-dir, and the run's cwd is empty, so a model given

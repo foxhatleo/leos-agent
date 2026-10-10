@@ -422,23 +422,26 @@ no judge model is called.
 
 | Case | Expected with the plugin |
 |---|---|
-| `cheap-retrieval` | Bulk reading goes to the cheap tier; correct answer |
+| `cheap-retrieval` | Correct answer. The read stays local: the write-ups carry traps, so checking a cheap worker's list means rereading them, and the policy keeps a step local when nothing cheaper checks it. Its cheap-delegation indicator reports any change |
 | `local-small-task` | No delegation in either arm; correct answer |
 | `worker-contract` | The worker's reply carries `Result:` and `Verified:` lines; correct answer |
 | `escalation-after-failed-check` | A staged cheap result fails its check; re-dispatch to standard with an `Escalation from cheap:` brief, no cheap retry; correct answer |
 | `quality-guard` | Correctness only |
 
 ```sh
-claude plugin eval . --scaffold --model sonnet --no-publish --max-cost-usd 6
+claude plugin eval . --scaffold --no-publish --max-cost-usd 8
 claude plugin eval . --scaffold --case local-small-task --runs 1 --ablation none
 ```
 
 Every run is a real model call billed to your plan or API account. A full run
-is 5 cases × 3 runs × 2 arms = 30 agent runs: roughly $2–5 at list prices on
-2026-10-09 with a standard-tier parent, and about twice that with a premium
-one. Pin a standard or premium parent, since a cheap parent has no cheaper tier
-to delegate to. Runs inherit most `CLAUDE_CODE_*` settings from your shell, so
-unset overrides such as `CLAUDE_CODE_SUBAGENT_MODEL` first.
+is 5 cases × 3 runs × 2 arms = 30 agent runs: about $3 at list prices on
+2026-10-10. Each case pins its parent in `model:`: Opus for `cheap-retrieval`
+and `escalation-after-failed-check`, whose routing needs tiers below the parent
+(under Sonnet, one tier up from cheap is the parent's own price, which the
+policy keeps local), and Sonnet for the rest. `--model` overrides every case's
+pin, so pass it only to compare parents. Runs inherit most `CLAUDE_CODE_*`
+settings from your shell, so unset overrides such as
+`CLAUDE_CODE_SUBAGENT_MODEL` first.
 
 `WITH` and `W/OUT` count only the graders scored in both arms: each case's
 correct answer, plus the no-delegation check on `local-small-task`. `Δ` is
@@ -446,12 +449,12 @@ therefore a quality difference on that task (and, there, over-delegation), so a
 negative `Δ` is a regression. With three runs per arm, one run moves a
 single-grader case by 0.33. The routing, contract, and escalation graders are
 with-arm indicators, because the baseline has no `leo-*` agents;
-`--ablation none` scores them, so use it to gate on behaviour. At the default
-threshold of 1.0, one failed scored grader fails the case. `COST` is the CLI's
-list-price estimate for both arms of a case together. It is not a bill, the
-summary does not split it by arm, and the suite does not measure tokens.
-Results show how the policy behaves on these five tasks with the pinned model;
-they do not establish savings in general.
+`--ablation none` scores them, so use it to gate on behaviour (`cheap-retrieval`'s
+indicator is expected off). At the default threshold of 1.0, one failed scored
+grader fails the case. `COST` is the CLI's list-price estimate for both arms of
+a case together. It is not a bill, the summary does not split it by arm, and
+the suite does not measure tokens. Results show how the policy behaves on these
+five tasks with the pinned model; they do not establish savings in general.
 
 ## Development and releases
 

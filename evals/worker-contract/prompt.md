@@ -1,5 +1,6 @@
 ---
 description: Delegation is requested outright so the worker's reply format can be checked. The plugin's workers close with a Result line and a Verified line.
+model: sonnet
 tags: [contract]
 max_turns: 10
 timeout_seconds: 240
