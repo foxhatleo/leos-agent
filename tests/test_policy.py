@@ -28,6 +28,10 @@ OPENCODE_AGENT_KEYS = {
     "color", "steps", "maxSteps", "options", "permission", "disable", "tools",
 }
 
+# Cursor subagent frontmatter, as Cursor's own plugin agents use it. None of
+# these caps turns, so a Cursor copy has no counterpart to maxTurns.
+CURSOR_AGENT_KEYS = {"name", "description", "model", "readonly", "is_background"}
+
 
 def frontmatter_keys(text):
     fm = text.split("---", 2)[1]
@@ -79,8 +83,29 @@ class TestRouting(unittest.TestCase):
                 with self.subTest(agent=name, harness=harness):
                     keys = set(frontmatter_keys(installer.native_agent(ROOT, name, harness, {})))
                     self.assertNotIn("maxTurns", keys)
-                    if harness == "opencode":
-                        self.assertEqual(keys - OPENCODE_AGENT_KEYS, set())
+                    self.assertEqual(keys - (OPENCODE_AGENT_KEYS if harness == "opencode" else CURSOR_AGENT_KEYS),
+                                     set())
+
+    def test_opencode_agents_carry_the_profile_turn_cap_as_steps(self):
+        # OpenCode reads `steps` as a positive integer: past it the agent's
+        # tools are disabled and it must answer in text. An agent the Claude
+        # profile leaves uncapped stays uncapped there too.
+        spec = importlib.util.spec_from_file_location("leo_install_steps_test", ROOT / "scripts" / "leo-install.py")
+        installer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(installer)
+        configured = {"opencode": {"cheap": {"model": "prov/cheap-x", "effort": None}}}
+        for name in installer.CODEX_AGENTS:
+            cap = frontmatter_keys((ROOT / "agents" / f"{name}.md").read_text(encoding="utf-8")).get("maxTurns")
+            for config in ({}, configured):
+                with self.subTest(agent=name, configured=bool(config)):
+                    fields = frontmatter_keys(installer.native_agent(ROOT, name, "opencode", config))
+                    self.assertEqual(fields.get("steps"), cap)
+                    if cap is not None:
+                        self.assertRegex(fields["steps"], r"^[1-9][0-9]*$")
+                    self.assertNotIn("steps", frontmatter_keys(installer.native_agent(ROOT, name, "cursor", config)))
+        capped = [n for n in installer.CODEX_AGENTS
+                  if "maxTurns" in frontmatter_keys((ROOT / "agents" / f"{n}.md").read_text(encoding="utf-8"))]
+        self.assertTrue(set(WORKERS) <= set(capped))
 
     def test_retired_alias_names_still_route_without_profile_files(self):
         # Old briefs and dispatch-log rows keep their tier after the profiles go.

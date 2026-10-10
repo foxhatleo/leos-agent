@@ -29,8 +29,10 @@ a cheaper model while preserving quality.
 Native profiles are `leo-cheap`, `leo-standard`, `leo-premium`, `leo-parent`, and
 `leo-reviewer`. The retired `leo-runner` and `leo-executor` profiles are gone,
 but the guard and logs still map those names to cheap and standard, and routing
-config still accepts its `runner` and `executor` keys. On Claude Code each
-worker profile caps its turns; a capped run returns its output marked partial. Review
+config still accepts its `runner` and `executor` keys. Worker profiles cap their
+turns on Claude Code, where a capped run returns its output marked partial, and
+on OpenCode as `steps`, past which the worker loses its tools and answers in
+text. The Codex and Cursor profiles carry no turn cap. Review
 may use nested read-only lenses; ordinary workers do not delegate. Small
 reviews run locally, and larger reviews divide independent areas rather than
 requiring every lens to reread everything.
