@@ -140,22 +140,26 @@ may be resolved publicly under `review-pr`'s evidence rules.
 
 The script searches open PRs requesting the user's review. It excludes
 drafts, team-only requests, requests not directly naming the authenticated
-user, already-reviewed heads (including one a manual `review-pr` pass staged
-ready-to-merge), parked heads, and PRs currently approved by another user. The
-user's own approval does not disqualify a PR. A new head becomes eligible
-again unless it keeps a standing ready-to-merge verdict. Emission alone never
-marks a head reviewed. State for PRs closed or merged over 30 days ago is
-pruned.
+user, already-reviewed heads, parked heads, and PRs currently approved by
+another user. A head a manual `review-pr` pass staged with complete coverage
+(every changed non-generated file read, or carried from an earlier complete
+review) counts as reviewed, whatever the verdict; one staged with a file
+unread does not. The user's own approval does not disqualify a PR. A new head
+becomes eligible again unless it keeps a standing ready-to-merge verdict.
+Emission alone never marks a head reviewed, and neither does staging on a head
+the watcher handed out: only `record` does, and a released head comes back.
+State for PRs closed or merged over 30 days ago is pruned.
 
 ```
 python3 "<plugin-root>/scripts/watch_review.py" state -C <repo>
 python3 "<plugin-root>/scripts/watch_review.py" forget -C <repo> N
 ```
 
-`state` shows reviewed heads, verdicts (with the head they were recorded at and
-any head they were carried to), and parked heads with their reasons. `forget`
-clears the reviewed head, lease/attempt history, and any block. The stored
-verdict stays, so the re-review that follows still stands by a ready-to-merge
-decision. Use `forget` when the user requests a retry at the same head. Failed
-API ticks are reported and retried; they are not treated as an empty
-successful discovery.
+`state` shows reviewed heads, verdicts (with the head they were recorded at,
+any head they were carried to, and whether coverage was complete), and parked
+heads with their reasons. `forget` clears the reviewed head, lease/attempt
+history, and any block. The stored verdict stays but no longer marks a head
+reviewed, so the PR is emitted again and the re-review still stands by a
+ready-to-merge decision. Use `forget` when the user requests a retry at the
+same head. Failed API ticks are reported and retried; they are not treated as
+an empty successful discovery.

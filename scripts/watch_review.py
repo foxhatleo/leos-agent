@@ -41,12 +41,16 @@ explicit `forget`. A head that waits on the user's decision is parked with
 Emission is not completion. A head is recorded only when every changed
 non-generated file was reviewed and every finding is covered -- anchored in
 the diff, carried in the review body, or dismissed with a stated reason via
---acknowledge-omitted, which is never automatic. A recorded ready-to-merge
-verdict, whether the watcher or a manual review-pr pass staged it, stands
-until the PR diff changes: its own head is never emitted, and a new head with
-the same diff (a merge from the base) is carried forward silently. Any other
-new push is eligible again. Drafts, team-only requests, and PRs already
-approved by another user are excluded.
+--acknowledge-omitted, which is never automatic. A verdict a manual review-pr
+pass staged with complete coverage (every changed non-generated file read, or
+carried by an incremental pass) marks its head reviewed too, whatever the
+verdict. Only ready-to-merge goes further: it stands until the PR diff
+changes, so a new head with the same diff (a merge from the base) is carried
+forward silently. Any other new push is eligible again. On a head the watcher
+has spent an attempt on, only `record` completes it, whatever stage recorded;
+forget and unblock hand a stored verdict back, so its head is emitted again.
+Drafts, team-only requests, and PRs already approved by another user are
+excluded.
 
 Intended for Claude Code's Monitor tool, which turns each stdout line into a
 session notification. Any `read`-driven shell loop works the same way. Where
@@ -268,33 +272,41 @@ def verdicts_of(entry):
 	return {int(n): v for n, v in (entry.get("verdicts") or {}).items() if isinstance(v, dict)}
 
 
-def ready_heads(entry):
-	"""{number: heads a recorded ready-to-merge covers}: its own head and the one it was carried to.
+def verdict_heads(entry):
+	"""{number: heads a recorded verdict marks reviewed, latest last}.
 
-	ghreview.py stage writes this verdict for a manual review-pr pass as well as
-	for the watcher, and refuses ready-to-merge unless every changed file was
-	reviewed, so such a head is as reviewed as one the watcher recorded.
+	ghreview.py stage records the verdict of a manual review-pr pass as well as
+	the watcher's. One recorded with complete coverage (every changed
+	non-generated file read, or carried by an incremental pass) marks its own
+	head reviewed, whatever the verdict; a ready-to-merge also marks the head
+	carry_ready carried it to. A verdict from an incomplete pass marks nothing.
+
+	Two kinds of verdict stay with the watcher instead. One the user handed back
+	with forget or unblock (`rewatch`) marks nothing until a new review replaces
+	it. And on a head the watcher has spent an attempt on, stage runs before the
+	watcher's completion check, so its verdict there is not completion: only
+	`record` completes that head, and a release retries it.
 	"""
+	claims = entry.get("claims") or {}
 	covered = {}
 	for number, verdict in verdicts_of(entry).items():
-		if verdict.get("verdict") != ghreview.READY:
+		if verdict.get("rewatch") or not ghreview.full_coverage(verdict):
 			continue
-		heads = {h for h in (verdict.get("head"), verdict.get("carried_to"))
-			if isinstance(h, str) and re.fullmatch(SHA_RE, h)}
+		claim = claims.get(str(number))
+		claim = claim if isinstance(claim, dict) else {}
+		heads = [h for h in (verdict.get("head"), verdict.get("carried_to"))
+			if isinstance(h, str) and re.fullmatch(SHA_RE, h)
+			and not (claim.get("head") == h and (claim.get("attempts") or 0) > 0)]
 		if heads:
 			covered[number] = heads
 	return covered
 
 
 def known_heads(entry):
-	"""heads_of, plus the latest ready-to-merge head where the watcher recorded none."""
+	"""heads_of, plus the latest head a recorded verdict marks reviewed where the watcher recorded none."""
 	known = heads_of(entry)
-	for number, verdict in verdicts_of(entry).items():
-		if number in known or verdict.get("verdict") != ghreview.READY:
-			continue
-		head = verdict.get("carried_to") or verdict.get("head")
-		if isinstance(head, str) and re.fullmatch(SHA_RE, head):
-			known[number] = head
+	for number, heads in verdict_heads(entry).items():
+		known.setdefault(number, heads[-1])
 	return known
 
 
@@ -412,8 +424,8 @@ def due(matches, known, first_seen, emitted, now, settle, covered=None):
 	`first_seen` is mutated: a head that has just appeared is stamped and held
 	until it has stood still for `settle` seconds, so a push burst costs one
 	review rather than one per commit. `covered` maps a number to heads a
-	standing ready-to-merge already decided. Pure otherwise, so the emit
-	decision is testable without a clock or a network.
+	recorded verdict already marks reviewed (verdict_heads). Pure otherwise, so
+	the emit decision is testable without a clock or a network.
 	"""
 	covered = covered or {}
 	out = []
@@ -476,7 +488,7 @@ def claim_review(repo, number, head, now, monitor="", hold=LEASE):
 	with state_mod._locked(path):
 		data = state_mod.load(path)
 		entry = data.setdefault(repo, {})
-		if heads_of(entry).get(number) == head or head in ready_heads(entry).get(number, ()):
+		if heads_of(entry).get(number) == head or head in verdict_heads(entry).get(number, ()):
 			return None
 		blocked = entry.setdefault("blocked", {})
 		if (blocked.get(str(number)) or {}).get("head") == head:
@@ -611,14 +623,33 @@ def unblock(repo, numbers):
 		data = state_mod.load(path)
 		entry = data.get(repo) or {}
 		for number in numbers:
-			if (entry.get("blocked") or {}).pop(str(number), None) is not None:
+			parked = (entry.get("blocked") or {}).pop(str(number), None)
+			if parked is not None:
 				(entry.get("claims") or {}).pop(str(number), None)
+				# The attempt that parked it may have staged a verdict there first.
+				hand_back(entry, str(number), parked.get("head") if isinstance(parked, dict) else None)
 		data[repo] = entry
 		state_mod.atomic_write(path, data)
 
 
+def hand_back(entry, number, head=None):
+	"""Keep a PR's verdict on record but stop it marking a head reviewed.
+
+	The user asked for the PR again (at `head`, when given), so it must come
+	back. The record stays: a standing ready-to-merge still binds the
+	re-review, and its per-file coverage still serves a later `--since`. The
+	next recorded verdict replaces it, `rewatch` and all.
+	"""
+	verdict = (entry.get("verdicts") or {}).get(number)
+	if isinstance(verdict, dict) and (head is None or head in (verdict.get("head"), verdict.get("carried_to"))):
+		verdict["rewatch"] = True
+
+
 def drop_numbers(repo, numbers, verdicts=False):
-	"""Forget pull requests: reviewed heads, leases and attempts, blocks, and optionally verdicts."""
+	"""Forget pull requests: reviewed heads, leases and attempts, blocks, and optionally verdicts.
+
+	A verdict that is kept is handed back (hand_back), so the PR is emitted again.
+	"""
 	path = state_mod.state_file(STATE_NAME)
 	with state_mod._locked(path):
 		data = state_mod.load(path)
@@ -629,6 +660,8 @@ def drop_numbers(repo, numbers, verdicts=False):
 		for key in ("claims", "blocked", "heads") + (("verdicts",) if verdicts else ()):
 			entry[key] = {n: value for n, value in (entry.get(key) or {}).items() if n not in drop}
 		entry["reviewed"] = [n for n in (entry.get("reviewed") or []) if str(n) not in drop]
+		for number in drop:
+			hand_back(entry, number)
 		data[repo] = entry
 		state_mod.atomic_write(path, data)
 
@@ -722,9 +755,15 @@ def carry_ready(repo, number, head, cwd):
 	CARRIED when the head was carried forward and must not be emitted, UNSTABLE
 	when the files could not be read at this head (try again next tick), or
 	None when the head needs a review.
+
+	Only ready-to-merge is carried. Never onto the verdict's own head, which
+	verdict_heads leaves due only while the watcher owns its completion, nor
+	from a verdict the user handed back.
 	"""
 	prior = verdicts_of(load_entry(repo)).get(number)
-	if not prior or prior.get("verdict") != ghreview.READY or not prior.get("diff"):
+	if (not prior or prior.get("verdict") != ghreview.READY or not prior.get("diff")
+			or prior.get("rewatch") or not ghreview.full_coverage(prior)
+			or head in (prior.get("head"), prior.get("carried_to"))):
 		return None
 	files = pr_files(repo, number, head, cwd)
 	if files is None:
@@ -736,8 +775,9 @@ def carry_ready(repo, number, head, cwd):
 		data = state_mod.load(path)
 		entry = data.setdefault(repo, {})
 		current = (entry.get("verdicts") or {}).get(str(number)) or {}
-		if current.get("diff") != prior["diff"] or current.get("verdict") != ghreview.READY:
-			return None  # a review recorded meanwhile; let the normal path decide
+		if (current.get("diff") != prior["diff"] or current.get("verdict") != ghreview.READY
+				or current.get("rewatch")):
+			return None  # a review or a forget meanwhile; let the normal path decide
 		current["carried_to"] = head
 		entry.setdefault("heads", {})[str(number)] = head
 		state_mod.atomic_write(path, data)
@@ -777,7 +817,7 @@ def log_only(action, *args):
 
 
 def monitor(args):
-	"""Claim each emitted review; only verified completion suppresses its head."""
+	"""Claim each emitted review; only verified completion, or a complete manual pass, suppresses its head."""
 	first_seen = {}
 	failures, last_error = 0, None
 	# What is already waiting when the watch starts has had all the time it
@@ -802,7 +842,7 @@ def monitor(args):
 			unstable = {key: count for key, count in unstable.items() if key in active}
 			entry = load_entry(repo)
 			for verb, pr, previous in due(
-				matches, known_heads(entry), first_seen, set(), time.time(), settle, ready_heads(entry)
+				matches, known_heads(entry), first_seen, set(), time.time(), settle, verdict_heads(entry)
 			):
 				number, head = pr["number"], pr.get("headRefOid") or ""
 				key = (number, head)
