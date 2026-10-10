@@ -29,6 +29,17 @@ class CursorHooks(unittest.TestCase):
         self.assertEqual(result["permission"], "deny")
         self.assertIn("parent", result["user_message"])
 
+    def test_an_expensive_lens_is_told_to_review_the_area_itself_not_to_use_leo_parent(self):
+        # Cursor's leo-parent has no readonly flag, so the lens must not be sent there.
+        event = dict(self.event("claude-opus-5", "claude-haiku-4-5"), subagent_type="leo-lens")
+        result = self.module.handle(event)
+        self.assertEqual(result["permission"], "deny")
+        self.assertIn("review that area yourself", result["agent_message"].lower())
+        self.assertNotIn("parent-level", result["agent_message"])
+        worker = self.module.handle(dict(event, subagent_type="leo-standard"))
+        self.assertEqual(worker["permission"], "deny")
+        self.assertNotIn("review that area yourself", worker["agent_message"].lower())
+
     def test_cheap_and_unknown_children_get_a_plain_allow(self):
         # Cursor blocks a permission hook that gives no valid response, so an
         # allowed start answers allow and adds nothing else.

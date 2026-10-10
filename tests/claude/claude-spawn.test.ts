@@ -66,6 +66,19 @@ test('the guard correction is the model the subagent starts on', async ($, on) =
   expect(sent.session_id).toBe('kit-session')
 })
 
+test('a correction that drops the model starts the subagent without one', async ($, on) => {
+  // The guard's answer under a parent with no alias: leo-lens then runs on its
+  // `inherit` definition, the parent, instead of the requested model.
+  const drop = { action: 'correct', reason: 'over-ceiling',
+    updated_input: { subagent_type: 'leos-agent:leo-lens', prompt: 'Rename one symbol', description: 'rename' } }
+  const w = world(on, drop)
+  await $.session.start(START as any)
+  const result = await $.agent.spawn({ ...SPAWN, subagentType: 'leos-agent:leo-lens', model: 'opus' } as any)
+  expect(w.spawned.length).toBe(1)
+  expect(w.spawned[0].model).toBeUndefined()
+  expect(result.model).toBe('claude-sonnet-5')
+})
+
 test('a guard block refuses the spawn and nothing starts', async ($, on) => {
   const w = world(on, BLOCK)
   await $.session.start(START as any)

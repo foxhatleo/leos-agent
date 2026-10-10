@@ -107,14 +107,22 @@ adapters only supply observations and translate supported actions.
 Hermes blocks a tool when a `pre_tool_call` callback raises or outlives
 `plugins.hook_callback_timeout`, so the callback catches every error and bounds
 the guard at 10 s. Hermes spawns whenever `delegate_task`'s action, trimmed and
-lowercased, is empty or `spawn`; the guard reads it the same way.
+lowercased, is empty or `spawn`; the guard reads it the same way. Hermes has no
+native agents and `delegate_task` takes no model: every delegate runs on
+`delegation.model`, or on the parent when that is unset. When it is priced over
+the parent, the block says to do the work in the current session or to have
+the user lower or unset `delegation.model`.
 
 OpenCode executes the `args` object it passes to `tool.execute.before`, so a
 correction edits that object in place, and one that cannot be applied blocks the
 task. Slash-command subtasks pass through the same hook, but the hook input
 omits the command's model, which the task runs on when its agent pins none; the
 guard then prices it as the parent. A block there ends the command with an
-error instead of a task result.
+error instead of a task result. A leo profile whose model is over the parent
+runs as leo-parent instead when leo-parent pins no model. leo-lens never does,
+because leo-parent can edit: an over-ceiling lens is refused, here and on
+Cursor and Codex, and the refusal tells the reviewer to review that area itself
+rather than retry it on a writable profile.
 
 Pi rows carry the session id. Pi's subagent tools take `{agent, task}` or
 `{task}` and never the child's model, so Pi dispatches are logged without a
@@ -134,11 +142,14 @@ model. Bedrock IDs (`us.anthropic.claude-sonnet-4-5-20250929-v1:0`, with or
 without a cross-region prefix) and Agent Platform (Vertex AI) IDs
 (`claude-sonnet-4-5@20250929`) name their family and price like the
 first-party ID. When the parent's ID names no family, an inheriting agent
-gets no `model` and so runs on the parent. It fills a missing model only for
-built-in agents that would inherit (general-purpose, claude, Explore, Plan) and
-for the cheap, standard, and premium leo tiers; leo-lens, whose definition
-inherits, gets the standard tier when the reviewer names no model. leo-parent
-and forks run on the parent; other plugins' agents keep their own model.
+gets no `model` and so runs on the parent. The guard fills a missing model only
+for built-in agents that would inherit (general-purpose, claude, Explore, Plan)
+and for the cheap, standard, and premium leo tiers. leo-lens is defined as
+`inherit` and takes its tier from the call: it gets the standard tier when the
+reviewer names no model, and under a parent with no family it counts as
+inheriting, so a lens model over that parent, named or filled in, is dropped
+rather than refused. leo-parent and forks run on the parent; other
+plugins' agents keep their own model.
 
 Claude Code takes a child's model from the call's `model`, then the agent
 definition, then `CLAUDE_CODE_SUBAGENT_MODEL`, then the parent. The guard reads
@@ -173,8 +184,9 @@ Claude Code raises `agent.spawn` after PreToolUse, just before a subagent or
 teammate starts, with the resolved agent type, the requested model and the
 parent's effective model, so no transcript lookup is needed for the ceiling.
 `claude-spawn.js` hands that to `dispatch_guard.py --json`, the same decision
-and the same single log row as the command guard, then sets the child's model
-or refuses the spawn with the guard's text. It grants no permission and fails
+and the same single log row as the command guard, then sets the child's model,
+clears it where the command guard would drop `model`, or refuses the spawn with
+the guard's text. It grants no permission and fails
 open: if the guard cannot run, the spawn proceeds and the debug log says why.
 
 One side decides each dispatch. On Claude Code 2.1.289 and later, where

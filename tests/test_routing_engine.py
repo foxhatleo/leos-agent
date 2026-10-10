@@ -1,11 +1,19 @@
 import json
 from pathlib import Path
+import re
 import sys
 import unittest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
 import pricing
 import routing_engine as engine
+
+
+def with_mythos(catalog):
+    """A priced Claude parent whose ID names no family, so it has no Agent alias."""
+    return pricing.snapshot({"data": catalog["models"] + [
+        {"id": "anthropic/claude-mythos-preview", "pricing": {"prompt": "0.000001", "completion": "0.000005"}}]})
 
 
 class RoutingEngine(unittest.TestCase):
@@ -205,6 +213,21 @@ class ClaudeModelOrder(unittest.TestCase):
                                 config={"claude": {"standard": {"model": "haiku", "effort": None}}})
         self.assertEqual(configured["updated_input"]["model"], "haiku")
 
+    def test_a_lens_under_a_parent_without_an_alias_drops_its_model_and_runs_on_the_parent(self):
+        # leo-lens's definition inherits, so an omitted `model` runs it on the
+        # reviewer. leo-parent, the other profile that inherits, can edit.
+        catalog, parent = with_mythos(self.catalog), "claude-mythos-preview"
+        over = self.route({"subagent_type": "leos-agent:leo-lens", "model": "opus"}, parent, catalog=catalog)
+        self.assertEqual((over["action"], over["reason"]), ("correct", "over-ceiling"))
+        self.assertEqual(over["updated_input"], {"subagent_type": "leos-agent:leo-lens", "prompt": "Investigate"})
+        self.assertEqual(over["effective_model"], parent)
+        # The standard fill is over this parent too, so nothing is filled in.
+        unnamed = self.route({"subagent_type": "leos-agent:leo-lens"}, parent, catalog=catalog)
+        self.assertEqual((unnamed["action"], unnamed["reason"], unnamed["updated_input"], unnamed["effective_model"]),
+                         ("allow", "inherits-parent", None, parent))
+        within = self.route({"subagent_type": "leos-agent:leo-lens", "model": "haiku"}, parent, catalog=catalog)
+        self.assertEqual((within["action"], within["reason"], within["updated_input"]), ("allow", "within-ceiling", None))
+
     def test_a_fork_runs_on_the_parent_and_is_never_corrected(self):
         for args in ({"subagent_type": "fork"}, {"subagent_type": "fork", "model": "opus"}):
             with self.subTest(args=args):
@@ -305,6 +328,18 @@ class ClaudeSubagentModelSetting(unittest.TestCase):
         within = self.route({}, "claude-mythos-preview", "haiku", catalog=self.mythos)
         self.assertEqual((within["action"], within["reason"]), ("allow", "subagent-model-setting"))
 
+    def test_a_lens_inherits_whatever_the_setting_says(self):
+        # leo-lens is defined as `inherit`, which outranks the setting, so
+        # dropping `model` under a parent with no alias still runs the parent.
+        for args in ({"subagent_type": "leos-agent:leo-lens"}, {"subagent_type": "leos-agent:leo-lens", "model": "opus"}):
+            with self.subTest(args=args):
+                result = self.route(args, "claude-mythos-preview", "opus", catalog=self.mythos)
+                self.assertIn(result["action"], ("allow", "correct"))
+                self.assertNotIn("model", result["updated_input"] or {})
+                self.assertEqual(result["effective_model"], "claude-mythos-preview")
+        normal = self.route({"subagent_type": "leos-agent:leo-lens"}, "claude-opus-5-5", "haiku")
+        self.assertEqual((normal["reason"], normal["updated_input"]["model"]), ("explicit-tier-default", "sonnet"))
+
     def test_a_call_model_outranks_the_setting(self):
         result = self.route({"subagent_type": "general-purpose", "model": "haiku"}, "claude-opus-5-5", "opus")
         self.assertEqual((result["action"], result["reason"], result["effective_model"]),
@@ -318,3 +353,91 @@ class ClaudeSubagentModelSetting(unittest.TestCase):
     def test_a_fork_still_runs_on_the_parent(self):
         result = self.route({"subagent_type": "fork"}, "claude-sonnet-5-5", "opus")
         self.assertEqual((result["reason"], result["effective_model"]), ("fork-inherits-parent", "claude-sonnet-5-5"))
+
+
+class LensStaysReadOnly(unittest.TestCase):
+    """leo-lens is the one read-only profile, so a fallback that moves a lens to
+    another profile, or tells the reviewer to, would drop that guarantee."""
+
+    WRITABLE_ADVICE = ("leo-parent", "parent-level native agent", "without the overriding native profile")
+    TERRA = "openai/gpt-5.6-terra"
+
+    def setUp(self):
+        self.catalog = with_mythos(json.loads(pricing.BUNDLED.read_text()))
+
+    def route(self, harness, args, parent, **kw):
+        tool = engine.CAPABILITIES[harness]["tools"][0]
+        return engine.route(harness, tool, dict(args, prompt="Lens: the auth paths"), parent, config={},
+                            catalog=self.catalog, **kw)
+
+    def assertKeepsTheLens(self, result, args, label):
+        updated = result["updated_input"] or {}
+        for key in ("subagent_type", "agent_type"):
+            if key in args:
+                self.assertEqual(updated.get(key, args[key]), args[key], label)
+        for phrase in self.WRITABLE_ADVICE:
+            self.assertNotIn(phrase, result.get("retry") or "", label)
+
+    def test_the_lens_is_the_one_read_only_profile_and_its_definition_inherits(self):
+        # The installer renders read-only from a Claude profile that denies
+        # Edit and Write; the guard knows that profile by name.
+        read_only, inheriting = set(), set()
+        for path in sorted((ROOT / "agents").glob("*.md")):
+            front = path.read_text(encoding="utf-8").split("---")[1]
+            denied = re.search(r"(?m)^disallowedTools:(.*)$", front)
+            if denied and {"Edit", "Write"} <= {tool.strip() for tool in denied.group(1).split(",")}:
+                read_only.add(path.stem)
+            if re.search(r"(?m)^model: inherit$", front) and engine.tier_for(path.stem) != "parent":
+                inheriting.add(path.stem)
+        self.assertEqual(read_only, {engine.LENS})
+        self.assertEqual(inheriting, {engine.LENS})
+
+    def test_claude_never_refuses_a_lens_or_moves_it(self):
+        for parent in ("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-mythos-preview", None):
+            for model in (None, "haiku", "sonnet", "opus", "fable"):
+                for setting in (None, "opus"):
+                    args = {"subagent_type": "leos-agent:leo-lens", **({"model": model} if model else {})}
+                    label = "%s under %s, setting %s" % (model, parent, setting)
+                    with self.subTest(label):
+                        result = self.route("claude", args, parent, default_model=setting)
+                        self.assertNotEqual(result["action"], "block", label)
+                        self.assertKeepsTheLens(result, args, label)
+                        if (result["price"] or {}).get("status") == "over-ceiling":
+                            self.assertEqual(result["effective_model"], parent, label)
+
+    def test_profile_harnesses_refuse_a_lens_over_the_parent_rather_than_swap_it(self):
+        profiles = {"leo-lens": {"model": self.TERRA}, "leo-standard": {"model": self.TERRA}, "leo-parent": {"model": None}}
+        cases = (
+            ("opencode", {"subagent_type": "leo-lens"}, "openai/gpt-5.6-sol", {"native_profiles": profiles}),
+            ("opencode", {"subagent_type": "leo-lens"}, "openai/gpt-5.6-sol",
+             {"native_profiles": {"leo-lens": {"model": self.TERRA}}}),
+            ("cursor", {"subagent_type": "leo-lens"}, "claude-haiku-4-5", {"effective_model": "claude-opus-5"}),
+            ("codex", {"agent_type": "leo-lens", "model": "gpt-5.6-luna"}, "gpt-5.6-sol",
+             {"effective_model": "gpt-5.6-terra"}),
+        )
+        for harness, args, parent, kw in cases:
+            with self.subTest(harness=harness, profiles=sorted(kw.get("native_profiles", {}))):
+                result = self.route(harness, args, parent, **kw)
+                self.assertEqual(result["action"], "block")
+                self.assertIsNone(result["updated_input"])
+                self.assertEqual(result["retry"], engine.LENS_REFUSED)
+                self.assertKeepsTheLens(result, args, harness)
+        within = self.route("opencode", {"subagent_type": "leo-lens"}, "openai/gpt-5.6-sol",
+                            native_profiles=dict(profiles, **{"leo-lens": {"model": None}}))
+        self.assertEqual((within["action"], within["updated_input"]), ("allow", None))
+
+    def test_other_profiles_keep_their_parent_level_fallback(self):
+        profiles = {"leo-standard": {"model": self.TERRA}, "leo-parent": {"model": None}}
+        swapped = self.route("opencode", {"subagent_type": "leo-standard"}, "openai/gpt-5.6-sol", native_profiles=profiles)
+        self.assertEqual((swapped["action"], swapped["reason"], swapped["updated_input"]["subagent_type"]),
+                         ("correct", "native-profile-over-ceiling", "leo-parent"))
+        for harness, args, parent, kw in (
+                ("opencode", {"subagent_type": "leo-standard"}, "openai/gpt-5.6-sol",
+                 {"native_profiles": {"leo-standard": {"model": self.TERRA}}}),
+                ("cursor", {"subagent_type": "leo-standard"}, "claude-haiku-4-5", {"effective_model": "claude-opus-5"}),
+                ("codex", {"agent_type": "leo-standard", "model": "gpt-5.6-luna"}, "gpt-5.6-sol",
+                 {"effective_model": "gpt-5.6-terra"})):
+            with self.subTest(harness=harness):
+                result = self.route(harness, args, parent, **kw)
+                self.assertEqual(result["action"], "block")
+                self.assertNotEqual(result["retry"], engine.LENS_REFUSED)

@@ -66,6 +66,29 @@ test('OpenCode blocks a correction it cannot apply', async () => {
   assert.equal(args.subagent_type, 'general');
 });
 
+test('OpenCode refuses an over-ceiling lens instead of swapping it to the writable leo-parent', async () => {
+  // The installed leo-lens denies edit; leo-parent does not. Both profiles here
+  // are priced over the gpt-5.6-sol parent except leo-parent, which inherits it.
+  const terra = { providerID: 'openai', id: 'gpt-5.6-terra' };
+  const hooks = await LeosAgent({ directory: sandbox, client: { app: { agents: async () => ({ data: [
+    { name: 'leo-lens', model: terra }, { name: 'leo-standard', model: terra }, { name: 'leo-parent' },
+  ] }) } } });
+  await hooks.event({ event: { type: 'message.updated', properties: { info: {
+    sessionID: 's', model: { providerID: 'openai', id: 'gpt-5.6-sol' },
+  } } } });
+  const lens = { subagent_type: 'leo-lens', prompt: 'Lens: the auth paths at SHA', description: 'auth lens' };
+  const before = { ...lens };
+  await assert.rejects(hostRunsTask(hooks, lens),
+    /^Error: \[leo routing\] native-profile-over-ceiling\. .*Review that area yourself rather than retrying it on a writable profile\.$/);
+  assert.deepEqual(lens, before);
+  const row = rows().at(-1);
+  assert.deepEqual([row.decision, row.agent], ['block', 'leo-lens']);
+  // Any other profile keeps the parent-level fallback.
+  const worker = await hostRunsTask(hooks, { subagent_type: 'leo-standard', prompt: 'Fix the parser', description: 'd' });
+  assert.equal(worker.subagent_type, 'leo-parent');
+  assert.equal(rows().at(-1).decision, 'correct');
+});
+
 test('OpenCode leaves a compliant task untouched', async () => {
   const hooks = await opencode();
   const args = { subagent_type: 'explore', prompt: 'Look around', description: 'd' };

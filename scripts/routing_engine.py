@@ -21,6 +21,12 @@ CAPABILITIES = {
 }
 PROFILE_TIERS = {"leo-cheap": "cheap", "leo-standard": "standard", "leo-premium": "premium", "leo-parent": "parent",
                  "leo-runner": "cheap", "leo-executor": "standard", "leo-reviewer": "standard", "leo-lens": "standard"}
+# review-pr's read-only lens. Every other profile can edit, so no guard path
+# moves a lens to one: where its model cannot be held within the ceiling, the
+# guard refuses it and the reviewer covers that area itself (procedure.md).
+LENS = "leo-lens"
+LENS_REFUSED = ("leo-lens's own model is over the parent's price, and this dispatch cannot name a cheaper one. "
+                "Review that area yourself rather than retrying it on a writable profile.")
 
 # Claude's Agent `model` enum. A family alias under a parent of that family
 # runs on the parent's exact model, so a parent's own alias is its ceiling.
@@ -71,13 +77,18 @@ def hermes_spawn(args):
     return isinstance(action, str) and action.strip().lower() in ("", "spawn")
 
 
-def tier_for(agent):
+def own_profile(agent):
+    """Our profile's bare name, or None for any other agent."""
     if not isinstance(agent, str):
         return None
     # Only our namespace is trusted. another-plugin:leo-cheap is not ours.
     if agent.startswith("leos-agent:"):
         agent = agent[len("leos-agent:"):]
-    return PROFILE_TIERS.get(agent)
+    return agent if agent in PROFILE_TIERS else None
+
+
+def tier_for(agent):
+    return PROFILE_TIERS.get(own_profile(agent))
 
 
 def dispatch_tool(harness, tool):
@@ -117,8 +128,10 @@ def _claude(result, args, agent, tier, requested, parent, config, catalog, effec
     # The default subagent model, not the parent, runs an agent whose
     # definition names no model, so omitting `model` there inherits nothing.
     setting = default_model if agent is None or (isinstance(agent, str) and agent in CLAUDE_UNPINNED) else None
+    # leo-lens is defined as `inherit` and gets its tier from the call, so an
+    # over-ceiling lens model with no alias to cap it at is dropped, not refused.
     inherits = not setting and (agent is None or (isinstance(agent, str) and agent in CLAUDE_INHERITING)
-                                or tier == "parent")
+                                or tier == "parent" or own_profile(agent) == LENS)
     if requested:
         selected = requested
     elif tier and tier != "parent":
@@ -275,9 +288,10 @@ model an agent whose definition names none runs on when `model` is omitted.
         selected = parent
         result["effective_model"] = selected
     needs_model = selected and field and (not requested or over)
+    lens = own_profile(agent) == LENS
     if effective_model and over and harness == "codex":
-        result.update(action="block", reason="profile-over-ceiling",
-                      retry="Use a model-routed spawn without the overriding native profile, at the current parent model.")
+        result.update(action="block", reason="profile-over-ceiling", retry=LENS_REFUSED if lens else
+                      "Use a model-routed spawn without the overriding native profile, at the current parent model.")
         return result
     if needs_model:
         if cap["rewrite"]:
@@ -290,10 +304,21 @@ model an agent whose definition names none runs on when `model` is omitted.
                           retry=f"Retry with {field}={selected!r} using this harness's supported spawn fields.")
     elif over:
         parent_profile = native_profiles.get("leo-parent")
-        if harness == "opencode" and tier and isinstance(parent_profile, dict) and not parent_profile.get("model"):
+        if lens:
+            # leo-parent can edit, so swapping a lens to it would drop `edit: deny`.
+            result.update(action="block", reason="native-profile-over-ceiling", retry=LENS_REFUSED)
+        elif harness == "opencode" and tier and isinstance(parent_profile, dict) and not parent_profile.get("model"):
             updated = copy.deepcopy(args)
             updated["subagent_type"] = "leo-parent"
             result.update(action="correct", reason="native-profile-over-ceiling", updated_input=updated)
+        elif harness == "hermes":
+            # Hermes has no native agents and delegate_task takes no model:
+            # every delegate runs on delegation.model, or inherits the parent
+            # when that is unset.
+            result.update(action="block", reason="native-profile-over-ceiling", retry=(
+                "Hermes runs every delegate on delegation.model in config.yaml, which is over the parent, and "
+                "delegate_task cannot name another model. Do this work in the current session, or ask the user to "
+                "set delegation.model within the parent's price, or unset it so delegates inherit the parent."))
         else:
             result.update(action="block", reason="native-profile-over-ceiling",
                           retry="Use the parent-level native agent, or perform the work in the current parent.")
