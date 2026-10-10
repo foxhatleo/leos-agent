@@ -20,7 +20,7 @@ CAPABILITIES = {
     "pi": {"tools": ("subagent",), "model_field": None, "rewrite": False, "profiles": False},
 }
 PROFILE_TIERS = {"leo-cheap": "cheap", "leo-standard": "standard", "leo-premium": "premium", "leo-parent": "parent",
-                 "leo-runner": "cheap", "leo-executor": "standard", "leo-reviewer": "standard"}
+                 "leo-runner": "cheap", "leo-executor": "standard", "leo-reviewer": "standard", "leo-lens": "standard"}
 
 # Claude's Agent `model` enum. A family alias under a parent of that family
 # runs on the parent's exact model, so a parent's own alias is its ceiling.

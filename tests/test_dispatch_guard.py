@@ -166,6 +166,31 @@ class TestProtocol(GuardCase):
         self.assertNotIn("permissionDecision", response)
         self.assertEqual(err, "")
 
+    def test_a_reviewers_lens_is_priced_against_the_reviewer_not_the_root(self):
+        # Claude's PreToolUse from inside a subagent names the root transcript
+        # and the caller's agent_id; the reviewer's own transcript holds its model.
+        root = Path(self.tmp.name) / "root.jsonl"
+        root.write_text(json.dumps({"type": "assistant", "message": {"model": "claude-opus-5-5"}}) + "\n", encoding="utf-8")
+        reviewer = Path(self.tmp.name) / "root" / "subagents" / "agent-rev1.jsonl"
+        reviewer.parent.mkdir(parents=True)
+        reviewer.write_text(json.dumps({"type": "assistant", "message": {"model": "claude-sonnet-5-5"}}) + "\n",
+                            encoding="utf-8")
+
+        def lens(model=None):
+            event = dispatch_event(agent="leos-agent:leo-lens", prompt="Lens: the auth paths at SHA", model=model)
+            return dict(event, transcript_path=str(root), agent_id="rev1", session_id="s")
+
+        self.assertEqual(self.run_cli(lens("haiku")), (0, "", ""))
+        for model in ("opus", None):
+            with self.subTest(model=model):
+                code, out, err = self.run_cli(lens(model))
+                self.assertEqual((code, err), (0, ""))
+                self.assertEqual(json.loads(out)["hookSpecificOutput"]["updatedInput"]["model"], "sonnet")
+        rows = self.log_lines()
+        self.assertEqual([(r["agent"], r["decision"]) for r in rows],
+                         [("leos-agent:leo-lens", "allow"), ("leos-agent:leo-lens", "correct"),
+                          ("leos-agent:leo-lens", "correct")])
+
     def test_a_compliant_dispatch_exits_0(self):
         code, _out, err = self.run_cli(dispatch_event(agent="leo-runner"))
         self.assertEqual(code, 0)

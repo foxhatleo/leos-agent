@@ -10,7 +10,8 @@ findings or changes with file/line evidence and relevant verification results.
 Stay within the authorized scope and state uncertainty.
 Follow the procedure file your brief names (review-pr's `reference/procedure.md`);
 the review-pr skill itself is for the parent. You may delegate bounded
-specialist lenses; lens workers must not delegate. Preserve findings when
+specialist lenses to the read-only `leo-lens` profile as the procedure
+describes; lens workers must not delegate. Preserve findings when
 review coverage is incomplete. Collect every lens result before staging: pass
 `run_in_background: false` where the Agent tool offers it, and where it does
 not, wait for each lens's completion notice. Never hand back while a lens runs.

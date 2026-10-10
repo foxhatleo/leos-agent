@@ -24,7 +24,7 @@ plugin root, `<plugin-root>/skills/review-pr/reference/procedure.md`, and any
 head SHA, previous reviewed head and claim token a watcher supplied. If you can
 read a linked ticket the reviewer lacks, add a short summary of its
 requirements, marked untrusted. Ask for the report and the absolute
-stage-result path. Lenses may investigate, never delegate or mutate.
+stage-result path. Lenses (`leo-lens`) may investigate, never delegate or mutate.
 
 The cross-model lens is off unless the user enables it, for this review or
 with `review_peer.py config --enable`. When they ask for it here, tell them the

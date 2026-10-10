@@ -116,8 +116,9 @@ a child with the parent's family alias, which Claude runs on the parent's exact
 model; when the parent's ID names no family, an inheriting agent gets no
 `model` and so runs on the parent. It fills a missing model only for built-in
 agents that would inherit (general-purpose, claude, Explore, Plan) and for the
-cheap, standard, and premium leo tiers. leo-parent and forks run on the
-parent; other plugins' agents keep their own model.
+cheap, standard, and premium leo tiers; leo-lens, whose definition inherits,
+gets the standard tier when the reviewer names no model. leo-parent and forks
+run on the parent; other plugins' agents keep their own model.
 Fresh-session PreToolUse may run before the first assistant response is
 written: the parent is then unavailable, nothing is filled in except a leo
 tier's configured model, and dispatch is allowed with a diagnostic.
