@@ -29,16 +29,18 @@ a cheaper model while preserving quality.
 Native profiles are `leo-cheap`, `leo-standard`, `leo-premium`, `leo-parent`,
 `leo-reviewer`, and `leo-lens`. The retired `leo-runner` and `leo-executor`
 profiles are gone, but the guard and logs still map those names to cheap and
-standard, and routing config still accepts its `runner` and `executor` keys. On
-Claude Code each worker profile caps its turns; a capped run returns its output
-marked partial. Review may use nested lenses through `leo-lens`, the read-only
-lens profile. Claude Code removes its Edit, Write and Agent tools, and the
-reviewer sets its cheap or standard tier with the dispatch's `model`. OpenCode
-denies it `edit` and `task` and Cursor marks it `readonly`; there and on Codex
-it is a standard-tier profile, and a cheap lens uses `leo-cheap`. A Codex lens
-runs in the session's own sandbox. Bash stays available for reading the PR.
-Ordinary workers do not delegate. Small reviews run locally, and larger reviews
-divide independent areas rather than requiring every lens to reread everything.
+standard, and routing config still accepts its `runner` and `executor` keys.
+Worker profiles cap their turns on Claude Code, where a capped run returns its
+output marked partial, and on OpenCode as `steps`, past which the worker loses
+its tools and answers in text. The Codex and Cursor profiles carry no turn cap.
+Review may use nested lenses through `leo-lens`, the read-only lens profile.
+Claude Code removes its Edit, Write and Agent tools, and the reviewer sets its
+cheap or standard tier with the dispatch's `model`. OpenCode denies it `edit`
+and `task` and Cursor marks it `readonly`; there and on Codex it is a
+standard-tier profile, and a cheap lens uses `leo-cheap`. A Codex lens runs in
+the session's own sandbox. Bash stays available for reading the PR. Ordinary
+workers do not delegate. Small reviews run locally, and larger reviews divide
+independent areas rather than requiring every lens to reread everything.
 
 Delegation is decided by decomposition, not by guessing at size. A step is
 delegated when it is independent of the parent's next step or when its tool
@@ -80,7 +82,9 @@ Prices come from the public [OpenRouter model catalog](https://openrouter.ai/doc
 including Claude, GPT, DeepSeek, Kimi, GLM, and Qwen families. Exact IDs and
 recognized aliases are preferred. Nearby versions of the same variant can use
 an explicitly labeled estimate; sizes, cheap/pro variants, and free endpoints
-are not conflated. A price alias never changes the identifier sent to a harness.
+are not conflated. Claude's Amazon Bedrock and Google Cloud Agent Platform
+(Vertex AI) IDs take the first-party model's price, so the ceiling also holds
+under those parents. A price alias never changes the identifier sent to a harness.
 Public prices do not establish account access, model availability, negotiated
 rates, or subscription-credit accounting.
 
@@ -105,8 +109,10 @@ Completion capture reads the last 4 KiB of a worker's final text, or of the
 report a Claude child handed back through its hand-back tool, for its
 `Result:` and `Verified:` lines and drops the text. On Claude Code and Codex, a
 leo-* worker whose final message lacks those lines is asked once, at its first
-SubagentStop, to restate its report with them; guard modes `warn` and `off`
-skip the prompt. The dispatch log stores the outcome enum, a verified
+SubagentStop, to restate its report with them. In Claude Code auto mode, where
+a worker reports through the hand-back tool instead, its first report without
+them is refused once and the worker is asked to hand it back with both lines.
+Guard modes `warn` and `off` skip both. The dispatch log stores the outcome enum, a verified
 tri-state, a source token, token and turn counts, the tier, and the escalation
 source tier; never brief or result text. `dispatch_log.py report` joins
 completions to dispatches by call id; on Claude, whose SubagentStop has none,
@@ -116,7 +122,8 @@ the same tier. The report prints
 outcome and verification counts per tier beside the dispatches that sent no
 completion signal, escalation chains and tier counts over dispatches that ran,
 summed child usage and turns, reference cost per verified success from catalog
-prices (an estimate, not a bill), and which harnesses supplied no signal.
+prices (an estimate, not a bill), and which harnesses supplied no signal. It
+counts and prices a child's tokens by the usage scan's own rules.
 Some hosts send none for background children: Claude Code background subagents
 on some builds and in the VS Code extension, OpenCode background tasks, and
 Cursor background subagents. Claude Code's SessionEnd hooks share a 1.5 s budget that
@@ -304,6 +311,13 @@ python3 scripts/leo-install.py <harness>
 Unknown model identifiers are retained and diagnosed, not silently corrected
 to a different dispatch ID. Parent-level always means the current parent.
 
+On Claude Code, `CLAUDE_CODE_SUBAGENT_MODEL` keeps its native role as a default.
+A general-purpose or claude dispatch that names no model runs on it instead of
+the standard tier, capped at the parent's price; the leo tiers, and Explore and
+Plan (defined as `inherit`), keep their own model. With
+`CLAUDE_CODE_SUBAGENT_MODEL_FORCE` on, the setting replaces every tier, and the
+guard only blocks a forced model priced above the parent.
+
 Guard modes are `LEOS_AGENT_DISPATCH_GUARD=on` (default), `warn` (log proposed
 corrections/blocks), and `off`; `0`, `false`, `no`, and `disabled` also mean
 off. Any other value keeps the guard on and marks each logged dispatch with an
@@ -374,7 +388,9 @@ optional cross-model lens, off unless the user enables it, sends the pinned
 diff to a second provider's CLI.
 Watchers use cross-process leases, bounded retries, and completion reports;
 emission alone never records a PR as reviewed. A head waiting on the user's
-decision is parked without spending retries.
+decision is parked without spending retries. A head already reviewed by hand
+with every changed non-generated file read, or carried from an earlier
+complete review, is not emitted again, whatever its verdict.
 
 Logs omit prompt text by default and rotate at 1 MiB plus one retained file.
 `LEOS_AGENT_DISPATCH_LOG_PROMPTS=1` is an explicit debug option that retains
@@ -387,7 +403,10 @@ symlink escapes are refused by the helper.
 `evals/` is a [`claude plugin eval`](https://code.claude.com/docs/en/plugin-evals)
 suite for the delegation policy on Claude Code. Each case runs three times with
 the plugin and three times without it, every run in a fresh temporary home, so
-the plugin's default tiers apply rather than your `routing.json`. Fixtures are
+the plugin's default tiers apply rather than your `routing.json`. A run receives
+only `EVAL_*` variables beside an allowlist of your shell, so each case sets
+`EVAL_LEOS_AGENT_PRICE_REFRESH=off`, which the SessionStart hook honours like
+`LEOS_AGENT_PRICE_REFRESH=off`; no run starts a price refresh. Fixtures are
 small read-only directories inside each case. No case needs `--scaffold` or
 `--allow-tools`, and every grader is a regex or tool-use check, so no judge
 model is called.

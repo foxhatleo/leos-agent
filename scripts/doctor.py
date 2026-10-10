@@ -4,16 +4,21 @@ import argparse
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import dispatch_guard
 import payload
 import pricing
+import review_peer
 import routing
+import routing_engine
 from routing_engine import CAPABILITIES
 import settings_probe
+import state
 
 # The age past which a catalog is called stale: the refresher retries daily,
 # so a week means refreshes have been failing or are switched off.
@@ -67,19 +72,16 @@ def _utc(stamp):
         return None
 
 
-# LEOS_AGENT_DISPATCH_GUARD: the guard's spellings for each mode. Anything else
-# keeps the guard on and is worth fixing, since it was probably meant as off.
-GUARD_ON = ("", "on", "1", "true", "yes", "enable", "enabled")
-GUARD_OFF = ("off", "0", "false", "no", "disable", "disabled")
-
-
 def guard_mode(loaded, issues):
+    """LEOS_AGENT_DISPATCH_GUARD, read with the guard's own spellings. Any
+    other value keeps the guard on and is worth fixing, since it was probably
+    meant as off."""
     found = settings_probe.setting("LEOS_AGENT_DISPATCH_GUARD", loaded)
     value = (found["value"] or "").strip().lower()
-    mode = "warn" if value == "warn" else "off" if value in GUARD_OFF else "on"
+    mode = "off" if value in dispatch_guard.GUARD_OFF else "warn" if value == "warn" else "on"
     result = {"mode": mode, "set_in": found["set_in"],
               "value": settings_probe.clean(found["value"], 40) if found["value"] is not None else None,
-              "recognised": value in GUARD_ON + GUARD_OFF + ("warn",)}
+              "recognised": mode != "on" or value in dispatch_guard.GUARD_ON}
     if not result["recognised"]:
         issues.append("LEOS_AGENT_DISPATCH_GUARD=%r is not a recognised mode, so the guard stays on; use on, warn, "
                       "or off" % result["value"])
@@ -93,7 +95,8 @@ def subagent_model(loaded, issues):
     model = settings_probe.setting("CLAUDE_CODE_SUBAGENT_MODEL", loaded)
     force = settings_probe.setting("CLAUDE_CODE_SUBAGENT_MODEL_FORCE", loaded)
     named = model["value"] if model["value"] and model["value"].strip().lower() != "inherit" else None
-    forced = settings_probe.truthy(force["value"])
+    # The guard reads the flag the way Claude Code does, so one verdict covers both.
+    forced = (force["value"] or "").strip().lower() in dispatch_guard.CLAUDE_TRUE
     result = {"model": settings_probe.clean(named) if named else None, "model_set_in": model["set_in"],
               "force": forced, "force_set_in": force["set_in"],
               "forced_model": (settings_probe.clean(named) if named else "inherit") if forced else None,
@@ -103,8 +106,6 @@ def subagent_model(loaded, issues):
         target = "the %s model" % result["model"] if named else "the main conversation's model"
         issues.append("CLAUDE_CODE_SUBAGENT_MODEL_FORCE is on: every subagent runs on %s and the tier frontmatter "
                       "and per-dispatch model are ignored; unset it to restore tier routing" % target)
-        if force["value"].strip() != "1":
-            result["note"] = "the dispatch guard recognises only the value 1, so it treats this setting as off"
     elif named:
         result["note"] = ("default only: leos-agent tiers set frontmatter models and keep them; it applies to agents "
                           "with neither. Claude Code before v2.1.251 let it override frontmatter and dispatch models.")
@@ -143,32 +144,91 @@ def advisor(loaded):
 
 
 def routing_config(report):
-    """Validate routing.json read-only, section by section, with routing.py's
-    own rules. A section that fails is not applied, so the tiers reported
-    for it are the defaults; the file itself is left exactly as written."""
+    """routing.json, read-only, through the loader the guard and the session
+    hook use, so the config reported is the one they apply. A section that
+    loader drops is reported ignored and its tiers are the defaults; the file
+    itself is left exactly as written."""
     result = {"path": routing.config_path(), "exists": os.path.exists(routing.config_path()),
               "valid": True, "ignored": []}
     report["routing_config"] = result
+    config, error = routing_engine.load_config()
+    if error is None:
+        return config
     try:
         raw = routing.read_raw()
-        if not isinstance(raw, dict):
-            routing.validate(raw)
-    except ValueError as exc:
-        result.update(valid=False, ignored=["the whole file"], errors=[str(exc)])
-        report["issues"].append("routing.json is invalid and not applied; tiers fall back to defaults: " + str(exc))
-        return {}
-    config, errors = {}, []
+    except (ValueError, OSError):
+        raw = None
+    if not isinstance(raw, dict):
+        result.update(valid=False, ignored=["the whole file"], errors=[str(error)])
+        report["issues"].append("routing.json is invalid and not applied; tiers fall back to defaults: " + str(error))
+        return config
+    # An empty section applies nothing and is valid. Any other section the
+    # loader left out failed on its own, and validating it alone says why.
+    errors = []
     for harness, entry in raw.items():
+        if harness in config or entry == {}:
+            continue
+        result["ignored"].append(settings_probe.clean(harness, 40))
         try:
-            config.update(routing.validate({harness: entry}))
+            routing.validate({harness: entry})
         except ValueError as exc:
-            result["ignored"].append(settings_probe.clean(harness, 40))
             errors.append(str(exc))
-    if errors:
-        result.update(valid=False, errors=errors)
-        report["issues"].append("routing.json has invalid sections that are not applied (%s); those tiers fall back "
-                                "to defaults: %s" % (", ".join(result["ignored"]), "; ".join(errors)))
+    result.update(valid=False, errors=errors or [str(error)])
+    report["issues"].append("routing.json has invalid sections that are not applied (%s); those tiers fall back "
+                            "to defaults: %s" % (", ".join(result["ignored"]), "; ".join(result["errors"])))
     return config
+
+
+def review_peer_setting(harness, issues):
+    """The opt-in cross-model review lens on this machine, read-only.
+
+    Only the keys review_peer.py reads are reported, never the rest of the
+    file. The peer CLI is looked up on PATH and not run: its login is checked
+    when a review runs the lens (`review_peer.py detect`)."""
+    path = os.path.join(state._data_root(), review_peer.SETTINGS_NAME + ".json")
+    result = {"path": path, "exists": os.path.isfile(path), "enabled": False, "peer": None,
+              "peer_source": None, "peer_cli": None, "peer_cli_detected": None}
+    stored = {}
+    if result["exists"]:
+        try:
+            stored = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            stored = None
+        if not isinstance(stored, dict):
+            result["status"] = "unreadable"
+            issues.append("review-peer.json is not a readable JSON object, so review_peer.py refuses to run; fix it, "
+                          "or delete it to turn the cross-model lens off")
+            return result
+    settings = dict(review_peer.DEFAULTS)
+    settings.update((k, v) for k, v in stored.items() if k in review_peer.DEFAULTS)
+    # review_peer.plan's reading: the configured target, else the other
+    # family of a Claude or Codex host; only `true` enables it.
+    host = harness if harness in review_peer.OTHER else None
+    target = settings["target"] or review_peer.OTHER.get(host)
+    enabled = settings["enabled"] is True
+    result["enabled"] = enabled
+    off = "off: review-pr runs the lens only when you enable it for one review or with review_peer.py config --enable"
+    if not isinstance(target, str) or target not in review_peer.TARGETS:
+        result["status"] = off if not enabled else ("enabled, but no peer for this harness; choose one with "
+                                                    "review_peer.py config --target codex or claude")
+        return result
+    binary = review_peer.TARGETS[target]["binary"]
+    result.update(peer=target, peer_source="setting" if settings["target"] else "default for this harness",
+                  peer_cli=binary, peer_cli_detected=shutil.which(binary) is not None)
+    if isinstance(settings["model"], str):
+        result["model"] = settings_probe.clean(settings["model"], 100)
+    if not enabled:
+        result["status"] = off
+    elif host == review_peer.TARGETS[target]["family"]:
+        result["status"] = "enabled, but the peer is this harness's own model family, so review-pr skips the lens here"
+    elif not result["peer_cli_detected"]:
+        result["status"] = "enabled, but %s is not on PATH, so review-pr skips the lens" % binary
+        issues.append("the cross-model review lens is enabled but %s is not on PATH; install it, or run "
+                      "review_peer.py config --disable" % binary)
+    else:
+        result["status"] = ("enabled: a review checks that %s is logged in, then sends the pinned PR diff to %s's "
+                            "provider" % (binary, target))
+    return result
 
 
 def diagnose(harness, root=None):
@@ -204,6 +264,7 @@ def diagnose(harness, root=None):
     except (OSError, ValueError):
         report["pricing"]["last_refresh"] = "no local refresh diagnostic"
     report["output_compression"] = settings_probe.output_compressors(harness)
+    report["review_peer"] = review_peer_setting(harness, report["issues"])
     # Claude Code applies settings `env` to the hook process; elsewhere the
     # guard sees only the environment the harness was started with.
     loaded, problems = (settings_probe.load_settings(settings_probe.claude_settings_files())

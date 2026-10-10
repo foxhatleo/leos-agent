@@ -46,9 +46,25 @@ one non-empty reply goes to a leo-* child whose final message lacks the
 `Result:`/`Verified:` lines: on a first stop (`stop_hook_active` false) it asks
 once for the report restated with them, as `additionalContext` on Claude and
 `decision: block` on Codex, and records the child at its next stop. A Claude
-child that reported through its hand-back tool is never asked. Guard modes
+child whose report went through its hand-back tool is never asked. Guard modes
 `warn` and `off` disable the prompt. Claude PostModelSwitch refreshes its
 parent-model cache. Codex supplies its active model directly in tool-hook events.
+
+In auto mode a Claude child reports through its `SubagentHandback` tool, so
+its final message is not the report. A PreToolUse hook matched on that tool,
+`scripts/handback_contract.py`, judges the report as it is handed back: when a
+leo-* worker's report lacks either line, it denies the call, and Claude Code
+returns the denial reason to the child as the tool's error, asking for the
+same report again with both lines. It refuses each child at most once: the
+first refusal creates that child's marker under `~/.leos-agent-local/handbacks/`,
+which no later call can create again, so the next hand-back goes through
+whatever it says, and when no marker can be written nothing is refused. The
+agent type comes from the hook input, else from the child transcript's
+metadata sidecar. Other agents, the main thread, and guard modes `warn` and
+`off` pass untouched; the hook never grants permission and fails open. A
+refused call delivered nothing, so the observer reads only hand-backs that
+went through, and a child whose only hand-back was refused can still get its
+one SubagentStop prompt.
 
 Completion signals share one contract. Every adapter sends the observer a
 SubagentStop-shaped event carrying at most the last 4 KiB of the child's final
@@ -61,9 +77,10 @@ foreground result and for a background launch, and reads nothing else. The
 report joins Claude completions through that row and guesses the nearest
 preceding dispatch only when no link exists. `scripts/outcome.py` reduces the
 child's text to `Result:`/`Verified:` tokens and the text is discarded; `usage` is taken from the
-event or, on Claude and Codex, summed from the child transcript by the usage
-scan's rules, with a turn count. A Claude child that reports through its
-hand-back tool is read from that report. Cursor's subagentStop carries the
+event or, on Claude and Codex, summed from the child transcript with a turn
+count. The usage scan and the report count and price tokens by one set of
+rules, `scripts/accounting.py`. A Claude child that reports through its
+hand-back tool is read from the report that went through. Cursor's subagentStop carries the
 child's `summary`, call id and child conversation id; without a summary the
 row says status-only. Background Cursor subagents may send no subagentStop or
 null fields. OpenCode uses `tool.execute.after` on `task`, taking the agent from
@@ -113,12 +130,31 @@ References:
 Claude live verification established that Agent accepts the aliases haiku,
 sonnet, opus, and fable, rather than full transcript model IDs. The guard caps
 a child with the parent's family alias, which Claude runs on the parent's exact
-model; when the parent's ID names no family, an inheriting agent gets no
-`model` and so runs on the parent. It fills a missing model only for built-in
-agents that would inherit (general-purpose, claude, Explore, Plan) and for the
-cheap, standard, and premium leo tiers; leo-lens, whose definition inherits,
-gets the standard tier when the reviewer names no model. leo-parent and forks
-run on the parent; other plugins' agents keep their own model.
+model. Bedrock IDs (`us.anthropic.claude-sonnet-4-5-20250929-v1:0`, with or
+without a cross-region prefix) and Agent Platform (Vertex AI) IDs
+(`claude-sonnet-4-5@20250929`) name their family and price like the
+first-party ID. When the parent's ID names no family, an inheriting agent
+gets no `model` and so runs on the parent. It fills a missing model only for
+built-in agents that would inherit (general-purpose, claude, Explore, Plan) and
+for the cheap, standard, and premium leo tiers; leo-lens, whose definition
+inherits, gets the standard tier when the reviewer names no model. leo-parent
+and forks run on the parent; other plugins' agents keep their own model.
+
+Claude Code takes a child's model from the call's `model`, then the agent
+definition, then `CLAUDE_CODE_SUBAGENT_MODEL`, then the parent. The guard reads
+that setting from its environment, which also carries a settings file's `env`.
+Without the force flag it is the model general-purpose and claude run on, as
+their definitions name none: the guard fills no `model` for them, logs
+`subagent-model-setting`, and only caps a setting priced over the parent with
+the parent's alias. Under a parent with no alias it blocks instead, since
+omitting `model` would run the setting, not the parent. Explore and Plan are
+defined as `inherit`, which outranks the setting, so they still get the
+standard default; leo tiers keep their configured model. With
+`CLAUDE_CODE_SUBAGENT_MODEL_FORCE` on (`1`, `true`, `yes`, or `on`), every
+subagent but a fork runs on the setting, or on the parent when it is unset,
+whatever `model` says. The guard then changes nothing, logs
+`forced-model-setting`, and blocks a setting priced over the parent.
+
 Fresh-session PreToolUse may run before the first assistant response is
 written: the parent is then unavailable, nothing is filled in except a leo
 tier's configured model, and dispatch is allowed with a diagnostic.

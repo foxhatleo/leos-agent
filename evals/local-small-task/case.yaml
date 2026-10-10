@@ -3,3 +3,6 @@ name: local-small-task
 plugins: ["../.."]
 context:
   add_dirs: [deploy]
+execution:
+  env:
+    EVAL_LEOS_AGENT_PRICE_REFRESH: "off"

@@ -82,6 +82,12 @@ def parse(text):
     return result
 
 
+def contract_met(parsed):
+    """Whether a parse() result closes the worker contract: a known outcome and a stated evidence line.
+    `Verified: none` states that there is none; an unfilled placeholder states nothing."""
+    return parsed["outcome"] != "unknown" and parsed["verified"] is not None
+
+
 def escalation_tier(head):
     """The tier an escalating brief names in its opening line, or None.
 

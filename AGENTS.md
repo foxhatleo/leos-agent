@@ -32,6 +32,7 @@ The repo root *is* the plugin. Six manifests sit side by side over one tree:
 | `hooks/` | Native hook manifests per harness. Scripts they call live in `scripts/` so npm installs ship them. |
 | `scripts/` | Installer, guard, routing engine, diagnostics, release tooling. Stdlib-only Python, Python 3.9 floor. |
 | `tests/` | `unittest` suites plus `tests/js/` for Node 22. |
+| `evals/` | `claude plugin eval` suite for the delegation policy; every run is a paid model call. `tests/test_evals.py` is its offline gate. |
 | `~/.leos-agent-local` | Per-machine state (routing, handoffs, dispatch log, backups). Never inside a versioned plugin cache. |
 
 ## Gates and when to run them
@@ -142,7 +143,9 @@ The policy in `rules/preferences.md` applies to work on this repo too.
   unknown evidence, not proof of a failed install or a successful correction.
 - Usage scans must deduplicate streaming messages, handle cumulative and cached
   tokens per provider, and use message-time usage. Pre-compaction context is not
-  discarded tokens; reference-cost estimates are not bills.
+  discarded tokens; reference-cost estimates are not bills. These counting and
+  reference-cost rules live once, in `scripts/accounting.py`, shared by the
+  usage scan and the dispatch report; extend them there, never in a copy.
 - Verify harness/library facts against installed binaries and current official
   docs online. APIs change quickly; recall and an old session are insufficient.
 
@@ -265,6 +268,13 @@ these contracts when changing it or `scripts/ghreview.py`:
   reports. Partial coverage blocks readiness, not a verified blocking verdict.
   A decision only Leo can make parks the head (`block`) instead of burning
   retries. The first tick emits without settling.
+- A verdict stage records with `coverage_complete` (every changed
+  non-generated file read or carried) marks its head reviewed for the watcher,
+  whatever the verdict; an incomplete one marks nothing, and a record without
+  the field counts only if it is ready-to-merge. Only ready-to-merge carries
+  to a later head. On a head the watcher spent an attempt on, only `record`
+  completes it. `forget` and `unblock` keep the stored verdict but stop it
+  marking the head reviewed (`rewatch`), so the head comes back.
 - Verdicts: neutral needs a staged comment or note (stage also requires one
   for seriously-problematic); CI is informational only;
   the only caps are unverified behaviour and an unread ticket. A recorded

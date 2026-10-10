@@ -16,13 +16,15 @@ this skill file containing `rules/preferences.md`.
 python3 "<plugin-root>/scripts/doctor.py" --harness <harness> --json
 ```
 
-The helper checks installed artifacts, routing.json (invalid sections are
-reported as not applied), the effective dispatch-guard mode, policy rendering,
-tier references, and price freshness of the catalog actually in use, with any
-hand amendments. It reads settings key-scoped to report forced subagent models
-and the advisor on Claude, and Bash-rewriting output compressors such as rtk
-on every harness, with how they interact with dispatch. These are disk checks,
-**not proof of runtime activation**.
+The helper checks installed artifacts, routing.json as the guard loads it
+(invalid sections are reported ignored), the effective dispatch-guard mode,
+policy rendering, tier references, and price freshness of the catalog actually
+in use, with any hand amendments. It reads settings key-scoped to report forced
+subagent models and the advisor on Claude, Bash-rewriting output compressors
+such as rtk on every harness, with how they interact with dispatch, and the
+cross-model review lens: whether it is enabled, its peer CLI, and whether that
+CLI is on PATH. Its login is checked only when a review runs the lens. These
+are disk checks, **not proof of runtime activation**.
 A named model can still be unavailable to the user's provider or organization.
 A configured native agent can be shadowed by a higher-priority project agent.
 

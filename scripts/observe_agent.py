@@ -88,7 +88,7 @@ def contract_prompt(event, harness):
     """
     if harness not in CONTRACT_HARNESSES or event.get("stop_hook_active") is not False:
         return None
-    if os.environ.get("LEOS_AGENT_DISPATCH_GUARD", "on").strip().lower() != "on":
+    if dispatch_guard.guard_mode()[0] != "on":
         return None
     from routing_engine import tier_for
     if tier_for(dispatch_guard._first_str(event, dispatch_guard.AGENT_KEYS)) is None:
@@ -96,8 +96,7 @@ def contract_prompt(event, harness):
     text = event.get("last_assistant_message")
     if not isinstance(text, str):
         return None  # absent or null: nothing to judge
-    parsed = outcome.parse(text[-outcome.TAIL_BYTES:])
-    if parsed["outcome"] != "unknown" and parsed["verified"] is not None:
+    if outcome.contract_met(outcome.parse(text[-outcome.TAIL_BYTES:])):
         return None
     path = session_models.child_transcript(event)
     if session_models.transcript_handback_text(path, 1):

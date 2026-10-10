@@ -340,30 +340,20 @@ def join(entries):
 
 
 def _reference_usd(model, usage, catalog):
-    """(low, high) reference USD for one child's tokens, or None when unpriced.
+    """(low, high) reference USD for one child's tokens, or None when any of them is unpriced.
 
-    The same rates and conditional-rate range the usage scan applies. A
+    Priced by the usage scan's own rule (accounting.reference_range). A
     reference estimate from public catalog prices, never a bill.
     """
+    import accounting
     import pricing
     if not isinstance(model, str) or not model:
         return None
     match = pricing.resolve(model, catalog)
     if match.model is None:
         return None
-    rows = [match.pricing] + list(match.pricing.get("overrides", []))
-    low = high = 0
-    for field, rate_key in (("input", "prompt"), ("cache_read", "input_cache_read"),
-                            ("cache_write", "input_cache_write"), ("output", "completion")):
-        amount = usage.get(field) or 0
-        if not amount:
-            continue
-        rates = [pricing.decimal(row.get(rate_key, match.pricing.get(rate_key))) for row in rows]
-        if None in rates:
-            return None
-        low += amount * min(rates)
-        high += amount * max(rates)
-    return float(low), float(high)
+    low, high, unpriced = accounting.reference_range(match, usage)
+    return None if unpriced else (float(low), float(high))
 
 
 def _costs(completions, pairs, catalog):

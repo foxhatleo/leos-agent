@@ -219,9 +219,102 @@ class ClaudeModelOrder(unittest.TestCase):
         self.assertNotEqual(result["action"], "block")
         self.assertIsNone(result["updated_input"])
 
+    def test_bedrock_and_vertex_parents_cap_a_child_at_their_own_alias(self):
+        """Claude runs the parent's family alias on the parent's exact model, so
+        the alias is the cap; the parent's ID itself is never sent to Agent."""
+        for parent, alias in (("us.anthropic.claude-sonnet-4-5-20250929-v1:0", "sonnet"),
+                              ("global.anthropic.claude-sonnet-4-5-20250929-v1:0[1m]", "sonnet"),
+                              ("claude-sonnet-4-5@20250929", "sonnet"),
+                              ("eu.anthropic.claude-haiku-4-5-20251001-v1:0", "haiku"),
+                              ("claude-haiku-4-5@20251001", "haiku")):
+            for args in ({"subagent_type": "general-purpose", "model": "opus"}, {"subagent_type": "leos-agent:leo-premium"}):
+                with self.subTest(parent=parent, args=args):
+                    result = self.route(args, parent)
+                    self.assertEqual((result["action"], result["reason"]), ("correct", "over-ceiling"))
+                    self.assertEqual(result["price"]["status"], "over-ceiling")
+                    self.assertEqual(result["updated_input"]["model"], alias)
+                    self.assertEqual(result["effective_model"], parent)
+
+    def test_bedrock_and_vertex_parents_are_priced_for_children_within_the_ceiling(self):
+        for parent in ("us.anthropic.claude-opus-4-1-20250805-v1:0", "claude-opus-4-1@20250805"):
+            with self.subTest(parent=parent):
+                result = self.route({"subagent_type": "general-purpose", "model": "haiku"}, parent)
+                self.assertEqual((result["action"], result["reason"], result["price"]["status"]),
+                                 ("allow", "within-ceiling", "allowed"))
+                self.assertEqual(result["price"]["parent"]["reference_model"], "anthropic/claude-opus-4.1")
+
     def test_premium_cannot_pass_a_parent_whose_long_prompt_tier_overlaps_it(self):
         for args in ({"subagent_type": "leos-agent:leo-premium"}, {"subagent_type": "general-purpose", "model": "opus"}):
             with self.subTest(args=args):
                 result = self.route(args, "claude-sonnet-4-5-20250929")
                 self.assertEqual((result["action"], result["reason"]), ("correct", "over-ceiling"))
                 self.assertEqual(result["updated_input"]["model"], "sonnet")
+
+
+class ClaudeSubagentModelSetting(unittest.TestCase):
+    """An unforced CLAUDE_CODE_SUBAGENT_MODEL ranks below the call's `model` and
+    the agent definition, above the parent. Explore and Plan are defined as
+    `inherit`; general-purpose and claude name no model, so the setting runs them."""
+
+    def setUp(self):
+        self.catalog = json.loads(pricing.BUNDLED.read_text())
+        self.mythos = pricing.snapshot({"data": self.catalog["models"] + [
+            {"id": "anthropic/claude-mythos-preview", "pricing": {"prompt": "0.000001", "completion": "0.000005"}}]})
+
+    def route(self, args, parent, setting, catalog=None):
+        return engine.route("claude", "Agent", dict(args, prompt="Investigate"), parent, config={},
+                            catalog=catalog or self.catalog, default_model=setting)
+
+    def test_unpinned_agents_run_on_the_setting_without_a_standard_tier(self):
+        for args in ({"subagent_type": "general-purpose"}, {"subagent_type": "claude"}, {}):
+            with self.subTest(args=args):
+                result = self.route(args, "claude-opus-5-5", "haiku")
+                self.assertEqual((result["action"], result["reason"]), ("allow", "subagent-model-setting"))
+                self.assertIsNone(result["updated_input"])
+                self.assertEqual(result["effective_model"], "haiku")
+
+    def test_agents_whose_definition_decides_ignore_the_setting(self):
+        for agent in ("Explore", "Plan"):
+            with self.subTest(agent=agent):
+                result = self.route({"subagent_type": agent}, "claude-opus-5-5", "haiku")
+                self.assertEqual(result["updated_input"]["model"], "sonnet")
+        cheap = self.route({"subagent_type": "leos-agent:leo-cheap"}, "claude-opus-5-5", "opus")
+        self.assertEqual(cheap["updated_input"]["model"], "haiku")
+        parent = self.route({"subagent_type": "leos-agent:leo-parent"}, "claude-opus-5-5", "haiku")
+        self.assertEqual((parent["reason"], parent["effective_model"]), ("inherits-parent", "claude-opus-5-5"))
+        other = self.route({"subagent_type": "other-plugin:scanner"}, "claude-opus-5-5", "opus")
+        self.assertEqual((other["action"], other["reason"]), ("allow", "agent-defined-model"))
+
+    def test_a_setting_over_the_parent_is_capped_with_the_parents_alias(self):
+        for parent in ("claude-sonnet-5-5", "us.anthropic.claude-sonnet-4-5-20250929-v1:0", "claude-sonnet-4-5@20250929"):
+            with self.subTest(parent=parent):
+                result = self.route({"subagent_type": "general-purpose"}, parent, "opus")
+                self.assertEqual((result["action"], result["reason"]), ("correct", "over-ceiling"))
+                self.assertEqual(result["updated_input"]["model"], "sonnet")
+                self.assertEqual(result["effective_model"], parent)
+
+    def test_without_a_parent_alias_omitting_the_model_would_run_the_setting(self):
+        """Omitting `model` inherits the parent only when nothing else applies;
+        under the setting it would run the over-ceiling setting itself."""
+        for args in ({"subagent_type": "general-purpose"}, {"subagent_type": "general-purpose", "model": "opus"}):
+            with self.subTest(args=args):
+                result = self.route(args, "claude-mythos-preview", "opus", catalog=self.mythos)
+                self.assertEqual((result["action"], result["reason"]), ("block", "unsupported-native-model"))
+                self.assertIn("leo-parent", result["retry"])
+        self.assertIn("CLAUDE_CODE_SUBAGENT_MODEL", self.route({}, "claude-mythos-preview", "opus", self.mythos)["retry"])
+        within = self.route({}, "claude-mythos-preview", "haiku", catalog=self.mythos)
+        self.assertEqual((within["action"], within["reason"]), ("allow", "subagent-model-setting"))
+
+    def test_a_call_model_outranks_the_setting(self):
+        result = self.route({"subagent_type": "general-purpose", "model": "haiku"}, "claude-opus-5-5", "opus")
+        self.assertEqual((result["action"], result["reason"], result["effective_model"]),
+                         ("allow", "within-ceiling", "haiku"))
+
+    def test_an_unknown_parent_reports_the_setting_unpriced(self):
+        result = self.route({"subagent_type": "general-purpose"}, None, "opus")
+        self.assertEqual((result["action"], result["reason"], result["effective_model"], result["price"]),
+                         ("allow", "subagent-model-setting", "opus", None))
+
+    def test_a_fork_still_runs_on_the_parent(self):
+        result = self.route({"subagent_type": "fork"}, "claude-sonnet-5-5", "opus")
+        self.assertEqual((result["reason"], result["effective_model"]), ("fork-inherits-parent", "claude-sonnet-5-5"))

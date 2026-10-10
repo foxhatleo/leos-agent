@@ -27,6 +27,9 @@ from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
+# A settings file's env reaches Claude Code's Bash tool too, so a gate run in a
+# session can inherit these.
+CLAUDE_SUBAGENT_SETTINGS = ("CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL_FORCE")
 
 
 def load(name, filename):
@@ -54,9 +57,11 @@ class GuardCase(unittest.TestCase):
         self.data.mkdir()
 
     def env(self, **extra):
-        base = {"LEOS_AGENT_LOCAL_PATH": str(self.data)}
-        base.update(extra)
-        return mock.patch.dict(os.environ, base)
+        """The sandboxed data root, without the invoking shell's Claude
+        subagent-model settings: the guard honours them."""
+        base = {k: v for k, v in os.environ.items() if k not in CLAUDE_SUBAGENT_SETTINGS}
+        base.update({"LEOS_AGENT_LOCAL_PATH": str(self.data)}, **extra)
+        return mock.patch.dict(os.environ, base, clear=True)
 
     def write_routing(self, payload):
         (self.data / "routing.json").write_text(json.dumps(payload), encoding="utf-8")

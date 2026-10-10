@@ -34,6 +34,13 @@ PRICE_KEYS = frozenset(("prompt", "completion", "input_cache_read", "input_cache
                         "web_search", "image", "image_output", "audio", "audio_output", "request",
                         "internal_reasoning"))
 THRESHOLD = "min_prompt_tokens"
+# Claude on Amazon Bedrock is `anthropic.` plus the first-party name and a
+# `-v<n>[:<n>]` revision, optionally behind a cross-region inference prefix;
+# the prefixes are the ones Claude Code itself recognizes. Vertex AI appends
+# `@<date>` instead, and names Sonnet 3.5's second release `-v2@<date>`.
+BEDROCK_CLAUDE = re.compile(r"^(?:(?:us|eu|apac|jp|au|us-gov|global)\.)?anthropic\."
+                            r"(claude-[a-z0-9.-]+?)(?:-v\d+(?::\d+)?)?$")
+VERTEX_CLAUDE = re.compile(r"^(claude-[a-z0-9.-]+?)(?:-v\d+)?@\d{8}$")
 
 
 class PricingError(ValueError):
@@ -52,7 +59,8 @@ def identity(name):
     """Provider-independent family, preserved variant, and numeric version.
 
 Only recognized family grammar is normalized. No edit-distance matching across
-variants, sizes, paid/free endpoints, or unknown provider prefixes.
+variants, sizes, paid/free endpoints, or unknown provider prefixes. Claude's
+Bedrock and Vertex IDs share the identity of the first-party ID.
 """
     if not isinstance(name, str):
         return None
@@ -65,6 +73,9 @@ variants, sizes, paid/free endpoints, or unknown provider prefixes.
                             "openrouter/z-ai", "openrouter/qwen"):
             return None
     value = re.sub(r"\[(?:1m|200k)\]$", "", value)
+    provider_id = BEDROCK_CLAUDE.match(value) or VERTEX_CLAUDE.match(value)
+    if provider_id:
+        value = provider_id.group(1)
     value = value.replace("_", "-").replace(" ", "-")
     value = re.sub(r"-(?:\d{8}|\d{4}|latest)$", "", value)
     if value in ("haiku", "sonnet", "opus", "fable"):
@@ -350,6 +361,17 @@ def refresh(force=False, opener=None):
         raise
     finally:
         os.close(fd)
+
+
+# Either set to "off" switches the session-start refresh off. `claude plugin
+# eval` passes a run only an allowlist and EVAL_* variables, and each run has a
+# fresh home with no catalog, so the eval cases need the prefixed spelling.
+REFRESH_OPT_OUT = ("LEOS_AGENT_PRICE_REFRESH", "EVAL_LEOS_AGENT_PRICE_REFRESH")
+
+
+def refresh_disabled(environ=None):
+    environ = os.environ if environ is None else environ
+    return any(environ.get(name) == "off" for name in REFRESH_OPT_OUT)
 
 
 def refresh_background(force=False):

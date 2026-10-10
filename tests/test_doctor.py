@@ -89,6 +89,28 @@ class ReadOnlyDoctor(DoctorCase):
         self.assertEqual(result["tiers"]["cheap"]["requested"], "sonnet")
         self.assertEqual((self.local / "routing.json").read_text(), original)
 
+    def test_the_reported_routing_is_what_the_guard_and_session_hook_apply(self):
+        self.local.mkdir()
+        cases = (
+            ('{"codex": {"cheap": "gpt-a"}}', []),
+            ('{"codex": {"cheap": "gpt-a"}, "claude": {"cheap": "gpt-not-an-alias"}}', ["claude"]),
+            ('{"codex": {}, "claude": {"cheap": "haiku", "bogus": "x"}}', ["claude"]),
+            ('{"gemini": {"cheap": "x"}, "codex": {"premium": "gpt-b"}, "cursor": []}', ["gemini", "cursor"]),
+            ("[]", ["the whole file"]),
+            ('{"codex":', ["the whole file"]),
+        )
+        for text, ignored in cases:
+            with self.subTest(text=text):
+                (self.local / "routing.json").write_text(text)
+                config, error = doctor.routing_engine.load_config()
+                report = {"issues": []}
+                self.assertEqual(doctor.routing_config(report), config)
+                self.assertEqual(report["routing_config"]["valid"], error is None)
+                self.assertEqual(report["routing_config"]["ignored"], ignored)
+                self.assertEqual(len(report["issues"]), 0 if error is None else 1)
+                self.assertEqual(len(report["routing_config"].get("errors", [])), len(ignored))
+                self.assertEqual((self.local / "routing.json").read_text(), text)
+
 
 class SubagentModel(DoctorCase):
     def test_force_in_settings_is_an_issue_naming_the_forced_model(self):
@@ -104,7 +126,25 @@ class SubagentModel(DoctorCase):
         with patch.dict(os.environ, {"CLAUDE_CODE_SUBAGENT_MODEL_FORCE": "true"}):
             result = doctor.diagnose("claude")
         self.assertEqual(result["forced_subagent_model"], "inherit")
-        self.assertIn("only the value 1", result["subagent_model"]["note"])
+        self.assertNotIn("note", result["subagent_model"])
+
+    def test_the_force_verdict_is_the_guards_for_every_spelling(self):
+        # Claude Code applies settings env to the hook process, so the guard
+        # reads the same value the doctor resolves.
+        forced = set()
+        for value in ("1", "true", "TRUE", " yes ", "On", "0", "false", "no", "off", "", "2", "enabled"):
+            with self.subTest(value=value), patch.dict(os.environ, {"CLAUDE_CODE_SUBAGENT_MODEL_FORCE": value}):
+                expected = doctor.dispatch_guard.claude_flag("CLAUDE_CODE_SUBAGENT_MODEL_FORCE")
+                issues = []
+                result = doctor.subagent_model([], issues)
+                self.assertEqual(result["force"], expected)
+                self.assertEqual(result["forced_model"], "inherit" if expected else None)
+                self.assertEqual(any("FORCE is on" in issue for issue in issues), expected)
+                self.assertNotIn("note", result)
+                if result["force"]:
+                    forced.add(value)
+        # Claude Code's own on-spellings, in any casing and trimmed.
+        self.assertEqual(forced, {"1", "true", "TRUE", " yes ", "On"})
 
     def test_a_project_local_file_outranks_the_environment(self):
         self.settings({"env": {"CLAUDE_CODE_SUBAGENT_MODEL_FORCE": "0"}}, self.root / "work" / ".claude" / "settings.local.json")
@@ -143,6 +183,113 @@ class GuardMode(DoctorCase):
         self.settings({"env": {"LEOS_AGENT_DISPATCH_GUARD": "warn"}})
         with patch.dict(os.environ, {"LEOS_AGENT_DISPATCH_GUARD": "off"}):
             self.assertEqual(doctor.diagnose("claude")["dispatch_guard"]["mode"], "warn")
+
+    def test_every_spelling_reads_as_the_guard_reads_it(self):
+        modes = {}
+        for value in ("on", "1", "TRUE", "yes", "enable", "Enabled", "", "  ", "off", "0", "False", " no ", "disable",
+                      "disabled", "warn", " WARN ", "of", "2", "auto", "warning"):
+            with self.subTest(value=value), patch.dict(os.environ, {"LEOS_AGENT_DISPATCH_GUARD": value}):
+                mode, diagnostic = doctor.dispatch_guard.guard_mode()
+                issues = []
+                result = doctor.guard_mode([], issues)
+                self.assertEqual((result["mode"], result["recognised"]), (mode, diagnostic is None))
+                self.assertEqual(bool(issues), diagnostic is not None)
+                modes.setdefault(result["mode"], set()).add(result["recognised"])
+        self.assertEqual(modes, {"on": {True, False}, "off": {True}, "warn": {True}})
+
+
+class ReviewPeer(DoctorCase):
+    """The opt-in cross-model lens's machine setting, as review_peer.py reads it."""
+
+    def write_peer(self, data):
+        self.local.mkdir(exist_ok=True)
+        path = self.local / "review-peer.json"
+        path.write_text(data if isinstance(data, str) else json.dumps(data))
+        return path
+
+    def path_with(self, *names):
+        """PATH holding only stand-ins for the named CLIs. Each leaves a mark
+        if run, since the doctor must find a CLI without executing it."""
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        for name in names:
+            exe = bin_dir / name
+            exe.write_text("#!/bin/sh\ntouch '%s'\n" % (self.root / ("ran-" + name)))
+            exe.chmod(0o755)
+        return patch.dict(os.environ, {"PATH": str(bin_dir)})
+
+    def peer(self, harness):
+        issues = []
+        return doctor.review_peer_setting(harness, issues), issues
+
+    def test_the_default_is_off_and_the_check_writes_nothing(self):
+        result = doctor.diagnose("claude")["review_peer"]
+        self.assertEqual((result["exists"], result["enabled"], result["peer"], result["peer_source"]),
+                         (False, False, "codex", "default for this harness"))
+        self.assertTrue(result["status"].startswith("off"))
+        self.assertFalse(self.local.exists())
+
+    def test_an_enabled_peer_on_path_is_detected_without_running_it(self):
+        self.write_peer({"enabled": True, "model": "gpt-x", "api_key": "sk-secret-value",
+                         "headers": {"Authorization": "Bearer sk-other-secret"}})
+        with self.path_with("codex"):
+            result, issues = self.peer("claude")
+        self.assertEqual((result["enabled"], result["peer"], result["peer_cli"], result["peer_cli_detected"]),
+                         (True, "codex", "codex", True))
+        self.assertEqual(result["model"], "gpt-x")
+        self.assertEqual(issues, [])
+        self.assertTrue(result["status"].startswith("enabled:"))
+        self.assertFalse((self.root / "ran-codex").exists())
+        self.assertNotIn("sk-", json.dumps(result))
+
+    def test_an_enabled_peer_missing_from_path_is_an_issue_and_a_disabled_one_is_not(self):
+        with self.path_with():
+            self.write_peer({"enabled": True})
+            result, issues = self.peer("claude")
+            self.assertFalse(result["peer_cli_detected"])
+            self.assertEqual(len(issues), 1)
+            self.assertIn("codex is not on PATH", issues[0])
+            self.write_peer({"enabled": False})
+            result, issues = self.peer("claude")
+            self.assertFalse(result["peer_cli_detected"])
+            self.assertEqual(issues, [])
+
+    def test_the_peer_follows_the_host_unless_one_is_set(self):
+        with self.path_with("claude", "codex"):
+            self.write_peer({"enabled": True})
+            self.assertEqual(self.peer("codex")[0]["peer"], "claude")
+            result, issues = self.peer("cursor")
+            self.assertEqual((result["peer"], result["peer_cli_detected"], issues), (None, None, []))
+            self.assertIn("no peer", result["status"])
+            self.write_peer({"enabled": True, "target": "codex"})
+            self.assertEqual(self.peer("cursor")[0]["peer"], "codex")
+            self.assertEqual(self.peer("cursor")[0]["peer_source"], "setting")
+            result, issues = self.peer("codex")
+            self.assertIn("own model family", result["status"])
+            self.assertEqual(issues, [])
+
+    def test_a_corrupt_setting_is_an_issue_not_a_crash(self):
+        for text in ("{broken", "[1, 2]", '"on"'):
+            with self.subTest(text=text):
+                self.write_peer(text)
+                result, issues = self.peer("claude")
+                self.assertEqual(result["status"], "unreadable")
+                self.assertEqual(len(issues), 1)
+
+    def test_enabled_and_peer_agree_with_review_peer_plan(self):
+        hosts = (("claude", {"CLAUDECODE": "1"}), ("codex", {"CODEX_THREAD_ID": "t-1"}), ("opencode", {}))
+        stored = ({}, {"enabled": True}, {"enabled": "true"}, {"enabled": 1}, {"enabled": True, "target": "claude"},
+                  {"enabled": True, "target": "gemini"}, {"enabled": False, "target": "codex"})
+        with self.path_with():
+            for harness, env in hosts:
+                for data in stored:
+                    with self.subTest(harness=harness, stored=data):
+                        self.write_peer(data)
+                        plan = doctor.review_peer.plan(env, doctor.review_peer.load_settings(), which=lambda _: None)
+                        result, _ = self.peer(harness)
+                        self.assertEqual(result["enabled"], plan["enabled"])
+                        self.assertEqual(result["peer"], plan["target"] if plan["target"] in ("claude", "codex")
+                                         else None)
 
 
 class Advisor(DoctorCase):

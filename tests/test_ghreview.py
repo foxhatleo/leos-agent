@@ -563,6 +563,25 @@ class TestVerdictRules(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "tests/test_a.py"):
             self.stage("ready-to-merge", reviewed=["a.py"])
 
+    def test_the_recorded_verdict_says_whether_every_file_was_covered(self):
+        # Ordered so no step downgrades a standing ready-to-merge.
+        finding = {"comments": [{"path": "a.py", "line": 2, "body": "breaks the retry"}]}
+        for verdict, extra in (("neutral", {"notes": ["Unverified: the retry ceiling."]}),
+                               ("seriously-problematic", finding), ("ready-to-merge", {})):
+            with self.subTest(verdict=verdict):
+                self.stage(verdict, **extra)
+                record = ghreview.load_verdict("o/r", 1)
+                self.assertEqual((record["verdict"], record["coverage_complete"]), (verdict, True))
+                self.assertEqual(record["coverage_counts"], {"changed": 3, "reviewed": 2, "carried": 0,
+                                                             "generated": 1, "unreviewed": 0})
+                self.assertTrue(ghreview.full_coverage(record))
+
+    def test_a_pass_with_a_file_unread_is_recorded_as_incomplete(self):
+        self.stage("neutral", reviewed=["a.py"], notes=["Unverified: the retry ceiling."])
+        record = ghreview.load_verdict("o/r", 1)
+        self.assertEqual((record["coverage_complete"], record["coverage_counts"]["unreviewed"]), (False, 1))
+        self.assertFalse(ghreview.full_coverage(record))
+
     def test_a_standing_ready_verdict_is_not_downgraded_without_an_override(self):
         self.stage("ready-to-merge")
         # A later pass that, say, could not read the ticket must not quietly undo it.
@@ -1084,6 +1103,17 @@ class TestIncrementalReview(GitHubCase):
         record = ghreview.load_verdict("Owner/Repo", 1)
         self.assertEqual((record["carried_from"], sorted(record["patches"])), (self.H1, ["a.py", "b.py"]))
 
+    def test_carried_files_count_toward_complete_coverage_of_any_verdict(self):
+        fake = self.github(self.H1, [self.A1, self.B1])
+        self.review_first_head(fake)
+        code, _, err = self.stage("Owner/Repo", {"verdict": "neutral", "reviewed": ["a.py"],
+                                                 "notes": ["Unverified: the retry ceiling."]},
+                                  self.H2, "--since", self.H1)
+        self.assertEqual(code, 0, err)
+        record = ghreview.load_verdict("Owner/Repo", 1)
+        self.assertEqual((record["verdict"], record["head"], record["coverage_complete"]), ("neutral", self.H2, True))
+        self.assertEqual((record["coverage_counts"]["reviewed"], record["coverage_counts"]["carried"]), (1, 1))
+
     def test_a_changed_file_that_was_not_read_again_blocks_ready(self):
         fake = self.github(self.H1, [self.A1, self.B1])
         self.review_first_head(fake)
@@ -1314,6 +1344,24 @@ class TestVerdictRecordForWatcher(unittest.TestCase):
         report = {"patches": {"a.py": "x"}, "coverage": {"carried_from": "1" * 40}}
         record = ghreview.verdict_record("neutral", "2" * 40, "d", report)
         self.assertEqual((record["patches"], record["carried_from"]), ({"a.py": "x"}, "1" * 40))
+
+    def test_completeness_comes_from_the_unreviewed_list_not_a_flag_beside_it(self):
+        report = {"coverage": {"files_changed": 2, "files_reviewed": 1, "unreviewed": ["b.py"], "complete": True}}
+        record = ghreview.verdict_record("neutral", "2" * 40, "d", report)
+        self.assertIs(record["coverage_complete"], False)
+        self.assertFalse(ghreview.full_coverage(record))
+
+    def test_a_record_without_the_field_counts_as_complete_only_for_ready(self):
+        # Stage refused ready-to-merge with a file unread before it ever recorded verdicts.
+        for verdict, complete in (("ready-to-merge", True), ("neutral", False), ("seriously-problematic", False)):
+            with self.subTest(verdict=verdict):
+                legacy = ghreview.verdict_record(verdict, "2" * 40, "d", {})
+                self.assertNotIn("coverage_complete", legacy)
+                self.assertIs(ghreview.full_coverage(legacy), complete)
+        for record in ({"verdict": "neutral", "coverage_complete": "yes"},
+                       {"verdict": "ready-to-merge", "coverage_complete": False}, None, []):
+            with self.subTest(record=record):
+                self.assertFalse(ghreview.full_coverage(record))
 
 
 if __name__ == "__main__":

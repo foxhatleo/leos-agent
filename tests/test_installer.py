@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -778,6 +779,47 @@ class TestAllHarnessRoundTrip(InstallerCase):
         results = self.run_harness("hermes")
         self.assertEqual([r.status for r in results], ["unchanged"])
         self.assertEqual(list(self.cfg("hermes").iterdir()), [])
+
+
+class TestOpenCodeTurnCapUpgrade(InstallerCase):
+    """The release before `steps` rendered OpenCode agents without it. Its own
+    receipt is the evidence those copies are ours, so an upgrade replaces them
+    and a later uninstall takes the new ones back."""
+
+    harnesses = ("opencode",)
+
+    def previous_release(self):
+        current = self.installer.native_agent
+
+        def render(root, name, harness, config):
+            return re.sub(r"(?m)^steps: [0-9]+\n", "", current(root, name, harness, config))
+        return mock.patch.object(self.installer, "native_agent", render)
+
+    def test_copies_the_previous_release_wrote_are_upgraded_to_carry_steps(self):
+        cap = re.search(r"(?m)^maxTurns: ([0-9]+)$", (ROOT / "agents" / "leo-cheap.md").read_text()).group(1)
+        for config in ({}, {"opencode": {"cheap": {"model": "prov/cheap-x", "effort": None}}}):
+            with self.subTest(configured=bool(config)):
+                with self.previous_release():
+                    self.assertClean(self.run_harness("opencode", config=config), "previous release")
+                agent = self.cfg("opencode") / "agents" / "leo-cheap.md"
+                self.assertNotIn("\nsteps:", agent.read_text())
+                results = self.run_harness("opencode", config=config)
+                self.assertClean(results, "upgrade")
+                self.assertEqual(self.by_target(results)[self.label(agent)].status, "updated")
+                self.assertIn("\nsteps: %s\n" % cap, agent.read_text())
+                self.assertFalse([r.target for r in self.run_harness("opencode", config=config) if r.changed])
+                self.assertClean(self.run_harness("opencode", config=config, uninstall=True), "uninstall")
+                self.assertFalse(agent.exists())
+
+    def test_an_edited_previous_copy_is_still_a_conflict(self):
+        with self.previous_release():
+            self.run_harness("opencode")
+        agent = self.cfg("opencode") / "agents" / "leo-standard.md"
+        edited = agent.read_text() + "my own note\n"
+        agent.write_text(edited)
+        results = self.by_target(self.run_harness("opencode"))
+        self.assertEqual(results[self.label(agent)].status, "conflict")
+        self.assertEqual(agent.read_text(), edited)
 
 
 class TestOpenCodeRoutingRule(InstallerCase):

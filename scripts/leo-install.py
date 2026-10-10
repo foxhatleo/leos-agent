@@ -740,6 +740,12 @@ def native_agent(root, name, harness, config):
 	fields = "---\n# Managed by leos-agent.\nname: " + name + "\ndescription: " + json.dumps(description) + "\n"
 	if harness == "opencode":
 		fields += "mode: subagent\n"
+		# OpenCode's `steps` caps an agent's iterations, then disables tools so
+		# it answers in text: the native form of the profile's Claude maxTurns.
+		# Cursor has no per-agent cap, so its copy carries neither key.
+		turns = re.search(r"(?m)^maxTurns: *([1-9][0-9]*) *$", frontmatter)
+		if turns:
+			fields += "steps: " + turns.group(1) + "\n"
 		# The reviewer delegates bounded lenses under review-pr; ordinary workers
 		# never delegate, and OpenCode can enforce that per agent.
 		if name != "leo-reviewer":

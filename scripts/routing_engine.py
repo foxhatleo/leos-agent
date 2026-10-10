@@ -29,6 +29,10 @@ CLAUDE_ALIASES = routing.CLAUDE_AGENT_MODELS
 # so an omitted `model` runs them on the parent. Any other agent may pin a
 # model in a definition the guard cannot see, and the guard leaves it alone.
 CLAUDE_INHERITING = frozenset(("general-purpose", "claude", "Explore", "Plan"))
+# Those whose definition names no model at all (an omitted subagent_type is
+# general-purpose). CLAUDE_CODE_SUBAGENT_MODEL is their default; Explore and
+# Plan say `inherit`, and a definition's `inherit` outranks the setting.
+CLAUDE_UNPINNED = frozenset(("general-purpose", "claude"))
 # A fork always runs on the parent's model and shares its prompt cache;
 # Claude ignores `model` for it.
 CLAUDE_FORK = "fork"
@@ -94,10 +98,10 @@ def _claude_alias(parent):
     return alias if alias in CLAUDE_ALIASES else None
 
 
-def _claude(result, args, agent, tier, requested, parent, config, catalog, effective_model):
+def _claude(result, args, agent, tier, requested, parent, config, catalog, effective_model, default_model=None):
     """Claude's native order: the call's `model`, then the agent definition,
     then the default subagent model, then the parent. The guard fills `model`
-    only where the definition would inherit or is ours, and caps it at the parent."""
+    only where the child would run on the parent or is ours, and caps it at the parent."""
     if agent == CLAUDE_FORK:
         result.update(reason="fork-inherits-parent", effective_model=parent)
         return result
@@ -110,11 +114,18 @@ def _claude(result, args, agent, tier, requested, parent, config, catalog, effec
         result["reason"] = ("parent-model-unavailable" if not parent else "over-ceiling" if status == "over-ceiling"
                             else "within-ceiling" if status == "allowed" else "price-unknown")
         return result
-    inherits = agent is None or (isinstance(agent, str) and agent in CLAUDE_INHERITING) or tier == "parent"
+    # The default subagent model, not the parent, runs an agent whose
+    # definition names no model, so omitting `model` there inherits nothing.
+    setting = default_model if agent is None or (isinstance(agent, str) and agent in CLAUDE_UNPINNED) else None
+    inherits = not setting and (agent is None or (isinstance(agent, str) and agent in CLAUDE_INHERITING)
+                                or tier == "parent")
     if requested:
         selected = requested
     elif tier and tier != "parent":
         selected = routing.tier_model("claude", tier, config, parent)
+    elif setting:
+        # The user's own default decides this child; only its price is checked.
+        selected = setting
     elif inherits and tier != "parent" and parent:
         # Standard is the default for unspecified nontrivial work. A hook
         # cannot infer complexity from the brief or safely choose cheap.
@@ -143,9 +154,11 @@ def _claude(result, args, agent, tier, requested, parent, config, catalog, effec
             updated.pop("model", None)
         else:
             # Omitting the model here would fall back to the agent's own
-            # definition, not the parent, so the ceiling cannot be applied.
+            # definition or the default subagent model, not the parent, so
+            # the ceiling cannot be applied.
+            chosen = "The selected model" if requested or not setting else "CLAUDE_CODE_SUBAGENT_MODEL"
             result.update(action="block", reason="unsupported-native-model",
-                          retry="The selected model is over the parent, and the parent's model has no Agent alias to cap it at. "
+                          retry=chosen + " is over the parent, and the parent's model has no Agent alias to cap it at. "
                                 "Use leos-agent:leo-parent, which inherits the parent, or do the work locally.")
             return result
         result["effective_model"] = parent
@@ -158,6 +171,9 @@ def _claude(result, args, agent, tier, requested, parent, config, catalog, effec
         result["reason"] = ("parent-model-unavailable" if not parent else
                             "within-ceiling" if status == "allowed" else "price-unknown")
         return result
+    if setting:
+        result["reason"] = "subagent-model-setting"
+        return result
     if selected not in CLAUDE_ALIASES:
         # routing.py refuses these; never send Agent a value outside its enum.
         result.update(reason="unsupported-native-model", effective_model=None)
@@ -168,11 +184,14 @@ def _claude(result, args, agent, tier, requested, parent, config, catalog, effec
     return result
 
 
-def route(harness, tool, args, parent=None, config=None, catalog=None, effective_model=None, native_profiles=None):
+def route(harness, tool, args, parent=None, config=None, catalog=None, effective_model=None, native_profiles=None,
+          default_model=None):
     """Return an advisory decision; adapters implement only native controls.
 
 effective_model is supplied by an adapter only when native profile precedence
-or global settings determine the actual requested child model.
+or global settings determine the actual requested child model. default_model is
+Claude's unforced CLAUDE_CODE_SUBAGENT_MODEL, or None when it is unset: the
+model an agent whose definition names none runs on when `model` is omitted.
 """
     cap = CAPABILITIES.get(harness)
     result = {"action": "allow", "reason": "not-a-dispatch", "updated_input": None,
@@ -209,7 +228,7 @@ or global settings determine the actual requested child model.
     requested = requested if isinstance(requested, str) and requested.strip() else None
     result["requested_model"] = requested
     if harness == "claude":
-        return _claude(result, args, agent, tier, requested, parent, config, catalog, effective_model)
+        return _claude(result, args, agent, tier, requested, parent, config, catalog, effective_model, default_model)
     if harness == "codex" and tier and not effective_model:
         expected = routing.tier_model(harness, tier, config, parent)
         comparison = pricing.compare(expected, parent, catalog) if expected and parent else None
