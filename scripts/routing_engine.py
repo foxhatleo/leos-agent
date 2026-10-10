@@ -91,6 +91,39 @@ def tier_for(agent):
     return PROFILE_TIERS.get(own_profile(agent))
 
 
+# Profiles whose tier on Claude is the model a dispatch runs them on rather
+# than their own. The review-pr reviewer sets each leo-lens's `model` to the
+# cheap or standard tier's. Codex, OpenCode and Cursor hold a lens to the
+# standard tier and a cheap lens there is leo-cheap, so elsewhere the
+# profile's tier stands.
+MODEL_TIERED = frozenset(("leo-lens",))
+
+
+def tiered_by_model(agent, harness):
+    """Whether the log takes `agent`'s tier on `harness` from the model it runs on."""
+    return harness == "claude" and tier_for(agent) is not None and agent.rsplit(":", 1)[-1] in MODEL_TIERED
+
+
+def run_tier(agent, harness, model, config=None):
+    """The tier a dispatch or completion row records for `agent`.
+
+    The profile's tier, except that a Claude leo-lens running on the configured
+    cheap model is cheap. `model` may be the Agent call's alias or a full or
+    provider ID from a transcript; Claude's tiers are configured as family
+    aliases, so the family decides. When cheap and standard name one family,
+    the model says nothing about the tier and the profile's stands.
+    """
+    tier = tier_for(agent)
+    if not isinstance(model, str) or not model or not tiered_by_model(agent, harness):
+        return tier
+    if config is None:
+        config = load_config()[0]
+    cheap = routing.tier_model("claude", "cheap", config)
+    if cheap == routing.tier_model("claude", "standard", config) or _claude_alias(model) != cheap:
+        return tier
+    return "cheap"
+
+
 def dispatch_tool(harness, tool):
     """Whether `tool` is this harness's dispatch tool. Adapters ask first, so an
     ordinary tool call never pays for a transcript read or the price catalog."""

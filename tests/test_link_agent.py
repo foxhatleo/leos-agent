@@ -179,6 +179,31 @@ class EndToEnd(Sandboxed):
                          {"child-a": "toolu_A", "child-b": "toolu_B"})
         self.assertNotIn("PRIVATE", self.raw())
 
+    def test_cheap_and_standard_lenses_pair_at_their_tier_with_or_without_links(self):
+        # A sonnet reviewer fans out a haiku and a sonnet lens; each child's
+        # transcript names its full model ID, as Claude Code writes it.
+        for call, model in (("toolu_C", "haiku"), ("toolu_S", "sonnet")):
+            dispatch_guard.process({"hook_event_name": "PreToolUse", "session_id": "parent-session", "tool_use_id": call,
+                                    "parent_model": "claude-sonnet-5-5", "tool_name": "Agent",
+                                    "tool_input": {"subagent_type": "leos-agent:leo-lens", "prompt": "Lens " + call,
+                                                   "model": model}}, "claude")
+        for child, model, line in (("child-c", "claude-haiku-5-5", "Result: done\nVerified: grep"),
+                                   ("child-s", "claude-sonnet-5-5", "Result: partial\nVerified: none")):
+            transcript = self.root / ("agent-%s.jsonl" % child)
+            transcript.write_text(json.dumps({"type": "assistant", "message": {
+                "id": "m", "model": model, "content": [{"type": "text", "text": line}]}}) + "\n")
+            observe_agent.observe({"hook_event_name": "SubagentStop", "session_id": "parent-session", "agent_id": child,
+                                   "agent_type": "leos-agent:leo-lens", "stop_hook_active": True,
+                                   "agent_transcript_path": str(transcript), "last_assistant_message": line}, "claude")
+        rows = dispatch_log.read()
+        summary = dispatch_log.summarise(rows)
+        self.assertEqual((summary["outcomes"], summary["joins"]),
+                         ({"cheap": {"done": 1}, "standard": {"partial": 1}}, {"nearest": 2}))
+        rows += [link_agent.link(post_tool_use("toolu_C", "child-c")), link_agent.link(post_tool_use("toolu_S", "child-s"))]
+        summary = dispatch_log.summarise(rows)
+        self.assertEqual((summary["outcomes"], summary["joins"]),
+                         ({"cheap": {"done": 1}, "standard": {"partial": 1}}, {"linked": 2}))
+
 
 if __name__ == "__main__":
     unittest.main()

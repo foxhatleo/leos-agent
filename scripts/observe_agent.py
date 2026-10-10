@@ -76,6 +76,37 @@ def signals(event):
             "usage": usage, "usage_complete": bool(complete) if usage is not None else None, "turns": turns}
 
 
+def lens_tier(agent, harness, model):
+    """A Claude leo-lens completion's tier, from the model it ran on; None otherwise.
+
+    The guard logged the lens's dispatch the same way (routing_engine.run_tier),
+    so the report pairs the two at one tier. Every other row's tier is its
+    agent's, which the report recomputes. A lens whose model is not known yet
+    gets its tier when the SessionEnd backfill finds the model.
+    """
+    if harness != "claude" or not isinstance(agent, str) or not isinstance(model, str) or not model:
+        return None
+    import routing_engine
+    return routing_engine.run_tier(agent, harness, model) if routing_engine.tiered_by_model(agent, harness) else None
+
+
+def contract_refused(event, harness, session, child):
+    """Whether the hand-back check refused this child's report once, or None
+    for a child it never judges, whose row then carries no flag.
+
+    The check runs only on Claude and judges only this plugin's tier workers,
+    by the agent type it reads (handback_contract.judged). An event without
+    the session and child ids the marker is keyed by also gets None. A
+    refusal is counted beside the outcome, never as one.
+    """
+    if harness != "claude" or not session or not child:
+        return None
+    import handback_contract
+    if not handback_contract.judged(handback_contract.agent_type(event)):
+        return None
+    return os.path.exists(handback_contract.marker_path(session, child))
+
+
 def contract_prompt(event, harness):
     """The one continuation that asks a leo-* worker for its contract lines, or None.
 
@@ -150,8 +181,12 @@ def reconcile(session_id, transcript, harness="claude", seconds=RECONCILE_SECOND
             fill.update(verified=late["verified"], outcome_source=late["outcome_source"])
         if not missing_model and fill.get("outcome") in (None, "unknown"):
             continue  # nothing new to say
+        effective = row.get("effective_model") or model
+        tier = None if "tier" in row else lens_tier(row.get("agent"), harness, effective)
+        if tier:
+            fill["tier"] = tier  # a lens whose stop row had no model to take it from
         # The row keeps the child's own stop time, which is what the join orders by.
-        dispatch_log.append({**row, **fill, "decision": "executed", "effective_model": row.get("effective_model") or model,
+        dispatch_log.append({**row, **fill, "decision": "executed", "effective_model": effective,
                              "reason": "session-end-child-transcript-model" if missing_model else "session-end-late-outcome"})
 
 
@@ -199,17 +234,25 @@ def observe(event, harness):
     model = session_models.transcript_model(session_models.child_transcript(event))
     declared = event.get("child_model") if isinstance(event.get("child_model"), str) and event["child_model"] else None
     reason = event.get("reason") if isinstance(event.get("reason"), str) else None
-    dispatch_log.append({"v": dispatch_log.RECORD_VERSION,
-                         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                         "harness": harness, "decision": "executed" if model or declared else "completed",
-                         "reason": reason or ("child-transcript-model" if model else "child-model-unavailable"),
-                         "effective_model": model or declared,
-                         "agent": dispatch_guard._first_str(event, dispatch_guard.AGENT_KEYS) or None,
-                         "agent_id": dispatch_guard._first_str(event, AGENT_ID_KEYS) or None,
-                         "session": dispatch_log.digest(dispatch_guard._first_str(event, SESSION_KEYS)),
-                         "call_id": dispatch_guard._first_str(event, CALL_KEYS) or None,
-                         "status": event.get("status") if isinstance(event.get("status"), str) else None,
-                         **signals(event)})
+    agent = dispatch_guard._first_str(event, dispatch_guard.AGENT_KEYS) or None
+    child = dispatch_guard._first_str(event, AGENT_ID_KEYS) or None
+    session = dispatch_guard._first_str(event, SESSION_KEYS)
+    row = {"v": dispatch_log.RECORD_VERSION,
+           "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+           "harness": harness, "decision": "executed" if model or declared else "completed",
+           "reason": reason or ("child-transcript-model" if model else "child-model-unavailable"),
+           "effective_model": model or declared, "agent": agent, "agent_id": child,
+           "session": dispatch_log.digest(session),
+           "call_id": dispatch_guard._first_str(event, CALL_KEYS) or None,
+           "status": event.get("status") if isinstance(event.get("status"), str) else None,
+           **signals(event)}
+    tier = lens_tier(agent, harness, model or declared)
+    if tier:
+        row["tier"] = tier
+    refused = contract_refused(event, harness, session, child)
+    if refused is not None:
+        row["contract_refused"] = refused
+    dispatch_log.append(row)
     return None
 
 
