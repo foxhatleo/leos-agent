@@ -2,7 +2,7 @@ schema_version: "1.1"
 name: local-small-task
 plugins: ["../.."]
 context:
-  add_dirs: [deploy]
+  scaffold_script: stage-fixtures.sh
 execution:
   env:
     EVAL_LEOS_AGENT_PRICE_REFRESH: "off"

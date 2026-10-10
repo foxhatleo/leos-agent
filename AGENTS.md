@@ -195,6 +195,9 @@ The policy in `rules/preferences.md` applies to work on this repo too.
   the installed cache; same-version reinstalls may serve the old build. Confirm
   the actual loaded root/version. Hooks bind at session start; a first dispatch
   can precede parent transcript persistence and take the unknown-parent path.
+  In `claude plugin eval`, `add_dirs` only grants reads; a run starts in an
+  empty workspace and is never told the path, so each case stages its fixtures
+  with `scaffold_script` and runs need `--scaffold`.
 - **Codex** uses native `/hooks` trust for changed hook definitions; do not
   bypass it or assume enabling a plugin approves hooks. Batch related releases.
   `spawn_agent` selects the model by `model` and `reasoning_effort`; `agent_type`,

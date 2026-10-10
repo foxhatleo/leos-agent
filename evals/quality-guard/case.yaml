@@ -2,7 +2,7 @@ schema_version: "1.1"
 name: quality-guard
 plugins: ["../.."]
 context:
-  add_dirs: [services]
+  scaffold_script: stage-fixtures.sh
 execution:
   env:
     EVAL_LEOS_AGENT_PRICE_REFRESH: "off"

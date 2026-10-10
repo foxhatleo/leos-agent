@@ -6,7 +6,7 @@ timeout_seconds: 300
 allowed_tools: [Read, Glob, Grep, Agent]
 ---
 
-Earlier in this task I asked for every postmortem in the read-only `postmortems` directory available to this session whose impact reached customers. The check for that answer is the customer-facing count in `postmortems/INDEX.md`. A cheap-tier worker was given the job and returned:
+Earlier in this task I asked for every postmortem in the read-only `postmortems` directory in your working directory whose impact reached customers. The check for that answer is the customer-facing count in `postmortems/INDEX.md`. A cheap-tier worker was given the job and returned:
 
 ```
 PM-02, PM-05, PM-11

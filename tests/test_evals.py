@@ -16,6 +16,7 @@ import io
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -57,6 +58,17 @@ PROMPT_KEYS = {"schema_version", "name", "description", "tags", "plugins", "runs
 CASE_KEYS = {"schema_version", "name", "description", "tags", "plugins", "runs", "expected_outcome",
              "execution", "context", "graders"}
 CONTEXT_KEYS = {"scaffold_script", "history_file", "add_dirs"}
+SCAFFOLD = "stage-fixtures.sh"
+# Case files that are not fixtures: the case definition and its graders.
+CASE_FILES = {"case.yaml", "prompt.md", "graders", SCAFFOLD}
+
+
+def fixture_dirs(case_dir):
+    return sorted(p.name for p in case_dir.iterdir() if p.name not in CASE_FILES)
+
+
+def tree(root):
+    return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
 # case.yaml's `execution:` takes the prompt.md run fields plus the prompt.
 EXECUTION_KEYS = {"prompt", "model", "max_turns", "timeout_seconds", "allowed_tools", "append_system_prompt", "env"}
 ENV_KEY_RE = re.compile(r"EVAL_[A-Z0-9_]*")
@@ -411,16 +423,49 @@ class SuiteLayout(unittest.TestCase):
                     self.assertTrue((case_dir / rel / ".claude-plugin" / "plugin.json").is_file())
                 context = data["context"]
                 self.assertLessEqual(set(context), CONTEXT_KEYS)
-                # Fixtures are read in place; no case runs a script as the user.
-                self.assertNotIn("scaffold_script", context)
-                self.assertTrue(context["add_dirs"])
-                for rel in context["add_dirs"]:
-                    path = case_dir / rel
-                    self.assertFalse(Path(rel).is_absolute() or ".." in Path(rel).parts, rel)
-                    self.assertTrue(path.is_dir() and not path.is_symlink(), rel)
-                    self.assertFalse(any(p.is_symlink() for p in path.rglob("*")), rel)
-                    # The agent finds a fixture only by the name the prompt gives it.
-                    self.assertIn(f"`{rel}`", case["body"])
+                # add_dirs only grants reads: the run starts in an empty
+                # workspace and is never told where a granted directory is.
+                self.assertNotIn("add_dirs", context)
+                self.assertTrue(fixture_dirs(case_dir), "every case reads fixtures")
+
+    def test_every_case_stages_its_fixtures_into_the_workspace(self):
+        # Claude Code 2.1.296 turns add_dirs into Read/Glob/Grep allow rules
+        # only, never --add-dir, and the run's cwd is empty, so a model given
+        # only add_dirs Globs, finds nothing and gives up in both arms. The
+        # documented way to hand a run its fixtures is a scaffold_script the
+        # runner executes as `bash <script>` in the empty workspace (with
+        # --scaffold) and the prompt naming the copied directory.
+        for name, case in self.cases.items():
+            with self.subTest(case=name):
+                case_dir = case["dir"]
+                script = case["case"]["context"].get("scaffold_script")
+                self.assertEqual(script, SCAFFOLD, "one script name across the suite")
+                path = case_dir / script
+                self.assertTrue(path.is_file() and not path.is_symlink(), script)
+                with tempfile.TemporaryDirectory() as tmp:
+                    workspace, home = Path(tmp, "work"), Path(tmp, "home")
+                    workspace.mkdir()
+                    home.mkdir()
+                    # The environment the runner gives a scaffold script.
+                    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home),
+                           "TMPDIR": tmp, "TERM": "dumb", "GIT_CONFIG_NOSYSTEM": "1"}
+                    done = subprocess.run(["bash", str(path.resolve())], cwd=workspace, env=env,
+                                          stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                          timeout=60)
+                    self.assertEqual(done.returncode, 0, done.stderr)
+                    staged = sorted(p.name for p in workspace.iterdir())
+                    self.assertEqual(staged, fixture_dirs(case_dir))
+                    for rel in staged:
+                        source, copy = case_dir / rel, workspace / rel
+                        self.assertFalse(any(p.is_symlink() for p in source.rglob("*")), rel)
+                        self.assertEqual(tree(copy), tree(source), rel)
+                        # Read-only files, as the prompt says. Directories stay
+                        # writable so the runner can delete the workspace.
+                        files = [p for p in copy.rglob("*") if p.is_file()]
+                        self.assertTrue(files, rel)
+                        self.assertFalse(any(p.stat().st_mode & 0o222 for p in files), rel)
+                        # The model finds a fixture only by the name the prompt gives it.
+                        self.assertIn(f"`{rel}`", case["body"])
 
     def test_graders_use_documented_types_and_options(self):
         for name, case in self.cases.items():

@@ -413,9 +413,12 @@ the plugin's default tiers apply rather than your `routing.json`. A run receives
 only `EVAL_*` variables beside an allowlist of your shell, so each case sets
 `EVAL_LEOS_AGENT_PRICE_REFRESH=off`, which the SessionStart hook honours like
 `LEOS_AGENT_PRICE_REFRESH=off`; no run starts a price refresh. Fixtures are
-small read-only directories inside each case. No case needs `--scaffold` or
-`--allow-tools`, and every grader is a regex or tool-use check, so no judge
-model is called.
+small directories inside each case. A run starts in an empty workspace and
+`add_dirs` would only grant reads to a path the model is never told, so each
+case's `stage-fixtures.sh` copies its fixtures into the workspace read-only.
+Pass `--scaffold` so it runs; without it every case scores 0 in both arms. No
+case needs `--allow-tools`, and every grader is a regex or tool-use check, so
+no judge model is called.
 
 | Case | Expected with the plugin |
 |---|---|
@@ -426,8 +429,8 @@ model is called.
 | `quality-guard` | Correctness only |
 
 ```sh
-claude plugin eval . --model sonnet --no-publish --max-cost-usd 6
-claude plugin eval . --case local-small-task --runs 1 --ablation none
+claude plugin eval . --scaffold --model sonnet --no-publish --max-cost-usd 6
+claude plugin eval . --scaffold --case local-small-task --runs 1 --ablation none
 ```
 
 Every run is a real model call billed to your plan or API account. A full run
