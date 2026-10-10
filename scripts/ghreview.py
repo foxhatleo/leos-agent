@@ -56,7 +56,10 @@ needs every changed non-generated file reviewed; a recorded ready-to-merge
 stands while the PR diff is unchanged and is only replaced with an explicit
 verdict_override that is not template text. With --since, files whose patch is
 unchanged since the complete review recorded at OLD count as covered (listed
-under coverage.carried); every other changed file must be read again.
+under coverage.carried); every other changed file must be read again. The
+recorded verdict keeps coverage_complete (nothing unreviewed) and file counts;
+watch_review.py treats a head recorded with complete coverage as reviewed,
+whatever the verdict.
 
 Generated files are lockfiles and known generated suffixes, plus whatever the
 base branch's root .gitattributes marks linguist-generated (=false un-marks).
@@ -1652,9 +1655,43 @@ def verdict_record(verdict, head, diff, report):
     # too, so a watcher-recorded head carries the same evidence.
     if isinstance(report.get("patches"), dict):
         record["patches"] = report["patches"]
-    if isinstance(report.get("coverage"), dict) and report["coverage"].get("carried_from"):
-        record["carried_from"] = report["coverage"]["carried_from"]
+    coverage = report.get("coverage")
+    if isinstance(coverage, dict) and coverage.get("carried_from"):
+        record["carried_from"] = coverage["carried_from"]
+    # Whether this pass covered every changed non-generated file, read or
+    # carried. The watcher treats a head recorded with complete coverage as
+    # reviewed whatever the verdict (full_coverage), so it is derived from the
+    # unreviewed list itself, never from a `complete` flag beside it.
+    if isinstance(coverage, dict) and isinstance(coverage.get("unreviewed"), list):
+        record["coverage_complete"] = not coverage["unreviewed"]
+        record["coverage_counts"] = {
+            "changed": _count(coverage.get("files_changed")),
+            "reviewed": _count(coverage.get("files_reviewed")),
+            "carried": _count(coverage.get("carried")),
+            "generated": _count(coverage.get("files_skipped_generated")),
+            "unreviewed": len(coverage["unreviewed"]),
+        }
     return record
+
+
+def _count(value):
+    if isinstance(value, list):
+        return len(value)
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+
+
+def full_coverage(record):
+    """Whether a verdict record says every changed non-generated file was reviewed or carried.
+
+    A record written before coverage_complete existed says nothing, so only a
+    ready-to-merge one counts: stage has refused ready-to-merge with an
+    unreviewed file ever since it began recording verdicts.
+    """
+    if not isinstance(record, dict):
+        return False
+    if "coverage_complete" in record:
+        return record["coverage_complete"] is True
+    return record.get("verdict") == READY
 
 
 COMMANDS = {

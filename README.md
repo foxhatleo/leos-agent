@@ -369,7 +369,9 @@ optional cross-model lens, off unless the user enables it, sends the pinned
 diff to a second provider's CLI.
 Watchers use cross-process leases, bounded retries, and completion reports;
 emission alone never records a PR as reviewed. A head waiting on the user's
-decision is parked without spending retries.
+decision is parked without spending retries. A head already reviewed by hand
+with every changed non-generated file read, or carried from an earlier
+complete review, is not emitted again, whatever its verdict.
 
 Logs omit prompt text by default and rotate at 1 MiB plus one retained file.
 `LEOS_AGENT_DISPATCH_LOG_PROMPTS=1` is an explicit debug option that retains

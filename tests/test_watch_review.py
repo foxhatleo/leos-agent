@@ -75,18 +75,49 @@ class FakeGitHub:
 
     Serves both helpers' call shapes -- watch_review.gh(args, cwd) and
     ghreview.gh(args, payload) -- so a manual review-pr stage and the watcher
-    meet in the same state file, as on a real machine.
+    meet in the same state file, as on a real machine. Reviews behave as
+    GitHub's do where stage depends on it: one PENDING review per user per pull
+    request, and its comments re-read with only a position.
     """
 
     def __init__(self, error, full_name="o/r", login="leo"):
         self.error, self.full_name, self.login = error, full_name, login
-        self.prs, self.calls = {}, []
+        self.prs, self.calls, self.next_review = {}, [], 100
 
     def add(self, number, head, title="Fix the retry backoff", requested=True, team_only=False,
             draft=False, state="open", closed_at=None, patch=PATCH):
         self.prs[number] = {"head": head, "title": title, "requested": requested, "team_only": team_only,
                             "draft": draft, "state": state, "closed_at": closed_at, "patch": patch,
-                            "stale": 0, "old": None}
+                            "stale": 0, "old": None, "reviews": {}}
+
+    def submit(self, number):
+        """The user submits their pending review, as they do after reading the draft."""
+        for review in self.prs[number]["reviews"].values():
+            if review["state"] == "PENDING":
+                review["state"] = "COMMENTED"
+
+    def reviews(self, number, review_id, comments, payload):
+        reviews = self.prs[number]["reviews"]
+        if review_id is None and payload is not None:
+            body = json.loads(payload)
+            assert "event" not in body, body  # stage never submits
+            if any(r["state"] == "PENDING" for r in reviews.values()):
+                raise self.error("HTTP 422: User can only have one pending review per pull request")
+            self.next_review += 1
+            reviews[self.next_review] = {
+                "id": self.next_review, "node_id": "PRR_%d" % self.next_review, "state": "PENDING",
+                "user": {"login": self.login}, "body": body.get("body") or "", "commit_id": body["commit_id"],
+                "comments": [{"id": self.next_review * 10 + n, "path": c["path"], "body": c["body"],
+                              "position": c.get("line"), "line": None, "side": None, "in_reply_to_id": None}
+                             for n, c in enumerate(body.get("comments") or [])]}
+            return json.dumps({k: v for k, v in reviews[self.next_review].items() if k != "comments"})
+        if review_id is None:
+            return "".join(json.dumps({k: v for k, v in r.items() if k != "comments"}) + "\n"
+                           for r in reviews.values())
+        review = reviews[int(review_id)]
+        if comments:
+            return "".join(json.dumps(c) + "\n" for c in review["comments"])
+        return json.dumps({k: v for k, v in review.items() if k != "comments"})
 
     def push(self, number, head, patch=None, stale_reads=0):
         """A new head. For `stale_reads` reads the files endpoint still serves the
@@ -105,8 +136,10 @@ class FakeGitHub:
                                    "pageInfo": {"hasNextPage": False, "endCursor": None}},
                 "latestReviews": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}}
 
-    def __call__(self, args, *_):
+    def __call__(self, args, *rest, **_):
         self.calls.append(list(args))
+        # Only ghreview's mutations send a body; watch_review's second argument is its cwd.
+        payload = rest[0] if rest and "--method" in args else None
         if args[:2] == ["repo", "view"]:
             return json.dumps({"nameWithOwner": self.full_name})
         if args[:2] == ["api", "user"]:
@@ -128,7 +161,8 @@ class FakeGitHub:
             more = start + 50 < len(hits)
             return json.dumps({"data": {"search": {"nodes": hits[start:start + 50], "pageInfo": {
                 "hasNextPage": more, "endCursor": str(start + 50) if more else None}}}})
-        m = re.fullmatch(r"repos/([^/]+/[^/]+)(?:/pulls/(\d+)(/files)?)?(?:\?per_page=\d+)?", args[1])
+        m = re.fullmatch(r"repos/([^/]+/[^/]+)(?:/pulls/(\d+)(/files|/reviews(?:/(\d+))?(/comments)?)?)?"
+                         r"(?:\?per_page=\d+)?", args[1])
         if not m or m.group(1).lower() != self.full_name.lower():
             raise self.error("HTTP 404: Not Found (%s)" % args[1])
         if m.group(2) is None:
@@ -136,6 +170,8 @@ class FakeGitHub:
         pr = self.prs.get(int(m.group(2)))
         if pr is None:
             raise self.error("HTTP 404: Not Found (%s)" % args[1])
+        if (m.group(3) or "").startswith("/reviews"):
+            return self.reviews(int(m.group(2)), m.group(4), m.group(5), payload)
         if m.group(3):
             head, patch = pr["head"], pr["patch"]
             if pr["stale"]:
@@ -807,6 +843,7 @@ class TestVerdicts(WatcherStateCase):
         self.assertEqual(state["heads"], {"1": self.HEAD})
         self.assertEqual(state["verdicts"]["1"]["verdict"], "ready-to-merge")
         self.assertEqual(state["verdicts"]["1"]["head"], self.HEAD)
+        self.assertIs(state["verdicts"]["1"]["coverage_complete"], True)
 
     def test_neutral_with_no_pending_comment_is_not_recorded(self):
         with self.assertRaisesRegex(ValueError, "neutral needs"):
@@ -931,14 +968,22 @@ class HostCase(unittest.TestCase):
             self.w.main(list(argv))
         return out.getvalue()
 
-    def manual_stage(self, number, head, verdict="ready-to-merge"):
-        """A manual review-pr pass, staged through ghreview.py exactly as the skill does."""
+    def manual_stage(self, number, head, verdict="ready-to-merge", reviewed=("a.py", "gone.py"), since=None):
+        """A review-pr pass, staged through ghreview.py exactly as the skill does.
+
+        Neutral and seriously-problematic carry the note stage requires. Returns
+        the path of the stage report, as the reviewer hands it to the watcher.
+        """
+        notes = [] if verdict == "ready-to-merge" else ["The retry ceiling is unchecked against the API docs."]
         path = Path(self.tmp.name) / "stage-input.json"
-        path.write_text(json.dumps({"verdict": verdict, "reviewed": ["a.py", "gone.py"], "comments": []}))
+        path.write_text(json.dumps({"verdict": verdict, "reviewed": list(reviewed), "comments": [], "notes": notes}))
         args = types.SimpleNamespace(repo="o/r", pr=number, commit=head, input=str(path),
-                                     replace_pending=False, force=False, dry_run=False)
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                                     replace_pending=False, force=False, dry_run=False, since=since)
+        with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()):
             self.w.ghreview.cmd_stage(args)
+        result = Path(self.tmp.name) / f"stage-result-{number}-{head[:7]}.json"
+        result.write_text(out.getvalue())
+        return str(result)
 
 
 class SequentialReader:
@@ -1069,7 +1114,82 @@ class TestRepositorySpelling(HostCase):
 
 
 class TestManualVerdicts(HostCase):
-    """A ready-to-merge staged by a manual review-pr pass binds the watcher too."""
+    """A verdict staged by a manual review-pr pass with complete coverage binds the watcher too."""
+
+    VERDICTS = ("ready-to-merge", "neutral", "seriously-problematic")
+
+    def test_a_complete_pass_suppresses_its_head_whatever_the_verdict(self):
+        for number, verdict in enumerate(self.VERDICTS, 1):
+            self.github.add(number, H1)
+            self.manual_stage(number, H1, verdict)
+        out, _ = self.drive(3)
+        self.assertEqual(out, [])
+        for number, verdict in enumerate(self.VERDICTS, 1):
+            with self.subTest(verdict=verdict):
+                self.assertIsNone(self.w.claim_review("o/r", number, H1, 0))
+                record = self.w.load_entry("o/r")["verdicts"][str(number)]
+                self.assertEqual((record["verdict"], record["coverage_complete"]), (verdict, True))
+
+    def test_a_pass_that_left_a_file_unread_does_not_suppress_its_head(self):
+        # Stage accepts neutral and seriously-problematic with a file unread; the head is not reviewed.
+        for number, verdict in ((1, "neutral"), (2, "seriously-problematic")):
+            self.github.add(number, H1)
+            self.manual_stage(number, H1, verdict, reviewed=["a.py"])
+        out, _ = self.drive(1)
+        events = [parse(line) for line in out]
+        self.assertEqual([(e["pr"], e["verb"], e["prev"]) for e in events],
+                         [(1, "review-requested", None), (2, "review-requested", None)], out)
+
+    def test_a_verdict_recorded_before_coverage_was_kept_suppresses_only_as_ready(self):
+        # Stage has always refused ready-to-merge with a file unread; the others said nothing.
+        for number, verdict in enumerate(self.VERDICTS, 1):
+            self.github.add(number, H1)
+            self.w.ghreview.save_verdict("o/r", number, {"verdict": verdict, "head": H1, "diff": "d", "at": 1})
+        out, _ = self.drive(1)
+        self.assertEqual([parse(line)["pr"] for line in out], [2, 3])
+
+    def test_an_incremental_pass_that_carries_unchanged_files_suppresses_its_head(self):
+        for number in (1, 2):
+            self.github.add(number, H1)
+            self.manual_stage(number, H1, "neutral")
+            self.github.submit(number)  # the draft is gone, so the next pass may carry
+            self.github.push(number, H2, patch=PATCH + "\n+more")  # a.py changed, gone.py did not
+        report = json.loads(Path(self.manual_stage(1, H2, "neutral", reviewed=["a.py"], since=H1)).read_text())
+        self.assertEqual((report["coverage"]["carried"], report["coverage"]["unreviewed"]), (["gone.py"], []))
+        self.manual_stage(2, H2, "neutral", reviewed=["a.py"])  # the same reads, nothing carried
+        out, _ = self.drive(3)
+        [event] = [parse(line) for line in out]
+        # The incomplete pass replaced the record of the complete one, so no head counts as reviewed.
+        self.assertEqual((event["pr"], event["verb"], event["head"]), (2, "review-requested", H2))
+        counts = self.w.load_entry("o/r")["verdicts"]["1"]["coverage_counts"]
+        self.assertEqual((counts["reviewed"], counts["carried"], counts["unreviewed"]), (1, 1, 0))
+
+    def test_only_ready_to_merge_is_carried_to_a_head_with_the_same_diff(self):
+        for number, verdict in enumerate(self.VERDICTS, 1):
+            self.github.add(number, H1)
+            self.manual_stage(number, H1, verdict)
+            self.github.push(number, H2)  # a merge from the base: same PR diff
+        out, _ = self.drive(4)
+        events = [parse(line) for line in out]
+        self.assertEqual([(e["pr"], e["verb"], e["head"], e["prev"]) for e in events],
+                         [(2, "re-review", H2, H1), (3, "re-review", H2, H1)], out)
+        verdicts = self.w.load_entry("o/r")["verdicts"]
+        self.assertEqual([verdicts[str(n)].get("carried_to") for n in (1, 2, 3)], [H2, None, None])
+
+    def test_forget_hands_the_verdict_back_and_a_standing_ready_still_binds(self):
+        for number, verdict in ((1, "ready-to-merge"), (2, "neutral")):
+            self.github.add(number, H1)
+            self.manual_stage(number, H1, verdict)
+        self.assertEqual(self.drive(1)[0], [])
+        self.cli("forget", "1", "2")
+        out, _ = self.drive(1, start=60)
+        self.assertEqual([parse(line)["pr"] for line in out], [1, 2])
+        # The record stays: the re-review of #1 still may not downgrade it silently.
+        with self.assertRaisesRegex(ValueError, "stands"):
+            self.manual_stage(1, H1, "neutral")
+        self.manual_stage(1, H1, "ready-to-merge")
+        self.assertNotIn("rewatch", self.w.load_entry("o/r")["verdicts"]["1"])
+        self.assertIsNone(self.w.claim_review("o/r", 1, H1, 600))
 
     def test_the_manually_approved_head_is_never_emitted(self):
         self.github.add(1, H1)
@@ -1098,12 +1218,46 @@ class TestManualVerdicts(HostCase):
         [event] = [parse(line) for line in out]
         self.assertEqual((event["verb"], event["prev"]), ("re-review", H1))
 
-    def test_a_manual_neutral_verdict_does_not_suppress_review(self):
-        # Neutral may be staged with files unread; only ready-to-merge proves coverage.
+
+class TestStagingIsNotCompletion(HostCase):
+    """The watcher's own reviewer stages before the reader records: that verdict is not completion."""
+
+    def started(self, number, start=0):
+        out, _ = self.drive(1, start=start)
+        [event] = [parse(line) for line in out]
+        self.cli("start", str(number), "--head", event["head"], "--claim", event["claim"])
+        return event
+
+    def test_a_released_attempt_comes_back_even_though_stage_recorded_complete_coverage(self):
+        for number, verdict in ((1, "ready-to-merge"), (2, "neutral")):
+            with self.subTest(verdict=verdict):
+                self.github.add(number, H1)
+                event = self.started(number, start=number * 10000)
+                report = self.manual_stage(number, H1, verdict)
+                # While the attempt runs, nothing is emitted and nothing is carried onto its head.
+                out, _ = self.drive(2, start=number * 10000 + 60)
+                self.assertEqual(out, [])
+                self.assertNotIn(str(number), self.w.load_entry("o/r").get("heads") or {})
+                # A follow-up action failed, so the reader releases instead of recording.
+                self.cli("release", str(number), "--claim", event["claim"])
+                out, _ = self.drive(1, start=number * 10000 + 300)
+                [retry] = [parse(line) for line in out]
+                self.assertEqual((retry["pr"], retry["head"]), (number, H1))
+                self.assertEqual(json.loads(self.cli("start", str(number), "--head", H1, "--claim",
+                                                     retry["claim"]))["attempt"], 2)
+                self.cli("record", str(number), "--head", H1, "--claim", retry["claim"], "--result", report)
+                self.assertEqual(self.drive(2, start=number * 10000 + 600)[0], [])
+                self.assertEqual(self.w.reviewed_heads("o/r")[number], H1)
+
+    def test_unblock_brings_back_a_head_whose_attempt_staged_before_it_was_parked(self):
         self.github.add(1, H1)
-        self.w.ghreview.save_verdict("o/r", 1, self.w.ghreview.verdict_record("neutral", H1, "d", {}))
-        out, _ = self.drive(1)
-        self.assertEqual([parse(line)["pr"] for line in out], [1])
+        event = self.started(1)
+        self.manual_stage(1, H1, "neutral")
+        self.cli("block", "1", "--head", H1, "--reason", "resolve the thread publicly?", "--claim", event["claim"])
+        self.assertEqual(self.drive(2, start=60)[0], [])
+        self.cli("unblock", "1")
+        out, _ = self.drive(1, start=300)
+        self.assertEqual([(e["pr"], e["head"]) for e in map(parse, out)], [(1, H1)])
 
 
 class TestFilesListing(HostCase):

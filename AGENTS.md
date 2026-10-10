@@ -264,6 +264,13 @@ these contracts when changing it or `scripts/ghreview.py`:
   reports. Partial coverage blocks readiness, not a verified blocking verdict.
   A decision only Leo can make parks the head (`block`) instead of burning
   retries. The first tick emits without settling.
+- A verdict stage records with `coverage_complete` (every changed
+  non-generated file read or carried) marks its head reviewed for the watcher,
+  whatever the verdict; an incomplete one marks nothing, and a record without
+  the field counts only if it is ready-to-merge. Only ready-to-merge carries
+  to a later head. On a head the watcher spent an attempt on, only `record`
+  completes it. `forget` and `unblock` keep the stored verdict but stop it
+  marking the head reviewed (`rewatch`), so the head comes back.
 - Verdicts: neutral needs a staged comment or note (stage also requires one
   for seriously-problematic); CI is informational only;
   the only caps are unverified behaviour and an unread ticket. A recorded

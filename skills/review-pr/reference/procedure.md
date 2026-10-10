@@ -240,9 +240,11 @@ Inspect both exit status and result JSON. `staged` anchored inline, `carried`
 reached the body, `notes` reached the body, `omitted` reached neither,
 `filtered` was held back below the confidence floor. `complete: false` means
 at least one finding is omitted; fix the input and restage rather than
-proceeding. `coverage` lists `unreviewed` files; review them and restage. On
-failure preserve the report and recovery path, and apply no subsequent
-mutations.
+proceeding. `coverage` lists `unreviewed` files; review them and restage.
+With none, the verdict is recorded with complete coverage, which marks the
+head reviewed for the review watcher whatever the verdict, unless the watcher
+handed that head out itself. On failure preserve the report and recovery path,
+and apply no subsequent mutations.
 
 Stage replies using scratch files:
 
