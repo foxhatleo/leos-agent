@@ -165,9 +165,9 @@ def frontmatter(path):
     return parse_yaml(match.group(1), str(path.relative_to(ROOT))), match.group(2)
 
 
-def load_suite():
+def load_suite(root=EVALS):
     cases = {}
-    for case_dir in sorted(p for p in EVALS.iterdir() if p.is_dir() and p.name != "results"):
+    for case_dir in sorted(p for p in root.iterdir() if p.is_dir() and p.name != "results"):
         meta, body = frontmatter(case_dir / "prompt.md")
         case_yaml = parse_yaml((case_dir / "case.yaml").read_text(encoding="utf-8"),
                                str((case_dir / "case.yaml").relative_to(ROOT)))

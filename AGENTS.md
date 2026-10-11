@@ -33,6 +33,7 @@ The repo root *is* the plugin. Six manifests sit side by side over one tree:
 | `scripts/` | Installer, guard, routing engine, diagnostics, release tooling. Stdlib-only Python, Python 3.9 floor. |
 | `tests/` | `unittest` suites plus `tests/js/` for Node 22. |
 | `evals/` | `claude plugin eval` suite for the delegation policy; every run is a paid model call. `tests/test_evals.py` is its offline gate. `scripts/bench.py` pairs its two arms into a significance-tested cost benchmark; `tests/test_bench.py` covers its statistics and parsing offline. |
+| `evals-write/` | The write-capable eval suite, run with `--eval-dir evals-write` and the `--allow-tools` grant in `bench.GRANTS`; kept out of `evals/` so that suite stays read-only. `tests/test_evals_write.py` is its offline gate. |
 | `~/.leos-agent-local` | Per-machine state (routing, handoffs, dispatch log, backups). Never inside a versioned plugin cache. |
 
 ## Gates and when to run them

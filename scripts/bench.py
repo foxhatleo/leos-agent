@@ -7,11 +7,12 @@ run's own usage record (the CLI's list-price cost and per-model tokens), and
 tests the paired differences with an exact Wilcoxon signed-rank test. The
 report never states a direction without its p-value and n.
 
-    bench.py run --runs 3 --max-cost-usd 8 [--case GLOB | --tag TAG] [--ledger FILE --budget-usd N]
+    bench.py run --runs 3 --max-cost-usd 8 [--case GLOB | --tag TAG] [--eval-dir DIR]
+                 [--ledger FILE --budget-usd N]
     bench.py report <result.json>... [--json]
 
 `run` is a paid model call per agent run. `report` and the statistics are free.
-Results go under evals/results/, which git ignores.
+Results go under <eval dir>/results/, which git ignores.
 """
 import argparse
 import datetime
@@ -26,7 +27,11 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-RESULTS = ROOT / "evals" / "results"
+EVAL_DIR = "evals"
+# The write-capable suite: its cases edit files and run their tests, so the run
+# needs an operator grant. This is the narrowest that its case passes with;
+# the read-only suite needs none.
+GRANTS = {"evals-write": ("Edit", "Write", "Bash(python3 -m unittest:*)")}
 ARMS = ("with", "without")
 # Settings a run inherits from the shell that change which model answers.
 MODEL_OVERRIDES = ("CLAUDE_CODE_SUBAGENT_MODEL", "ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
@@ -235,25 +240,29 @@ def compare(pairs, metric, confidence):
 
 def summarize(pairs, unpaired=0, alpha=0.05):
     confidence = 1 - alpha
-    errored = sum(1 for p in pairs if p["with"]["error"] or p["without"]["error"])
-    with_ok = sum(p["with"]["correct"] for p in pairs)
-    without_ok = sum(p["without"]["correct"] for p in pairs)
-    wins = sum(p["with"]["correct"] and not p["without"]["correct"] for p in pairs)
-    losses = sum(p["without"]["correct"] and not p["with"]["correct"] for p in pairs)
+    # A run that errored (the CLI failed to start it, a timeout) gave no
+    # answer to grade, so its pair says nothing about correctness either.
+    clean = [p for p in pairs if not (p["with"]["error"] or p["without"]["error"])]
+    errored = len(pairs) - len(clean)
+    with_ok = sum(p["with"]["correct"] for p in clean)
+    without_ok = sum(p["without"]["correct"] for p in clean)
+    wins = sum(p["with"]["correct"] and not p["without"]["correct"] for p in clean)
+    losses = sum(p["without"]["correct"] and not p["with"]["correct"] for p in clean)
     cases = {}
     for p in pairs:
         cases.setdefault(p["case"], []).append(p)
     return {
         "pairs": len(pairs), "unpaired_runs": unpaired, "errored_pairs": errored, "alpha": alpha,
         "metrics": [compare(pairs, metric, confidence) for metric in METRICS],
-        "correctness": {"with": with_ok, "without": without_ok, "with_only_correct": wins,
+        "correctness": {"n": len(clean), "with": with_ok, "without": without_ok, "with_only_correct": wins,
                         "without_only_correct": losses, "p": sign_test(wins, losses)},
         "cases": [{"case": name, "n": len(items),
-                   "with_cost_median": median([i["with"]["cost_usd"] for i in items if i["with"]["cost_usd"] is not None]),
+                   "with_cost_median": median([i["with"]["cost_usd"] for i in items
+                                               if i in clean and i["with"]["cost_usd"] is not None]),
                    "without_cost_median": median([i["without"]["cost_usd"] for i in items
-                                                  if i["without"]["cost_usd"] is not None]),
-                   "with_correct": sum(i["with"]["correct"] for i in items),
-                   "without_correct": sum(i["without"]["correct"] for i in items),
+                                                  if i in clean and i["without"]["cost_usd"] is not None]),
+                   "with_correct": sum(i["with"]["correct"] for i in items if i in clean),
+                   "without_correct": sum(i["without"]["correct"] for i in items if i in clean),
                    "with_children": sum(i["with"]["children"] or 0 for i in items)}
                   for name, items in cases.items()],
     }
@@ -284,7 +293,7 @@ def verdict(summary):
         lines.append(f"No significant cost difference at alpha={alpha:g} "
                      f"(Wilcoxon p={test['p']:.3g}, n={n}); this does not show the costs are equal.")
     c = summary["correctness"]
-    total = summary["pairs"]
+    total = c["n"]
     if c["p"] < alpha and c["without_only_correct"] > c["with_only_correct"]:
         lines.append(f"Correctness regressed with the plugin: {c['with']}/{total} vs {c['without']}/{total} "
                      f"(sign test p={c['p']:.3g}, n={total}).")
@@ -293,7 +302,7 @@ def verdict(summary):
                      f"(sign test on {c['with_only_correct'] + c['without_only_correct']} discordant pairs "
                      f"p={c['p']:.3g}).")
     if summary["errored_pairs"] or summary["unpaired_runs"]:
-        lines.append(f"Excluded from metric tests: {summary['errored_pairs']} pair(s) with an errored run; "
+        lines.append(f"Excluded from every test: {summary['errored_pairs']} pair(s) with an errored run; "
                      f"{summary['unpaired_runs']} run(s) without a partner.")
     lines.append("Costs are the CLI's list-price estimates for these cases and pinned models, not bills; "
                  "they do not establish savings in general.")
@@ -354,6 +363,12 @@ def eval_command(args, json_path):
            "--ablation", "with-without", "--runs", str(args.runs), "--json", str(json_path),
            "--output-dir", str(json_path.parent), "--max-cost-usd", f"{args.max_cost_usd:g}",
            "--threshold", "0", "--keep-temp"]
+    eval_dir = getattr(args, "eval_dir", None) or EVAL_DIR
+    if eval_dir != EVAL_DIR:
+        cmd += ["--eval-dir", eval_dir]
+    grant = GRANTS.get(eval_dir)
+    if grant:
+        cmd += ["--allow-tools", *grant]
     if args.case:
         cmd += ["--case", args.case]
     for tag in args.tag or []:
@@ -421,7 +436,7 @@ def cmd_run(args):
         print(refusal, file=sys.stderr)
         return 2
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
-    out_dir = Path(args.out) if args.out else RESULTS / f"bench-{stamp}"
+    out_dir = Path(args.out) if args.out else ROOT / args.eval_dir / "results" / f"bench-{stamp}"
     out_dir.mkdir(parents=True, exist_ok=True)
     json_path = out_dir / "result.json"
     cmd = eval_command(args, json_path)
@@ -474,6 +489,8 @@ def main(argv=None):
     run = sub.add_parser("run", help="paid: run the suite in both arms and report")
     run.add_argument("--runs", type=int, default=3)
     run.add_argument("--case", help="case name glob, passed to --case")
+    run.add_argument("--eval-dir", default=EVAL_DIR, choices=(EVAL_DIR, *GRANTS),
+                     help="suite directory; evals-write also passes its --allow-tools grant")
     run.add_argument("--tag", action="append", help="case tag, passed to --tag")
     run.add_argument("--max-cost-usd", type=float, required=True, help="the CLI's own ceiling for this run")
     run.add_argument("--concurrency", type=int)

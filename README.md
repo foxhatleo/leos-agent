@@ -535,6 +535,27 @@ plus the ceiling plus an allowance for in-flight runs would pass the budget,
 and appends the run's cost to the ledger. Output goes under `evals/results/`,
 which git ignores.
 
+`evals-write/` is a separate suite for cases that change files, kept apart so
+the suite above stays read-only and needs no grant. Its one case,
+`separable-change`, pins Opus and asks for two independent changes to a small
+Python package: a mechanical rename across six modules and a new function with
+a unit test of its own. A read-only acceptance test defines the result. The
+graders need the acceptance tests and the run's own test passing in a real
+`python3 -m unittest` run in the trace, the run's test file, and the
+acceptance file left intact. All are scored in both arms. Runs need the
+`--eval-dir` and the narrowest grant the case passes with; `bench.py run
+--eval-dir evals-write` passes both:
+
+```sh
+claude plugin eval . --eval-dir evals-write --scaffold --no-publish --max-cost-usd 3 \
+  --allow-tools Edit Write "Bash(python3 -m unittest:*)"
+```
+
+Every other shell command, `sed` included, is refused, so a run makes its
+edits with Edit and Write. Results go under `evals-write/results/`, which git
+ignores. `tests/test_evals_write.py` is its offline gate: it stages the case,
+applies a reference change, runs the case's check, and grades that output.
+
 ## Development and releases
 
 ```sh

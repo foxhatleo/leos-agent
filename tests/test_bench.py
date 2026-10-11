@@ -156,11 +156,19 @@ class Parsing(unittest.TestCase):
         self.assertEqual(unpaired, 1)
         self.assertEqual([(p["with"]["cost_usd"], p["without"]["cost_usd"]) for p in pairs], [(0.3, 0.4), (0.2, 0.5)])
 
-    def test_an_errored_run_drops_its_pair_from_the_metric_tests(self):
-        data = result({"a": ([arm_run(0.3, error="timeout"), arm_run(0.2)], [arm_run(0.4), arm_run(0.5)])})
+    def test_an_errored_run_drops_its_pair_from_every_test(self):
+        # As the CLI reports a run it could not start: no cost, every grader failed.
+        failed_start = arm_run(0, correct=False, error="Error: ENOENT: no such file or directory, posix_spawn")
+        data = result({"a": ([arm_run(0.3), arm_run(0.2)], [failed_start, arm_run(0.5)])})
         summary = bench.report([data])
         self.assertEqual(summary["errored_pairs"], 1)
         self.assertEqual(summary["metrics"][0]["n"], 1)
+        # A run that gave no answer is not a wrong answer.
+        self.assertEqual(summary["correctness"], {"n": 1, "with": 1, "without": 1, "with_only_correct": 0,
+                                                  "without_only_correct": 0, "p": 1.0})
+        case = summary["cases"][0]
+        self.assertEqual((case["with_correct"], case["without_correct"]), (1, 1))
+        self.assertEqual((case["with_cost_median"], case["without_cost_median"]), (0.2, 0.5))
         self.assertTrue(any("errored" in line for line in summary["verdict"]))
 
 
@@ -218,6 +226,16 @@ class Running(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("--max-cost-usd") + 1], "5")
         self.assertEqual(cmd[cmd.index("--case") + 1], "bulk-*")
         self.assertNotIn("--allow-tools", cmd)
+        self.assertNotIn("--eval-dir", cmd)
+
+    def test_the_write_suite_gets_its_eval_dir_and_only_its_grant(self):
+        cmd = bench.eval_command(run_args(eval_dir="evals-write"), Path("/x/result.json"))
+        self.assertEqual(cmd[cmd.index("--eval-dir") + 1], "evals-write")
+        start = cmd.index("--allow-tools") + 1
+        self.assertEqual(tuple(cmd[start:start + len(bench.GRANTS["evals-write"])]), bench.GRANTS["evals-write"])
+        self.assertNotIn("Bash", cmd)  # never the whole shell
+        with mock.patch("sys.stderr"), self.assertRaises(SystemExit):
+            bench.main(["run", "--max-cost-usd", "1", "--eval-dir", "elsewhere"])
 
     def test_budget_counts_the_ledger_ceiling_and_runs_in_flight(self):
         with tempfile.TemporaryDirectory() as tmp:
