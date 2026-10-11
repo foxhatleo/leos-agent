@@ -26,9 +26,9 @@ only after a transient tool error. `Result: blocked` needs a decision or
 permission: surface it instead of escalating.
 
 <!-- leos-agent:routing -->
-Claude defaults: Haiku/Sonnet/Opus/current parent. Codex defaults: Luna/Sol/Astra/current
-parent. Other harnesses require configured cheap/standard/premium tiers. Select a model
-or native tier profile only through supported fields.
+On Cursor, use the installed leo-cheap/leo-standard/leo-premium subagents; each
+runs its configured tier model, or Cursor's default if unset. Select a model or
+native tier profile only through supported fields.
 <!-- /leos-agent:routing -->
 
 Never deliberately choose a child more expensive than the parent; tiers do not

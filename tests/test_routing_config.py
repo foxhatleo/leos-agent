@@ -145,6 +145,18 @@ class TestRendering(RoutingCase):
                 self.assertNotIn(self.installer.ROUTING_OPEN, body)
                 self.assertIn("Never deliberately choose a child more expensive", body)
 
+    def test_the_raw_rule_cursor_loads_names_no_other_harness_models(self):
+        # Cursor reads rules/preferences.md unrendered; every other harness
+        # replaces the routing region. Its default therefore speaks to Cursor,
+        # whose agents cannot run another harness's default tier models.
+        raw = self.installer.payload_body(ROOT)
+        region = raw[raw.index(self.installer.ROUTING_OPEN):raw.index(self.installer.ROUTING_CLOSE)]
+        for harness, tiers in self.installer.routing.DEFAULTS.items():
+            for model in tiers.values():
+                for name in {model, model.split("-")[-1]}:
+                    with self.subTest(harness=harness, model=name):
+                        self.assertIsNone(re.search(r"(?i)\b" + re.escape(name) + r"\b", region))
+
     def test_rendering_is_smaller_than_the_unrendered_file(self):
         # Each machine stops carrying the other harnesses' model names. If this
         # ever inverts, the config has started costing what it was meant to save.
