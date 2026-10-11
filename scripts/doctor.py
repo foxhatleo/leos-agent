@@ -13,6 +13,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dispatch_guard
+import opencode_version
 import payload
 import pricing
 import review_peer
@@ -40,23 +41,14 @@ def opencode_runtime(issues):
     result = {"policy_delivery": "rendered by leo-install into leos-agent-routing.md, registered under "
                                  "`instructions`; it changes only when leo-install reruns, and --check reports "
                                  "it out of date after a plugin or routing change"}
-    binary = shutil.which("opencode")
-    if not binary:
-        result["version"] = "opencode is not on PATH"
-        return result
-    try:
-        out = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=10).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        out = ""
-    result["version"] = out or "unknown"
-    match = re.search(r"(\d+)\.(\d+)(?:\.\d+)*", out)
-    version = (int(match.group(1)), int(match.group(2))) if match else None
+    result["version"], version = opencode_version.probe()
     if version and version >= (2, 0):
         result["policy_delivery"] = ("rendered live by the plugin into each session's model requests "
                                      "(OpenCode 2 context hook); `instructions` entries are not loaded")
+        result["skills"] = "registered by the plugin; leo-install keeps only copies the user edited"
     elif version and version < (1, 4):
-        issues.append("OpenCode %s cannot load leos-agent's plugin, which needs OpenCode 1.4 or later: the dispatch "
-                      "guard and observer are inactive" % match.group(0))
+        issues.append("OpenCode %d.%d cannot load leos-agent's plugin, which needs OpenCode 1.4 or later: the dispatch "
+                      "guard and observer are inactive" % version)
     return result
 
 

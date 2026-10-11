@@ -29,6 +29,13 @@ def completed(returncode=0, stdout="", stderr=""):
     return subprocess.CompletedProcess(args=["npm"], returncode=returncode, stdout=stdout, stderr=stderr)
 
 
+
+def without_opencode(path):
+    """PATH minus every directory holding an `opencode`: the installer and
+    doctor probe its release, and a test must not depend on the machine's."""
+    return os.pathsep.join(d for d in path.split(os.pathsep) if d and not os.access(os.path.join(d, "opencode"), os.X_OK))
+
+
 class TestPackGuard(unittest.TestCase):
     def test_build_residue_is_refused(self):
         inventory = ["LICENSE", "package.json", "scripts/check.py", "scripts/__pycache__/check.cpython-312.pyc"]
@@ -80,7 +87,8 @@ class TestPackGuard(unittest.TestCase):
                    "OPENCODE_CONFIG_DIR": str(base / "config"),
                    "OPENCODE_CONFIG": str(base / "config" / "opencode.jsonc"),
                    "LEOS_AGENT_LOCAL_PATH": str(base / "data"),
-                   "LEOS_AGENT_PRICE_REFRESH": "off", "PYTHONDONTWRITEBYTECODE": "1"}
+                   "LEOS_AGENT_PRICE_REFRESH": "off", "PYTHONDONTWRITEBYTECODE": "1",
+                   "PATH": without_opencode(os.environ.get("PATH", ""))}
             command = [sys.executable, str(package / "scripts/leo-install.py"), "opencode"]
             for flags in ([], ["--check"], ["--uninstall"]):
                 result = subprocess.run(command + flags, env=env, capture_output=True, text=True, timeout=20)

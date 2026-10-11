@@ -27,8 +27,9 @@ or silently approve hook trust. What it does per harness:
   native rule. Rerun after changing tier mappings.
 - OpenCode: register the plugin and one rendered instruction in the active
   JSON/JSONC config while preserving comments/unrelated entries; install the
-  six native agents and skill/reference copies; remove unchanged old command
-  wrappers. The instruction is a rendered copy of the policy: rerun after an
+  six native agents and skill/reference copies (none on OpenCode 2, whose
+  plugin registers the skills; edited copies stay); remove unchanged old
+  command wrappers. The instruction is a rendered copy of the policy: rerun after an
   upgrade, a routing change, or a source/cache path change, then restart
   OpenCode. OpenCode 2 ignores the instruction; there the plugin adds the
   policy to each request. OpenCode 1 needs 1.4 or later.

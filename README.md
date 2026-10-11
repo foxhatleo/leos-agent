@@ -253,8 +253,12 @@ python3 ~/.local/share/leos-agent/scripts/leo-install.py opencode
 Then restart OpenCode. The installer registers the checkout's plugin URI and
 one rendered instruction in the active config (`OPENCODE_CONFIG`, else
 `opencode.jsonc`, else `opencode.json`), and copies the native agent profiles
-(the four tiers, the reviewer and the read-only review lens) and skill/reference copies
-with the checkout's absolute path baked in. It preserves JSONC comments and
+(the four tiers, the reviewer and the read-only review lens) and, on OpenCode 1,
+skill/reference copies with the checkout's absolute path baked in. On OpenCode
+2, which the installer recognises from `opencode --version`, the plugin
+registers the skills itself: the installer copies none and takes back unchanged
+copies an earlier install left, keeping edited ones, which OpenCode then uses
+in place of the plugin's. It preserves JSONC comments and
 unrelated configuration, and uninstall edits the same file the install did.
 Inside OpenCode the install skill is `/leo-install`. Upgrade the checkout with
 `git pull --ff-only`, rerun the same command, and restart. The rendered
@@ -288,7 +292,7 @@ plugin does not load twice, and uninstall puts it back.
 OpenCode 2 does not load `instructions` entries. There the plugin adds the
 same policy to each session's model requests through its context hook,
 rendered once per session, so it follows upgrades and routing changes without
-a rerun. The native agent profiles and skill copies load on both. OpenCode 1
+a rerun. The native agent profiles load on both. OpenCode 1
 needs 1.4 or later, the first release that loads the plugin's single default
 export; the doctor skill reports both cases for the `opencode` on `PATH`.
 

@@ -30,22 +30,27 @@ const SOL = { providerID: 'openai', id: 'gpt-5.6-sol' };
 const LUNA = { providerID: 'openai', id: 'gpt-5.6-luna' };
 
 // A context shaped like the one OpenCode 2 passes to setup().
-const load = async (agents = []) => {
+const load = async (agents = [], existing = []) => {
   const hooks = {};
   let listed = 0;
   const register = (domain) => async (name, callback) => {
     hooks[`${domain}.${name}`] = callback;
     return { dispose: async () => {} };
   };
+  const skills = new Map(existing.map((skill) => [skill.id, skill]));
   const ctx = {
     location: { directory: sandbox },
+    skill: { transform: async (callback) => {
+      callback({ get: (id) => skills.get(id), add: (skill) => { skills.set(skill.id, skill); } });
+      return { dispose: async () => {} };
+    } },
     agent: { list: async () => { listed += 1; return { location: { directory: sandbox }, data: agents }; } },
     session: { hook: register('session') },
     tool: { hook: register('tool') },
     event: { subscribe: () => { throw new Error('price refresh is off'); } },
   };
   const cleanup = await plugin.setup(ctx);
-  return { hooks, cleanup, listed: () => listed };
+  return { hooks, cleanup, listed: () => listed, skills };
 };
 
 const request = (sessionID, model = SOL) => ({
@@ -126,4 +131,18 @@ test('a background launch and a failed call record nothing', async () => {
   await hooks['tool.execute.after']({ tool: 'subagent', sessionID: 'parent', id: 'call-4', status: 'error',
     input: { agent: 'leo-cheap' }, error: new Error('Unknown agent') });
   assert.equal(rows().length, before);
+});
+
+test('setup registers the skills and keeps one OpenCode already found under that id', async () => {
+  const mine = { id: 'handoff', name: 'handoff', path: '/home/me/.config/opencode/skills/handoff/SKILL.md', content: 'mine' };
+  const { skills } = await load([], [mine]);
+  assert.deepEqual([...skills.keys()].sort(),
+    ['doctor', 'handoff', 'handon', 'leo-install', 'review-pr', 'review-usage', 'tune-routing']);
+  assert.equal(skills.get('handoff'), mine);
+  const doctor = skills.get('doctor');
+  assert.equal(doctor.path, join(root, 'skills', 'doctor', 'SKILL.md'));
+  assert.equal(doctor.content.includes('<plugin-root>'), false);
+  assert.equal(doctor.content.includes(root), true);
+  assert.equal(skills.get('review-pr').autoinvoke, undefined);
+  assert.equal(skills.get('leo-install').autoinvoke, false);
 });

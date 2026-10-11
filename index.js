@@ -92,7 +92,8 @@ const remember = (map, key, value) => {
 };
 
 // OpenCode 2 does not load `instructions` entries, so the policy goes in
-// through the context hook, rendered once per session so the prompt prefix
+// through the context hook, and leo-install leaves the skills to this plugin
+// there. The policy is rendered once per session so the prompt prefix
 // stays byte-identical within it. Hooks get one mutable event; a throw in
 // execute.before fails the call with its message, and a replaced `input` is
 // what runs.
@@ -101,6 +102,17 @@ const setup = async (ctx) => {
   const directory = ctx?.location?.directory || process.cwd();
   const models = new Map(); // sessionID -> the model its latest request went to
   const policies = new Map(); // sessionID -> rendered policy; '' after a failed render
+  // The skills leo-install copies on OpenCode 1, rendered once here; the
+  // transform must stay synchronous. A skill OpenCode already found under that
+  // id (a copy the user edited and kept) stays in place of the plugin's.
+  const listed = await runPython(root, 'opencode', 'opencode_skills.py');
+  let skills = [];
+  try { skills = listed?.code === 0 ? JSON.parse(listed.stdout) : []; } catch { skills = []; }
+  if (Array.isArray(skills) && skills.length && typeof ctx.skill?.transform === 'function') {
+    await ctx.skill.transform((editor) => {
+      for (const skill of skills) if (!editor.get(skill.id)) editor.add({ ...skill });
+    });
+  }
   await ctx.session.hook('context', async (event) => {
     const session = event?.sessionID;
     if (typeof session !== 'string') return;

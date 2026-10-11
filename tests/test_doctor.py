@@ -20,6 +20,13 @@ PROBED = ("CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL_FORCE", "CLA
     + settings_probe.THIRD_PARTY_PROVIDERS
 
 
+
+def without_opencode(path):
+    """PATH minus every directory holding an `opencode`: the installer and
+    doctor probe its release, and a test must not depend on the machine's."""
+    return os.pathsep.join(d for d in path.split(os.pathsep) if d and not os.access(os.path.join(d, "opencode"), os.X_OK))
+
+
 class DoctorCase(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -28,7 +35,8 @@ class DoctorCase(unittest.TestCase):
         self.claude = self.root / "claude"
         self.local = self.root / "local"
         env = patch.dict(os.environ, {"HOME": str(self.root / "home"), "CLAUDE_CONFIG_DIR": str(self.claude),
-                                      "LEOS_AGENT_LOCAL_PATH": str(self.local), "LEOS_AGENT_PRICE_REFRESH": "off"})
+                                      "LEOS_AGENT_LOCAL_PATH": str(self.local), "LEOS_AGENT_PRICE_REFRESH": "off",
+                                      "PATH": without_opencode(os.environ.get("PATH", ""))})
         env.start()
         self.addCleanup(env.stop)
         for name in OVERRIDES[1:] + PROBED:

@@ -76,6 +76,7 @@ PLUGIN_ROOT_TOKEN = "<plugin-root>"
 # PLUGIN_ROOT_TOKEN). check.py asserts every file they name carries PROVENANCE.
 OPENCODE_SKILLS = ("doctor", "review-pr", "handoff", "handon", "tune-routing", "review-usage")
 OPENCODE_COMMANDS = ("review-pr", "handoff", "handon")
+OPENCODE2_SKILLS = "the plugin serves this skill on OpenCode 2; a kept copy overrides it"
 
 # Codex plugins cannot package custom agent definitions directly, so these are
 # copied into ~/.codex/agents. Keep this tuple authoritative: check.py and the
@@ -1267,15 +1268,21 @@ def _run_targets(harness, root, args):
 			lambda: "<!-- Managed by leos-agent. -->\n" + payload_body(root, harness, config) + "\n")
 		targets.append(("opencode config", lambda: manage_opencode_config(root, cfg, args, receipt)))
 		agents("md")
-		copy(cfg / "skills" / "leo-install" / "SKILL.md",
+		# OpenCode 2's plugin registers these skills itself (index.js), so a
+		# copy there would only shadow it: take back unchanged copies and keep
+		# edited ones, which OpenCode then uses instead. A release the probe
+		# cannot establish gets copies, as OpenCode 1 needs.
+		from opencode_version import is_v2
+		place = (lambda dest, payload: retire(dest, payload, why=OPENCODE2_SKILLS)) if is_v2() else copy
+		place(cfg / "skills" / "leo-install" / "SKILL.md",
 			lambda: opencode_payload(root / "skills" / "install" / "SKILL.md", root, rename_install=True))
 		# Bound late via a default argument: a lambda closing over the loop
 		# variable would copy the last entry every time.
 		for skill_name in OPENCODE_SKILLS:
 			for ref in sorted((root / "skills" / skill_name / "reference").glob("*.md")):
-				copy(cfg / "skills" / skill_name / "reference" / ref.name, lambda s=ref: opencode_payload(s, root))
+				place(cfg / "skills" / skill_name / "reference" / ref.name, lambda s=ref: opencode_payload(s, root))
 			src = root / "skills" / skill_name / "SKILL.md"
-			copy(cfg / "skills" / skill_name / "SKILL.md", lambda s=src: opencode_payload(s, root))
+			place(cfg / "skills" / skill_name / "SKILL.md", lambda s=src: opencode_payload(s, root))
 		for command_name in OPENCODE_COMMANDS:
 			dest = cfg / "commands" / f"{command_name}.md"
 			targets.append((display(dest), lambda d=dest: remove_legacy_command(d, args, display(d), receipt)))

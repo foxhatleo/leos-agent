@@ -226,8 +226,8 @@ The policy in `rules/preferences.md` applies to work on this repo too.
   parent-agent identity at `subagentStart`; worker no-delegation is prose only.
   Validate against native templates and disclose runtime coverage separately.
 - **OpenCode** config can add skill directories (`skills.paths`, `skills.urls`)
-  and plugins get a `config(cfg)` hook, but the installer still copies skills
-  with the absolute plugin root baked in. Its config is
+  and plugins get a `config(cfg)` hook, but on OpenCode 1 the installer still
+  copies skills with the absolute plugin root baked in. Its config is
   JSONC with user comments; the installer preserves them and never writes the
   `instructions` line blind. `opencode plugin <pkg> --force` can report success
   while serving a lockfile-pinned old version. Git specs install directly.
@@ -251,8 +251,13 @@ The policy in `rules/preferences.md` applies to work on this repo too.
   `{sessionID, status, output}`; a background launch has status `running`.
   `ctx.agent.list()` returns `{data: [{id, model?}]}`; session info carries no
   model, so the adapter remembers each session's model from its context
-  requests. `ctx.skill.transform` can register skills; the installer still
-  copies them. Agent markdown with v1 `permission:` maps still loads; whether
+  requests. The plugin registers the skills with `ctx.skill.transform`
+  (`scripts/opencode_skills.py` renders them as leo-install's copies; Skill.Info
+  is `{id, name, description?, autoinvoke?, path, content}`, `add` replaces by
+  id, and the skill tool lists files beside `path`). It skips an id OpenCode
+  already discovered, so a copy the user edited wins. leo-install probes
+  `opencode --version` (`opencode_version.py`, about 50 ms) and on 2.x copies
+  no skills and takes back unchanged ones; an unknown release keeps copying. Agent markdown with v1 `permission:` maps still loads; whether
   `task: deny` covers `subagent` is unchecked, but the default
   `experimental.subagent_depth` of 1 stops a child from dispatching. `opencode run --standalone` reads stdin when
   it is not a terminal: give it `< /dev/null` in scripts.
