@@ -242,7 +242,10 @@ class TestStaticPromptBudget(unittest.TestCase):
     def test_deferred_review_and_claude_only_bodies_are_budgeted(self):
         measure = self.load_measure()
         values = measure.measurements()
-        self.assertIn("review_procedure_bytes", values)
+        for name in ("review_procedure_bytes", "review_validation_bytes", "review_learnings_bytes"):
+            with self.subTest(measurement=name):
+                self.assertIn(name, values)
+                self.assertIn(name, measure.LIMITS)
         for path in sorted((ROOT / "skills-claude").glob("*/SKILL.md")):
             with self.subTest(skill=path.parent.name):
                 self.assertIn(path.parent.name.replace("-", "_") + "_body_bytes", measure.LIMITS)

@@ -35,6 +35,10 @@ LIMITS = {
 	"review_dispatch_bytes": 1_800,
 	# Deferred, but every review reads it: the reviewer worker's brief names it.
 	"review_procedure_bytes": 20_000,
+	# Deferred and conditional: read only before staging a blocking finding, and
+	# only when the repository has recorded review learnings.
+	"review_validation_bytes": 2_600,
+	"review_learnings_bytes": 2_200,
 	# Claude-only skill bodies, one budget each; a new skill there needs one.
 	"attach_pr_body_bytes": 11_200,
 	"watch_review_body_bytes": 9_600,
@@ -149,6 +153,8 @@ def measurements():
 		"command_description_bytes": command_bytes,
 		"review_dispatch_bytes": byte_len(review_body.strip()),
 		"review_procedure_bytes": body_bytes(ROOT / "skills" / "review-pr" / "reference" / "procedure.md"),
+		"review_validation_bytes": body_bytes(ROOT / "skills" / "review-pr" / "reference" / "validation.md"),
+		"review_learnings_bytes": body_bytes(ROOT / "skills" / "review-pr" / "reference" / "learnings.md"),
 		**claude_bodies,
 	}
 

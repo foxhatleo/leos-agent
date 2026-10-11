@@ -34,7 +34,7 @@ The repo root *is* the plugin. Six manifests sit side by side over one tree:
 | `tests/` | `unittest` suites plus `tests/js/` for Node 22. |
 | `evals/` | `claude plugin eval` suite for the delegation policy; every run is a paid model call. `tests/test_evals.py` is its offline gate. `scripts/bench.py` pairs its two arms into a significance-tested cost benchmark; `tests/test_bench.py` covers its statistics and parsing offline. |
 | `evals-write/` | The write-capable eval suite, run with `--eval-dir evals-write` and the `--allow-tools` grant in `bench.GRANTS`; kept out of `evals/` so that suite stays read-only. `tests/test_evals_write.py` is its offline gate. |
-| `~/.leos-agent-local` | Per-machine state (routing, handoffs, dispatch log, backups). Never inside a versioned plugin cache. |
+| `~/.leos-agent-local` | Per-machine state (routing, handoffs, dispatch log, backups, review learnings). Never inside a versioned plugin cache. |
 
 ## Gates and when to run them
 
@@ -316,6 +316,20 @@ these contracts when changing it or `scripts/ghreview.py`:
   ready-to-merge stands until the PR diff (hunk headers ignored) changes;
   downgrading it needs an explicit `verdict_override`. Stage and `record` both
   enforce this. Reports give each PR its own `##` section.
+- A blocking finding is staged only after one batched fresh-context
+  `leo-lens` validation (standard tier or above, never cheap; a lens, so depth
+  stays one) confirms it; refuted ones are dropped or downgraded. Non-blocking
+  findings are not sent to it. Stage accepts an optional `validation` list
+  (result, independent or self-checked) and records it with the verdict; it
+  never requires one. The procedure text lives in `reference/validation.md`,
+  not `procedure.md`.
+- Review learnings (`review_learnings.py`) come only from reviews this tool
+  staged and the user since submitted: one read-only GET per such review,
+  harvested by `pending`. Entries are data only (action, severity, category,
+  path glob, normalized staged pattern); submitted text is classified, never
+  stored. They load on demand and are advisory: `stage` refuses suppressing a
+  blocking finding, omitting (rather than downgrading) a major one, or a
+  suppression naming no recorded learning.
 - The cross-model lens (`review_peer.py`) runs only when the user enabled it,
   discloses that the diff goes to a second provider, never counts as coverage,
   and raises confidence only when `independence_verified` is true.
