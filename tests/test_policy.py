@@ -1,10 +1,12 @@
 """Cost and routing properties the plugin promises to users."""
 
 import importlib.util
+import io
 import re
 import subprocess
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -213,6 +215,46 @@ class TestStaticPromptBudget(unittest.TestCase):
             timeout=30,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def load_measure(self):
+        spec = importlib.util.spec_from_file_location(
+            "measure_budget_test", ROOT / "scripts" / "measure_context.py"
+        )
+        measure = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(measure)
+        return measure
+
+    def test_claude_agent_roster_counts_what_claude_lists(self):
+        # Claude Code lists a plugin agent by its namespaced type with its tool
+        # list, so the budget must count those bytes, not only name+description.
+        measure = self.load_measure()
+        values = measure.measurements()
+        bare = sum(
+            len(m.group(1).encode("utf-8"))
+            for path in sorted((ROOT / "agents").glob("*.md"))
+            for m in re.finditer(r"(?m)^(?:name|description):\s*(.+?)\s*$", path.read_text(encoding="utf-8").split("---", 2)[1])
+        )
+        self.assertGreater(values["claude_agent_description_bytes"], bare)
+        line = measure.claude_agent_listing(ROOT / "agents" / "leo-lens.md", "leos-agent")
+        self.assertTrue(line.startswith("leos-agent:leo-lens: "))
+        self.assertTrue(line.endswith("(Tools: Read, Grep, Glob, Bash)"))
+
+    def test_deferred_review_and_claude_only_bodies_are_budgeted(self):
+        measure = self.load_measure()
+        values = measure.measurements()
+        self.assertIn("review_procedure_bytes", values)
+        for path in sorted((ROOT / "skills-claude").glob("*/SKILL.md")):
+            with self.subTest(skill=path.parent.name):
+                self.assertIn(path.parent.name.replace("-", "_") + "_body_bytes", measure.LIMITS)
+
+    def test_a_measurement_without_a_ceiling_fails_the_check(self):
+        measure = self.load_measure()
+        values = dict(measure.measurements(), new_skill_body_bytes=1)
+        with mock.patch.object(measure, "measurements", return_value=values), \
+                mock.patch("sys.stdout", new_callable=io.StringIO), \
+                mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.assertEqual(measure.main(["--check"]), 1)
+        self.assertIn("new_skill_body_bytes", err.getvalue())
 
     def test_tune_routing_costs_no_always_loaded_bytes(self):
         # The skill's whole premise is that configuring the cheap tier must not

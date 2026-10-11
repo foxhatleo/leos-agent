@@ -26,11 +26,18 @@ LIMITS = {
 	"codex_discoverable_skill_metadata_bytes": 2_000,
 	"claude_implicit_skill_metadata_bytes": 800,
 	"codex_agent_description_bytes": 550,
-	"claude_agent_description_bytes": 550,
+	# The roster line Claude Code builds per agent: namespaced type, description,
+	# and its "(Tools: ...)" list.
+	"claude_agent_description_bytes": 800,
 	# Command descriptions are listed alongside skills in Claude Code and Cursor,
 	# so they are always-loaded context on the same terms as skill metadata.
 	"command_description_bytes": 0,
 	"review_dispatch_bytes": 1_800,
+	# Deferred, but every review reads it: the reviewer worker's brief names it.
+	"review_procedure_bytes": 20_000,
+	# Claude-only skill bodies, one budget each; a new skill there needs one.
+	"attach_pr_body_bytes": 11_200,
+	"watch_review_body_bytes": 9_600,
 }
 
 
@@ -77,6 +84,28 @@ def agent_description(path):
 	return match.group(1)
 
 
+def claude_agent_listing(path, plugin):
+	"""One agent's entry in Claude Code's Agent-tool roster, approximately as it
+	renders it: `<plugin>:<name>: <description> (Tools: <tools>)`. The tool list
+	is the `tools` field minus `disallowedTools`, or all tools when unrestricted."""
+	fm, _ = frontmatter(path)
+	split = lambda value: [t.strip() for t in value.split(",") if t.strip()]
+	denied = split(field(fm, "disallowedTools"))
+	tools = split(field(fm, "tools"))
+	if tools:
+		shown = ", ".join(t for t in tools if t not in denied)
+	elif denied:
+		shown = "All tools except " + ", ".join(denied)
+	else:
+		shown = "All tools"
+	return f"{plugin}:{field(fm, 'name')}: {field(fm, 'description')} (Tools: {shown})"
+
+
+def body_bytes(path):
+	text = path.read_text(encoding="utf-8")
+	return byte_len(frontmatter(path)[1].strip() if text.startswith("---\n") else text.strip())
+
+
 def rendered_policy():
 	"""Default rendered bodies; Cursor instead loads the native rule body.
 	Harness wrappers and listing formats are outside this byte measurement.
@@ -98,18 +127,17 @@ def measurements():
 	review_fm, review_body = frontmatter(ROOT / "skills" / "review-pr" / "SKILL.md")
 	del review_fm
 	agent_paths = sorted((ROOT / "payload" / "codex-agents").glob("*.toml"))
-	# Claude Code lists every plugin agent's name and description in the parent's
-	# always-loaded agent roster, so they are part of the static footprint too.
-	claude_agent_paths = sorted((ROOT / "agents").glob("*.md"))
-	claude_agent_bytes = 0
-	for path in claude_agent_paths:
-		fm, _ = frontmatter(path)
-		claude_agent_bytes += byte_len(field(fm, "name")) + byte_len(field(fm, "description"))
+	# Claude Code lists every plugin agent in the parent's always-loaded agent
+	# roster, so each entry is part of the static footprint too.
+	plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["name"]
+	claude_agent_bytes = sum(byte_len(claude_agent_listing(path, plugin))
+		for path in sorted((ROOT / "agents").glob("*.md")))
 	command_paths = sorted((ROOT / "commands").glob("*.md")) + sorted((ROOT / "commands-claude").glob("*.md"))
 	command_bytes = 0
 	for path in command_paths:
 		fm, _ = frontmatter(path)
 		command_bytes += byte_len(field(fm, "description"))
+	claude_bodies = {f"{path.parent.name.replace('-', '_')}_body_bytes": body_bytes(path) for path in claude_only}
 	return {
 		"global_policy_bytes": byte_len(policy_body.strip()),
 		"rendered_policy_bytes": max(rendered_policy().values()),
@@ -120,6 +148,8 @@ def measurements():
 		"claude_agent_description_bytes": claude_agent_bytes,
 		"command_description_bytes": command_bytes,
 		"review_dispatch_bytes": byte_len(review_body.strip()),
+		"review_procedure_bytes": body_bytes(ROOT / "skills" / "review-pr" / "reference" / "procedure.md"),
+		**claude_bodies,
 	}
 
 
@@ -130,22 +160,28 @@ def main(argv=None):
 	args = parser.parse_args(argv)
 
 	values = measurements()
+	# A measurement without a ceiling (a new Claude-only skill) fails --check
+	# rather than going unbudgeted.
+	unbudgeted = sorted(set(values) - set(LIMITS))
 	if args.json:
 		print(json.dumps({"measurements": values, "limits": LIMITS}, indent=2, sort_keys=True))
 	else:
 		print("Static prompt text (UTF-8 bytes; byte/4 is only a rough prose-token proxy)")
 		for name, value in values.items():
-			print(f"  {name:38} {value:5}  limit {LIMITS[name]:5}")
+			limit = f"{LIMITS[name]:5}" if name in LIMITS else " none"
+			print(f"  {name:38} {value:5}  limit {limit}")
 		print("  default policy body by harness (Cursor uses its native rule):")
 		for harness, value in sorted(rendered_policy().items()):
 			print(f"    {harness:38} {value:5}")
 		print("Codex implicit-invocation policy does not establish hidden metadata: both eligible and all discoverable names/descriptions are counted.")
 		print("Excludes harness wrappers, file-path metadata, conversation, tools, cache effects, and child work; these are component budgets, not total injected tokens.")
 
-	over = {name: (value, LIMITS[name]) for name, value in values.items() if value > LIMITS[name]}
-	if args.check and over:
+	over = {name: (value, LIMITS[name]) for name, value in values.items() if name in LIMITS and value > LIMITS[name]}
+	if args.check and (over or unbudgeted):
 		for name, (value, limit) in over.items():
 			print(f"FAIL {name}: {value} > {limit}", file=sys.stderr)
+		for name in unbudgeted:
+			print(f"FAIL {name}: no ceiling in LIMITS", file=sys.stderr)
 		return 1
 	return 0
 
