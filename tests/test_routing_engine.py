@@ -439,6 +439,57 @@ class LensStaysReadOnly(unittest.TestCase):
                             native_profiles=dict(profiles, **{"leo-lens": {"model": None}}))
         self.assertEqual((within["action"], within["updated_input"]), ("allow", None))
 
+    def opencode2(self, args, parent="openai/gpt-5.6-sol", profiles=None):
+        return engine.route("opencode", "subagent", args, parent, config={}, catalog=self.catalog,
+                            native_profiles=profiles or {})
+
+    def test_opencode_2_moves_a_child_over_the_parent_onto_the_parent_model(self):
+        """OpenCode 2's subagent tool takes `model`, and its hook can replace
+        the input, so a lens keeps its own agent and no dispatch is refused."""
+        sol = "openai/gpt-5.6-sol"
+        profiles = {"leo-lens": {"model": self.TERRA}, "leo-cheap": {"model": None}}
+        cases = (
+            ({"agent": "leo-lens", "prompt": "x"}, profiles),
+            ({"agent": "leo-cheap", "prompt": "x", "model": self.TERRA}, profiles),
+            ({"agent": "leo-cheap", "prompt": "x", "model": self.TERRA + "#high"}, profiles),
+            ({"agent": "unknown", "prompt": "x", "model": self.TERRA}, {}),
+        )
+        for args, native in cases:
+            with self.subTest(args=args):
+                result = self.opencode2(args, sol, native)
+                self.assertEqual((result["action"], result["reason"]), ("correct", "over-ceiling"))
+                self.assertEqual(result["updated_input"], dict(args, model=sol))
+                self.assertEqual(result["effective_model"], sol)
+
+    def test_opencode_2_allows_what_runs_within_the_parent(self):
+        sol = "openai/gpt-5.6-sol"
+        luna = "openai/gpt-5.6-luna"
+        for args, native, model in (
+                ({"agent": "leo-cheap", "prompt": "x"}, {"leo-cheap": {"model": luna}}, luna),
+                ({"agent": "leo-cheap", "prompt": "x"}, {"leo-cheap": {"model": None}}, sol),
+                ({"agent": "leo-cheap", "prompt": "x", "model": luna}, {"leo-cheap": {"model": self.TERRA}}, luna)):
+            with self.subTest(args=args, native=native):
+                result = self.opencode2(args, sol, native)
+                self.assertEqual((result["action"], result["reason"], result["updated_input"]),
+                                 ("allow", "within-ceiling", None))
+                self.assertEqual(result["effective_model"], model)
+
+    def test_opencode_2_reports_what_it_cannot_price(self):
+        unknown = self.opencode2({"agent": "mystery", "prompt": "x"})
+        self.assertEqual((unknown["action"], unknown["reason"]), ("allow", "unconfigured-native-profile"))
+        orphan = self.opencode2({"agent": "leo-cheap", "prompt": "x"}, None, {"leo-cheap": {"model": None}})
+        self.assertEqual((orphan["action"], orphan["reason"]), ("allow", "parent-model-unavailable"))
+
+    def test_opencode_2_routes_general_to_the_standard_profile_it_can_see(self):
+        profiles = {"general": {"model": None}, "leo-standard": {"model": self.TERRA}}
+        result = self.opencode2({"agent": "general", "prompt": "x"}, profiles=profiles)
+        self.assertEqual(result["action"], "correct")
+        self.assertEqual(result["updated_input"], {"agent": "leo-standard", "prompt": "x", "model": "openai/gpt-5.6-sol"})
+        named = self.opencode2({"agent": "general", "prompt": "x", "model": "openai/gpt-5.6-luna"}, profiles=profiles)
+        self.assertEqual((named["action"], named["updated_input"]), ("allow", None))
+        absent = self.opencode2({"agent": "general", "prompt": "x"}, profiles={"general": {"model": None}})
+        self.assertEqual((absent["action"], absent["updated_input"]), ("allow", None))
+
     def test_other_profiles_keep_their_parent_level_fallback(self):
         profiles = {"leo-standard": {"model": self.TERRA}, "leo-parent": {"model": None}}
         swapped = self.route("opencode", {"subagent_type": "leo-standard"}, "openai/gpt-5.6-sol", native_profiles=profiles)
