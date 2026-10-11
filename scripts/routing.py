@@ -32,9 +32,10 @@ FIELDS = ("model", "effort")
 # or provider model ID configured for Claude could never be sent.
 CLAUDE_AGENT_MODELS = ("haiku", "sonnet", "opus", "fable")
 
-# Harnesses whose economical tier ships with models already baked in: Claude
-# Code reads agents/*.md, Codex reads the installed profile TOMLs. Everything
-# else inherits unless this file says otherwise.
+# Harnesses whose tiers have a shipped default model: Claude Code's agents/*.md
+# name one, and on Codex the dispatch guard demands DEFAULTS' model at spawn
+# (the installed profile TOMLs carry none). Everything else inherits unless
+# this file says otherwise.
 BAKED = ("claude", "codex")
 
 
@@ -226,7 +227,10 @@ def edit(mutate, write=True):
     """
     if not write:
         before = _sound()
-        return before, mutate(copy.deepcopy(before))
+        after = mutate(copy.deepcopy(before))
+        if after != before:
+            validate(after)  # a dry run refuses exactly what the write would
+        return before, after
     with _locked(config_path()):
         before = _sound()
         after = mutate(copy.deepcopy(before))
@@ -275,8 +279,8 @@ NOTES = {
         "      `model:` override on top and never rewrites the plugin."
     ),
     "codex": (
-        "note: codex bakes its models into the installed profile TOMLs; this\n"
-        "      substitutes them there, and effort lands as model_reasoning_effort."
+        "note: codex profile TOMLs carry no model; the dispatch guard requires\n"
+        "      this model, and any effort as reasoning_effort, on each spawn."
     ),
 }
 

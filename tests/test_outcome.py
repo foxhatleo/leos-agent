@@ -38,6 +38,20 @@ class Parse(unittest.TestCase):
         self.assertNotIn("private", repr(parsed))
         self.assertIsNone(outcome.parse("Result: done")["verified"])
 
+    def test_dashes_and_equals_separate_a_label_from_its_value(self):
+        for sep in ("—", "–", "-", "=", ":"):
+            parsed = outcome.parse("Result %s done\nVerified %s ran pytest" % (sep, sep))
+            self.assertEqual(parsed, {"outcome": "done", "verified": True}, sep)
+        self.assertEqual(outcome.parse("**Result** — partial")["outcome"], "partial")
+
+    def test_an_empty_verified_line_takes_its_evidence_from_the_next_line(self):
+        self.assertIs(outcome.parse("Result: done\nVerified:\n`pytest` 3 passed")["verified"], True)
+        self.assertIs(outcome.parse("Result: done\nVerified:\n\n- none, docs only")["verified"], False)
+        self.assertIs(outcome.parse("Verified:\nResult: done")["verified"], False)
+        parsed = outcome.parse("Result: done\n**Verified:**\n- ran `make private-target`")
+        self.assertIs(parsed["verified"], True)
+        self.assertNotIn("private", repr(parsed))
+
     def test_no_evidence_is_decided_by_the_first_word(self):
         for value in ("none (read-only task)", "None - no tests exist", "not run", "N/A: docs only", "nothing to run",
                       "untested", "skipped, no harness", "-", "—"):
@@ -74,21 +88,6 @@ class Escalation(unittest.TestCase):
         self.assertIsNone(outcome.escalation_tier("Escalation from parent: nope"))
         self.assertIsNone(outcome.escalation_tier(("line\n" * 20) + "Escalation from cheap: late"))
         self.assertIsNone(outcome.escalation_tier(None))
-
-
-class Usage(unittest.TestCase):
-    def test_three_shapes_and_the_sum(self):
-        claude = outcome.usage_from({"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 100,
-                                     "cache_creation_input_tokens": 7, "service_tier": "standard"})
-        self.assertEqual(claude, {"input": 10, "output": 5, "cache_read": 100, "cache_write": 7})
-        codex = outcome.usage_from({"input_tokens": 3, "cached_input_tokens": 2, "output_tokens": 1, "reasoning_output_tokens": 9})
-        self.assertEqual(codex, {"input": 3, "output": 1, "cache_read": 2})
-        self.assertIsNone(outcome.usage_from({"model": "x", "ok": True}))
-        self.assertIsNone(outcome.usage_from("12"))
-        total = outcome.add_usage(None, claude)
-        total = outcome.add_usage(total, codex)
-        self.assertEqual(total, {"input": 13, "output": 6, "cache_read": 102, "cache_write": 7})
-        self.assertIs(outcome.add_usage(total, None), total)
 
 
 if __name__ == "__main__":

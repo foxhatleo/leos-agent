@@ -282,7 +282,7 @@ test('a teammate is routed like any other Agent call', async () => {
   assert.equal(cc.rows()[0].call_id, 'toolu_team');
 });
 
-test('an unavailable or broken guard fails open with a debug line and no row', async () => {
+test('an unavailable or broken guard fails open and hands later dispatches to the command guard', async () => {
   const empty = join(sandbox, 'empty-plugin');
   mkdirSync(empty, { recursive: true });
   const spawn = { tool_use_id: 'toolu_f', prompt: 'x', description: 'x', subagentType: 'general-purpose',
@@ -298,8 +298,32 @@ test('an unavailable or broken guard fails open with a debug line and no row', a
     assert.deepEqual(await cc.spawn(spawn), { child: 'opus' });
     assert.equal(cc.debug.length, 1);
     assert.equal(cc.debug[0].options?.to, 'debug');
+    // Python never ran, so there is no row to write.
     assert.equal(cc.rows().length, 0);
+    assert.equal(cc.processEnv.LEOS_AGENT_CLAUDE_SPAWN_MOD, undefined);
   }
+});
+
+test('a decision the guard could not give leaves an error row, and the command guard decides the next one', async () => {
+  let broken = true;
+  const cc = claudeCode({
+    run: async (argv, init = {}) => {
+      if (broken && argv.includes('--json')) return { exitCode: 0, stdout: 'not json', stderr: '' };
+      const child = spawnSync(argv[0], argv.slice(1), { input: init.stdin, encoding: 'utf8', timeout: 30000,
+        env: { ...cc.processEnv, ...init.env } });
+      return { exitCode: child.status ?? 1, stdout: child.stdout, stderr: child.stderr };
+    },
+  });
+  await cc.start();
+  const first = await cc.agentCall({ subagent_type: 'general-purpose', model: 'opus', prompt: 'Investigate' });
+  assert.deepEqual(first, { child: 'opus' });
+  assert.deepEqual(cc.rows().map((row) => [row.decision, row.reason, row.error_type]),
+    [['error', 'spawn-mod-failed', 'SyntaxError']]);
+  broken = false;
+  // The command guard now caps the over-ceiling request itself and logs it.
+  const second = await cc.agentCall({ subagent_type: 'general-purpose', model: 'opus', prompt: 'Investigate' });
+  assert.deepEqual(second, { child: 'sonnet' });
+  assert.deepEqual(cc.rows().slice(1).map((row) => [row.decision, row.reason]), [['correct', 'over-ceiling']]);
 });
 
 test('an unforced CLAUDE_CODE_SUBAGENT_MODEL runs agents that name no model, capped at the parent', async () => {

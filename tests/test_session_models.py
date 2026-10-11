@@ -107,6 +107,18 @@ class ModelObservations(unittest.TestCase):
         row = dispatch_log.read()[-1]
         self.assertEqual((row["agent"], row["effective_model"], row["decision"]), ("leo-standard", "sonnet", "executed"))
 
+    def test_a_workflow_childs_transcript_is_found_under_its_run(self):
+        parent = self.root / "wf.jsonl"
+        child = self.root / "wf" / "subagents" / "workflows" / "wf_1" / "agent-w1.jsonl"
+        child.parent.mkdir(parents=True)
+        child.write_text(json.dumps({"type": "assistant", "message": {"model": "haiku"}}))
+        event = {"agent_id": "w1", "transcript_path": str(parent)}
+        self.assertEqual(session_models.child_transcript(event), str(child))
+        self.assertEqual(session_models.transcript_model(session_models.child_transcript(event)), "haiku")
+        # A direct child keeps the direct path, which a late flush may still create.
+        self.assertEqual(session_models.child_transcript({"agent_id": "w2", "transcript_path": str(parent)}),
+                         str(self.root / "wf" / "subagents" / "agent-w2.jsonl"))
+
     def test_child_transcript_refuses_unsafe_ids(self):
         self.assertIsNone(session_models.child_transcript({"agent_id": "../etc", "transcript_path": "/t.jsonl"}))
         self.assertIsNone(session_models.child_transcript({"agent_id": "ok"}))

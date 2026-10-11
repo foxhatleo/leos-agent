@@ -262,6 +262,17 @@ class TestLog(GuardCase):
         self.assertNotIn(secret.encode(), raw)
         self.assertIn(b'"prompt"', raw)  # the hash is there; the text is not
 
+    def test_a_spawn_mod_failure_is_an_error_row_with_a_name_shaped_type_only(self):
+        for given, kept in (("SyntaxError", "SyntaxError"), ("Error: /Users/me/secret", "other"), (None, "other")):
+            with self.subTest(given=given), self.env():
+                (self.data / "dispatch.jsonl").unlink(missing_ok=True)
+                with mock.patch.object(sys, "stdin", io.TextIOWrapper(io.BytesIO(b""))):
+                    argv = ["--spawn-mod-failed"] + ([given] if given else [])
+                    self.assertEqual(self.guard.main(argv), 0)
+                row, = self.log_lines()
+                self.assertEqual((row["decision"], row["reason"], row["harness"], row["error_type"]),
+                                 ("error", "spawn-mod-failed", "claude", kept))
+
     def test_the_working_directory_is_hashed_not_stored(self):
         self.run_cli(dispatch_event(), )
         cwd = "/Users/someone/clients/acme-secret-project"
@@ -405,7 +416,8 @@ class TestReport(GuardCase):
         self.assertEqual(summary["dispatch_attempts"], 1)
         self.assertEqual(summary["confirmed_executions"], 1)
         self.assertNotIn("inherited", summary["tiers"])
-        self.assertIn("general @ haiku", summary["agents"])
+        self.assertEqual(summary["agents"], {"general @ unknown": 1})
+        self.assertEqual(summary["agents_observed"], {"general @ haiku": 1})
 
     def test_a_reconciled_child_is_counted_once_in_its_final_state(self):
         """SessionEnd appends an `executed` row for a child whose model arrived
@@ -419,7 +431,7 @@ class TestReport(GuardCase):
         self.assertEqual(summary["records"], 3)
         self.assertEqual(summary["superseded"], 1)
         self.assertEqual(summary["decisions"], {"completed": 1, "executed": 1})
-        self.assertEqual(summary["agents"], {"leo-cheap @ haiku": 1, "leo-cheap @ unknown": 1})
+        self.assertEqual(summary["agents_observed"], {"leo-cheap @ haiku": 1, "leo-cheap @ unknown": 1})
         self.assertIn("counted once", self.log.render(summary))
 
     def test_an_unreadable_log_is_an_error_to_callers_and_an_exit_only_in_the_cli(self):

@@ -5,6 +5,9 @@ No network, prompts in storage, or guessed model IDs on this path.
 """
 import copy
 
+# dispatch_guard is stdlib-only at import; its key list is the one every
+# reader of an agent name shares.
+from dispatch_guard import agent_name
 import pricing
 import routing
 
@@ -226,7 +229,10 @@ def _claude(result, args, agent, tier, requested, parent, config, catalog, effec
         return result
     updated = copy.deepcopy(args)
     updated["model"] = selected
-    result.update(action="correct", reason="explicit-tier-default", updated_input=updated)
+    # An unknown parent still gets the configured tier, but no ceiling was
+    # applied, and the reason says so for the report.
+    result.update(action="correct", reason="explicit-tier-default" if parent else "parent-model-unavailable",
+                  updated_input=updated)
     return result
 
 
@@ -251,7 +257,7 @@ model an agent whose definition names none runs on when `model` is omitted.
         if error is not None:
             result["diagnostic"] = CONFIG_INVALID
     catalog = pricing.load() if catalog is None else catalog
-    agent = args.get("subagent_type") or args.get("agent_type") or args.get("agent") or args.get("profile")
+    agent = agent_name(args)
     tier = tier_for(agent)
     native_profiles = native_profiles or {}
     if harness == "opencode":

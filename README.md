@@ -76,7 +76,9 @@ one dispatch and passes large briefs and diffs as file paths.
 
 The tier name is not a price ordering. For example, the bundled reference
 catalog prices GPT-6 Astra above GPT-6.1 Sol, so a premium Astra selection
-under a GPT-6.1 Sol parent is replaced with the parent where supported. Input/output crossover
+under a GPT-6.1 Sol parent is replaced with the parent where supported. A child
+counts as within the ceiling only when its cache read and write rates are no
+dearer either, since a child mostly re-reads cached context. Crossover
 rates, unknown IDs, and ambiguous catalog matches are allowed with diagnostics,
 as configured by this project's policy. Thus the ceiling prevents **known**
 overselection, not every possible billing outcome.

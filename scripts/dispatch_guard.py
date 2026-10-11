@@ -87,6 +87,12 @@ def _first_str(source, keys):
     return ""
 
 
+def agent_name(source):
+    """The agent a dispatch or lifecycle event names, or None. The one reading
+    of AGENT_KEYS: the routing engine, the log and the observer share it."""
+    return _first_str(source, AGENT_KEYS) or None
+
+
 def _first_dict(source, keys):
     for key in keys:
         value = source.get(key)
@@ -318,8 +324,25 @@ def process(event, name=None):
         return {"action": "allow", "reason": "guard-error", "updated_input": None}
 
 
+# hooks/claude-spawn.js reports a decision it could not get with this, once,
+# and then hands the session's later dispatches back to the command hook.
+SPAWN_MOD_FAILED = "--spawn-mod-failed"
+_ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.]{0,63}")
+
+
+def spawn_mod_failed(error_type):
+    """The error row for one agent.spawn the mod let through undecided. The
+    type is the JavaScript error's name, kept only when it is name-shaped."""
+    name = error_type if isinstance(error_type, str) and _ERROR_TYPE_RE.fullmatch(error_type) else "other"
+    _breadcrumb("claude", None, "spawn-mod-failed", error_type=name)
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
+    if SPAWN_MOD_FAILED in argv:
+        index = argv.index(SPAWN_MOD_FAILED)
+        spawn_mod_failed(argv[index + 1] if index + 1 < len(argv) else None)
+        return 0
     try:
         raw = sys.stdin.buffer.read(2 * 1024 * 1024 + 1)
         if len(raw) > 2 * 1024 * 1024:
@@ -349,7 +372,7 @@ def main(argv=None):
     return 0
 
 
-def _breadcrumb(name, exc, reason="guard-error"):
+def _breadcrumb(name, exc, reason="guard-error", error_type=None):
     """An error row: an enum and the exception's type name. Never its message,
     which can carry paths and config values the log must not keep."""
     try:
@@ -360,7 +383,7 @@ def _breadcrumb(name, exc, reason="guard-error"):
             "harness": name,
             "decision": "error",
             "reason": reason,
-            "error_type": type(exc).__name__,
+            "error_type": error_type or type(exc).__name__,
         })
     except Exception:
         pass

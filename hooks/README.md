@@ -203,7 +203,10 @@ parent's effective model, so no transcript lookup is needed for the ceiling.
 and the same single log row as the command guard, then sets the child's model,
 clears it where the command guard would drop `model`, or refuses the spawn with
 the guard's text. It grants no permission and fails
-open: if the guard cannot run, the spawn proceeds and the debug log says why.
+open: if the guard cannot run or answers with something unreadable, the spawn
+proceeds, the debug log says why, a `spawn-mod-failed` error row records it
+when Python can still run, and the module clears `LEOS_AGENT_CLAUDE_SPAWN_MOD`
+so the command guard decides the session's later dispatches.
 
 One side decides each dispatch. On Claude Code 2.1.289 and later, where
 `agent.spawn` also covers teammates, the module's `session.start` sets

@@ -241,7 +241,8 @@ def child_transcript(event):
 
     Claude names it as agent_transcript_path on most lifecycle events, but not
     all of them; when it is absent, the parent transcript's sibling directory
-    holds subagents/agent-<id>.jsonl. None when neither is available or the id
+    holds subagents/agent-<id>.jsonl, or subagents/workflows/<run>/agent-<id>.jsonl
+    for a child a workflow started. None when neither is available or the id
     is not a safe path component.
     """
     path = event.get("agent_transcript_path") or event.get("agentTranscriptPath")
@@ -251,8 +252,15 @@ def child_transcript(event):
     transcript = event.get("transcript_path") or event.get("transcriptPath")
     if not (isinstance(agent, str) and _AGENT_ID_RE.fullmatch(agent) and isinstance(transcript, str) and transcript):
         return None
-    filename = agent if agent.startswith("agent-") else "agent-" + agent
-    return str(Path(transcript).with_suffix("") / "subagents" / (filename + ".jsonl"))
+    filename = (agent if agent.startswith("agent-") else "agent-" + agent) + ".jsonl"
+    subagents = Path(transcript).with_suffix("") / "subagents"
+    direct = subagents / filename
+    if not direct.exists():
+        # The id is a safe path component, so it carries no glob syntax.
+        nested = sorted(subagents.glob(os.path.join("workflows", "*", filename)))
+        if len(nested) == 1:
+            return str(nested[0])
+    return str(direct)
 
 
 def parent_model(event, harness):

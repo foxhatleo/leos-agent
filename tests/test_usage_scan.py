@@ -138,6 +138,17 @@ class TestClaude(ScanCase):
         result = self.scan.scan_claude(self.since, str(self.root / "projects"))
         self.assertEqual(result["agent_types"], {"unknown": 1, "Explore": 1})
 
+    def test_a_workflow_child_is_a_subagent(self):
+        """Claude writes a workflow run's children one level deeper, under
+        subagents/workflows/<run>/."""
+        base = self.project()
+        nested = self.write_jsonl(base / "sess" / "subagents" / "workflows" / "wf_1" / "agent-abc.jsonl",
+                                  [assistant("r1", usage=usage(5))])
+        (nested.parent / "agent-abc.meta.json").write_text(json.dumps({"agentType": "Explore"}), encoding="utf-8")
+        result = self.scan.scan_claude(self.since, str(self.root / "projects"))
+        self.assertEqual(result["agent_types"], {"Explore": 1})
+        self.assertEqual(result["buckets"]["subagent"].input, 5)
+
     def test_a_subagent_is_counted_once_however_many_turns_it_took(self):
         base = self.project()
         self.write_jsonl(base / "sess" / "subagents" / "agent-abc.jsonl",
@@ -260,6 +271,48 @@ class TestReport(ScanCase):
             text = self.scan.render(report)
         self.assertNotIn(secret, text)
         self.assertNotIn(secret, json.dumps(report))
+
+    def fake_ccusage(self, output, code=0):
+        """A ccusage on PATH that records its argv and HERMES_HOME and prints `output`."""
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        exe = bin_dir / "ccusage"
+        exe.write_text("#!/bin/sh\nprintf '%%s\\n' \"$@\" \"HERMES_HOME=$HERMES_HOME\" > \"%s\"\ncat \"%s\"\nexit %d\n"
+                       % (self.root / "argv.txt", self.root / "out.json", code), encoding="utf-8")
+        exe.chmod(0o755)
+        (self.root / "out.json").write_text(output, encoding="utf-8")
+        return mock.patch.dict(os.environ, {"PATH": str(bin_dir) + os.pathsep + "/bin:/usr/bin",
+                                            "LEOS_AGENT_LOCAL_PATH": str(self.root)})
+
+    def test_ccusage_on_path_is_a_fallback_source_for_hermes_and_pi(self):
+        # The shape ccusage's focused agent report emits (rust/crates/ccusage-core agent_report.rs).
+        daily = {"daily": [{"date": "2026-10-10", "inputTokens": 120, "outputTokens": 30, "cacheCreationTokens": 5,
+                            "cacheReadTokens": 900, "totalTokens": 1055, "modelsUsed": ["claude-sonnet-4-5"],
+                            "modelBreakdowns": [{"modelName": "claude-sonnet-4-5", "inputTokens": 120,
+                                                 "outputTokens": 30, "cacheCreationTokens": 5,
+                                                 "cacheReadTokens": 900, "cost": 0}]}],
+                 "totals": {"inputTokens": 120}}
+        with self.fake_ccusage(json.dumps(daily)), \
+                mock.patch.dict(self.scan.SOURCES, {"hermes": str(self.root / "hermes-home")}):
+            report = self.scan.collect(self.since, "hermes")
+            text = self.scan.render(report)
+        hermes = report["harnesses"]["hermes"]
+        self.assertEqual((hermes["status"], hermes["source"]), ("ok", "ccusage"))
+        self.assertEqual(hermes["model_usage"]["claude-sonnet-4-5"]["main"]["cache_read"], 900)
+        self.assertIsNone(hermes["subagent_token_share"])
+        self.assertIn("claude-sonnet-4-5", hermes["reference_cost"])
+        self.assertIn("read from ccusage", text)
+        argv = (self.root / "argv.txt").read_text(encoding="utf-8").split("\n")
+        self.assertEqual(argv[:4], ["hermes", "daily", "--json", "--offline"])
+        self.assertIn("HERMES_HOME=%s" % (self.root / "hermes-home"), argv)
+
+    def test_ccusage_failures_are_errors_and_its_absence_is_unsupported(self):
+        for output, code in (("not json", 0), (json.dumps({"data": []}), 0), ("{}", 3)):
+            with self.subTest(output=output, code=code), self.fake_ccusage(output, code):
+                self.assertEqual(self.scan.collect(self.since, "pi")["harnesses"]["pi"]["status"], "error")
+        with mock.patch.dict(os.environ, {"PATH": str(self.root / "empty"), "LEOS_AGENT_LOCAL_PATH": str(self.root)}):
+            self.assertEqual(self.scan.collect(self.since, "pi")["harnesses"]["pi"]["status"], "unsupported")
+            self.assertEqual(self.scan.collect(self.since, "cursor")["harnesses"]["cursor"]["status"], "unsupported")
 
     def test_duration_parsing_refuses_nonsense(self):
         self.assertLess(self.scan.parse_since("7d"), time.time() - 600000)

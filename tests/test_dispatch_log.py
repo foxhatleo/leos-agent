@@ -45,6 +45,22 @@ class Joins(unittest.TestCase):
         self.assertEqual(summary["outcomes"], {"cheap": {"done": 1}, "unrouted": {"blocked": 1}})
         self.assertEqual(summary["joins"], {"nearest": 2})
 
+    def test_agent_models_count_each_child_once_as_requested_and_once_as_observed(self):
+        summary = dispatch_log.summarise([
+            dispatch("2026-10-01T10:00:00Z", "leos-agent:leo-cheap", decision="correct", call="t1",
+                     effective_model="haiku"),
+            child("2026-10-01T10:00:10Z", "leos-agent:leo-cheap", "a1", call="t1",
+                  effective_model="claude-haiku-4-5-20251001"),
+            # The SessionEnd backfill of the same child.
+            child("2026-10-01T10:00:10Z", "leos-agent:leo-cheap", "a1", call="t1", decision="executed",
+                  effective_model="claude-haiku-4-5-20251001"),
+        ])
+        self.assertEqual(summary["agents"], {"leos-agent:leo-cheap @ haiku": 1})
+        self.assertEqual(summary["agents_observed"], {"leos-agent:leo-cheap @ claude-haiku-4-5-20251001": 1})
+        text = dispatch_log.render(summary)
+        self.assertIn("dispatched", text)
+        self.assertIn("observed", text)
+
     def test_siblings_of_one_agent_finishing_together_stay_distinct(self):
         rows = [dispatch("2026-10-01T10:00:00Z", "delegate_task", harness="hermes", tier=None)]
         rows += [child("2026-10-01T10:00:0%dZ" % n, "delegate_task", "child-%d" % n, harness="hermes", outcome=o, verified=False)

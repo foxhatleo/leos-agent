@@ -174,7 +174,7 @@ def in_window(rec, since, out):
 
 
 def scan_claude(since, root=None):
-    """~/.claude/projects/<slug>/*.jsonl plus <session>/subagents/agent-*.jsonl."""
+    """~/.claude/projects/<slug>/*.jsonl plus <session>/subagents/**/agent-*.jsonl."""
     root = root or SOURCES["claude"]
     out = new_scan()
     out.update({"dispatches": [], "agent_types": collections.Counter(),
@@ -188,7 +188,9 @@ def scan_claude(since, root=None):
         if not os.path.isdir(base):
             continue
         files = [(p, "main") for p in glob.glob(os.path.join(base, "*.jsonl"))]
-        files += [(p, "subagent") for p in glob.glob(os.path.join(base, "*", "subagents", "agent-*.jsonl"))]
+        # A workflow's children sit one level deeper, in subagents/workflows/<run>/.
+        files += [(p, "subagent") for p in glob.glob(os.path.join(base, "*", "subagents", "**", "agent-*.jsonl"),
+                                                     recursive=True)]
         for path, bucket in files:
             try:
                 # Cheap skip: a file untouched since the window opened cannot
@@ -385,6 +387,78 @@ def scan_opencode(since, db=None):
     return finish(out)
 
 
+# Harnesses whose local schema this scan does not parse but ccusage does, when
+# it is on PATH: ccusage's focused report for each, with its data location
+# pointed at the one this scan would read. Cursor has no ccusage source.
+CCUSAGE_AGENTS = ("hermes", "pi")
+CCUSAGE_TIMEOUT = 60
+CCUSAGE_MAX_BYTES = 8 * 1024 * 1024
+
+
+def scan_ccusage(agent, since, which=None, run=None):
+    """`ccusage <agent> daily --json` as a fallback source, or None when ccusage is absent.
+
+    Never required, and never a network call: --offline and --no-cost keep
+    ccusage off its price feed, and pricing stays this scan's own. The
+    report's own JSON (rows under "daily", each with "modelBreakdowns" of
+    modelName/inputTokens/cacheReadTokens/cacheCreationTokens/outputTokens)
+    is read as data; anything else is an error, not zero usage. Its days are
+    UTC whole days, and it does not split main from subagent work.
+    """
+    import shutil
+    import subprocess
+    exe = (which or shutil.which)("ccusage")
+    if not exe:
+        return None
+    argv = [exe, agent, "daily", "--json", "--offline", "--no-cost", "--timezone", "UTC",
+            "--since", time.strftime("%Y%m%d", time.gmtime(since))]
+    env = dict(os.environ)
+    if agent == "pi":
+        argv += ["--pi-path", SOURCES["pi"]]
+    elif agent == "hermes":
+        env["HERMES_HOME"] = SOURCES["hermes"]
+    try:
+        done = (run or subprocess.run)(argv, stdin=subprocess.DEVNULL, capture_output=True, env=env,
+                                       timeout=CCUSAGE_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"error": "ccusage did not complete (%s)" % type(exc).__name__}
+    if done.returncode != 0:
+        return {"error": "ccusage exited %d" % done.returncode}
+    try:
+        if len(done.stdout) > CCUSAGE_MAX_BYTES:
+            raise ValueError("too large")
+        data = json.loads(done.stdout)
+        rows = data["daily"]
+        if not isinstance(rows, list):
+            raise TypeError("daily is not a list")
+    except (ValueError, TypeError, KeyError):
+        return {"error": "ccusage output not recognised"}
+    out = new_scan()
+    for row in rows:
+        if not isinstance(row, dict):
+            out["diagnostics"]["invalid_records"] += 1
+            continue
+        breakdowns = row.get("modelBreakdowns")
+        if not isinstance(breakdowns, list) or not breakdowns:
+            # A day with tokens but no per-model rows is counted under its one
+            # model when it names exactly one, else as unknown.
+            used = row.get("modelsUsed")
+            breakdowns = [dict(row, modelName=used[0] if isinstance(used, list) and len(used) == 1 else None)]
+        for part in breakdowns:
+            if not isinstance(part, dict):
+                out["diagnostics"]["invalid_records"] += 1
+                continue
+            values = tuple(count(part.get(key)) for key in
+                           ("inputTokens", "cacheReadTokens", "cacheCreationTokens", "outputTokens"))
+            if any(values):
+                add_usage(out, "main", part.get("modelName"), values, row.get("date"))
+    out = finish(out)
+    out.update(source="ccusage", sessions=None,
+               coverage="ccusage daily totals from %s UTC: whole days, so the first may start before the window; "
+                        "no main/subagent split, and its rows are days, not requests" % time.strftime("%Y-%m-%d", time.gmtime(since)))
+    return out
+
+
 def scan_guard(since=0, only=None):
     """The guard's own record, and whether its blocks changed anything."""
     try:
@@ -478,10 +552,18 @@ def collect(since, only=None, catalog=None):
         if only and name != only:
             continue
         scanner = scanners.get(name)
-        if scanner is None:
-            report["harnesses"][name] = {"status": "unsupported", "reason": "Local usage schema not supported; installation status unknown."}
+        if scanner is None and name in CCUSAGE_AGENTS:
+            data = scan_ccusage(name, since)
+        elif scanner is None:
+            data = None
+        else:
+            data = scanner(since)
+        if scanner is None and data is None:
+            reason = "Local usage schema not supported; installation status unknown."
+            if name in CCUSAGE_AGENTS:
+                reason += " ccusage, when on PATH, is read for it."
+            report["harnesses"][name] = {"status": "unsupported", "reason": reason}
             continue
-        data = scanner(since)
         if data is None:
             report["harnesses"][name] = {"status": "no data", "looked_in": SOURCES[name]}
             continue
@@ -491,7 +573,10 @@ def collect(since, only=None, catalog=None):
             buckets = data.pop("buckets")
             data.update({role: total.as_dict() for role, total in buckets.items()})
             main, sub = buckets["main"].raw(), buckets["subagent"].raw()
-            data["subagent_token_share"] = round(sub / (main + sub), 3) if main + sub else 0
+            if data.get("source") == "ccusage":
+                data["subagent_token_share"] = None  # ccusage does not split them
+            else:
+                data["subagent_token_share"] = round(sub / (main + sub), 3) if main + sub else 0
             data["reference_cost"] = {model: reference_cost(model, usage, catalog) for model, usage in data["model_usage"].items()}
             data["status"] = "partial" if data.get("diagnostics") else "ok"
             compression = output_compression(name)
@@ -513,8 +598,11 @@ def render(report):
         if data.get("status") not in ("ok", "partial"):
             lines.append(name + ": " + data["status"] + " — " + str(data.get("error") or data.get("reason") or data.get("looked_in", "")))
             continue
-        lines.append("%s: %s session(s); main %s tokens, subagents %s tokens" %
-                     (name, data["sessions"], data["main"]["total"], data["subagent"]["total"]))
+        if data.get("source") == "ccusage":
+            lines.append("%s: %s tokens, read from ccusage" % (name, data["main"]["total"]))
+        else:
+            lines.append("%s: %s session(s); main %s tokens, subagents %s tokens" %
+                         (name, data["sessions"], data["main"]["total"], data["subagent"]["total"]))
         for model, cost in sorted(data["reference_cost"].items()):
             lines.append("  %s: reference $%.4f–$%.4f (%s); %d unpriced tokens" %
                          (model, cost["minimum_usd"], cost["maximum_usd"], cost["status"], cost["unpriced_tokens"]))

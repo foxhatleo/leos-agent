@@ -21,8 +21,11 @@ TAIL_LINES = 40
 _WRAP = "*_`~ \t"
 # The token must end the word: an echoed contract template such as
 # `Result: done|partial|blocked|escalate` is not a `done`.
-_RESULT_RE = re.compile(r"^result[*_`]*\s*[:\-][\s*_`]*([a-z]+)(?=$|[\s.,;!)*_`~])", re.IGNORECASE)
-_VERIFIED_RE = re.compile(r"^verified[*_`]*\s*[:\-](.*)$", re.IGNORECASE)
+# A colon, hyphen, en or em dash, or equals sign separates the label from its
+# value: `Result — done` is as common in model prose as `Result: done`.
+_SEP = r"[*_`]*\s*[:=\-–—]"
+_RESULT_RE = re.compile(r"^result" + _SEP + r"[\s*_`]*([a-z]+)(?=$|[\s.,;!)*_`~])", re.IGNORECASE)
+_VERIFIED_RE = re.compile(r"^verified" + _SEP + r"(.*)$", re.IGNORECASE)
 _ESCALATION_RE = re.compile(r"^escalation\s+from\s+(cheap|standard|premium)\b[*_`]*\s*:", re.IGNORECASE)
 # Decided from the first word, so `none (read-only task)`, `None - no tests
 # exist` and `not run` all read as no evidence rather than as stated evidence.
@@ -55,15 +58,17 @@ def parse(text):
 
     Scans the last TAIL_LINES non-empty lines from the bottom; the first match
     from the bottom wins, so a reply that quotes the contract earlier on cannot
-    outvote its own closing line. Unknown tokens are `unknown`, never echoed.
+    outvote its own closing line. A `Verified:` with nothing after it takes its
+    evidence from the next non-empty line, unless that line is another contract
+    line. Unknown tokens are `unknown`, never echoed.
     """
     result = {"outcome": "unknown", "verified": None}
     if not isinstance(text, str) or not text:
         return result
-    lines = [ln for ln in text[-TAIL_BYTES:].splitlines() if ln.strip()][-TAIL_LINES:]
+    lines = [_normalise(ln) for ln in text[-TAIL_BYTES:].splitlines() if ln.strip()][-TAIL_LINES:]
     found_result = found_verified = False
-    for raw in reversed(lines):
-        line = _normalise(raw)
+    for index in range(len(lines) - 1, -1, -1):
+        line = lines[index]
         if not found_result:
             match = _RESULT_RE.match(line)
             if match:
@@ -73,7 +78,12 @@ def parse(text):
                 continue
         if not found_verified:
             match = _VERIFIED_RE.match(line)
-            stated = _evidence(match.group(1)) if match else None
+            value = match.group(1) if match else None
+            if value is not None and not _unwrap(value) and index + 1 < len(lines):
+                following = lines[index + 1]
+                if not (_RESULT_RE.match(following) or _VERIFIED_RE.match(following)):
+                    value = following
+            stated = _evidence(value) if value is not None else None
             if stated is not None:
                 found_verified = True
                 result["verified"] = stated
@@ -103,44 +113,3 @@ def escalation_tier(head):
         if match:
             return match.group(1).casefold()
     return None
-
-
-_USAGE_KEYS = {
-    "input": ("input_tokens", "input", "prompt_tokens", "inputTokens"),
-    "output": ("output_tokens", "output", "completion_tokens", "outputTokens"),
-    "cache_read": ("cache_read_input_tokens", "cache_read", "cached_input_tokens", "cacheRead", "cached_tokens"),
-    "cache_write": ("cache_creation_input_tokens", "cache_write", "cacheWrite"),
-}
-
-
-def usage_from(mapping):
-    """Integers only, from any of the harness usage shapes; None when nothing numeric.
-
-    Claude transcripts carry `input_tokens`/`output_tokens`/`cache_*_input_tokens`,
-    Codex token-count events carry `input_tokens`/`cached_input_tokens`/
-    `output_tokens`, and Pi's tool_result carries a similar nested `usage`.
-    Unknown keys are ignored; booleans are not counts.
-    """
-    if not isinstance(mapping, dict):
-        return None
-    out = {}
-    for field, keys in _USAGE_KEYS.items():
-        for key in keys:
-            value = mapping.get(key)
-            if isinstance(value, bool):
-                continue
-            if isinstance(value, (int, float)) and value >= 0:
-                out[field] = int(value)
-                break
-    return out or None
-
-
-def add_usage(total, part):
-    """Sum two usage dicts field-wise; None is the identity."""
-    if not part:
-        return total
-    if not total:
-        return dict(part)
-    for key, value in part.items():
-        total[key] = total.get(key, 0) + value
-    return total

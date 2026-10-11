@@ -176,6 +176,43 @@ class ModelPrices(unittest.TestCase):
         data["models"][1]["pricing"]["overrides"] = [{"min_prompt_tokens": 200000, "prompt": "1", "completion": "5"}]
         self.assertEqual(pricing.compare("gpt-5.6-terra", "gpt-5.6-sol", data)["status"], "allowed")
 
+    def test_cache_rates_must_agree_before_a_child_is_allowed(self):
+        """A child mostly re-reads cached context. Equal prompt and completion
+        rates with a dearer cache read are over the ceiling, and a cheaper
+        prompt rate with a dearer cache read is a crossover, not a saving."""
+        def cached(read, write=None, prompt=2, completion=10):
+            rates = {"prompt": str(prompt), "completion": str(completion), "input_cache_read": str(read)}
+            if write is not None:
+                rates["input_cache_write"] = str(write)
+            return rates
+        data = catalog(("openai/gpt-6-sol", 2, 10), ("openai/gpt-6.1-sol", 2, 10))
+        data["models"][0]["pricing"].update(cached(0.2))
+        data["models"][1]["pricing"].update(cached(0.1))
+        self.assertEqual(pricing.compare("gpt-6-sol", "gpt-6.1-sol", data)["status"], "over-ceiling")
+        self.assertEqual(pricing.compare("gpt-6.1-sol", "gpt-6-sol", data)["status"], "allowed")
+        data["models"][0]["pricing"].update(cached(0.2, prompt=1))
+        crossover = pricing.compare("gpt-6-sol", "gpt-6.1-sol", data)
+        self.assertEqual((crossover["status"], crossover["basis"]), ("unknown", "cache-rate"))
+        # Cache writes count too.
+        data["models"][0]["pricing"].update(cached(0.1, write=3))
+        data["models"][1]["pricing"].update(cached(0.1, write=2.5))
+        self.assertEqual(pricing.compare("gpt-6-sol", "gpt-6.1-sol", data)["status"], "over-ceiling")
+        # A model without cache rates bills cached tokens as prompt tokens: a
+        # child at 1 per prompt token is dearer than the parent's 0.1 cache read.
+        data["models"][0]["pricing"] = {"prompt": "1", "completion": "10"}
+        self.assertEqual(pricing.compare("gpt-6-sol", "gpt-6.1-sol", data)["status"], "unknown")
+        data["models"][1]["pricing"] = {"prompt": "2", "completion": "10"}
+        self.assertEqual(pricing.compare("gpt-6-sol", "gpt-6.1-sol", data)["status"], "allowed")
+
+    def test_bundled_cache_rate_ceilings(self):
+        data = json.loads(pricing.BUNDLED.read_text())
+        # Same prompt and completion rates, a dearer cache read.
+        for child, parent in (("claude-fable-5", "claude-fable-5-1"), ("gpt-6-sol", "gpt-6.1-sol")):
+            self.assertEqual(pricing.compare(child, parent, data)["status"], "over-ceiling", child)
+        # A dearer prompt and completion rate stays over the ceiling even where
+        # the child's cache read is cheaper.
+        self.assertEqual(pricing.compare("opus", "claude-sonnet-4-5", data)["status"], "over-ceiling")
+
     def test_conditions_other_than_prompt_size_are_compared_as_ranges(self):
         data = catalog(("openai/gpt-5.6-sol", 2, 10), ("openai/gpt-5.6-terra", 3, 12))
         data["models"][1]["pricing"]["overrides"] = [{"utc_days": ["saturday"], "prompt": "1", "completion": "5"}]

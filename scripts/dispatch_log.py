@@ -222,6 +222,16 @@ def _token(value):
     return value if isinstance(value, str) and _TOKEN_RE.fullmatch(value) else "other"
 
 
+def enum_token(value):
+    """A harness-supplied enum for a row, case-folded, or None when it is absent
+    or not enum-shaped. Rows hold enums only: a host that puts free text in a
+    status or reason field must not get it into the log."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip().casefold()
+    return value if _TOKEN_RE.fullmatch(value) else None
+
+
 def _tier_of(row):
     """A row's tier: a v3 dispatch records it, and so does a Claude leo-lens
     completion whose model is known; any other row recomputes it from its agent."""
@@ -467,8 +477,8 @@ def summarise(entries, catalog=None):
             verified.setdefault(tier, collections.Counter())[state] += 1
             sources[row.get("harness")][row.get("outcome_source") or "none"] += 1
         if isinstance(row.get("usage"), dict):
-            import outcome as _outcome
-            usage[tier] = _outcome.add_usage(usage.get(tier), row["usage"])
+            import accounting
+            usage[tier] = accounting.add_usage(usage.get(tier), row["usage"])
             usage_rows[tier] += 1
         if isinstance(row.get("turns"), int) and not isinstance(row.get("turns"), bool) and row["turns"] > 0:
             bucket = turns.setdefault(tier, {"total": 0, "rows": 0})
@@ -544,9 +554,16 @@ def summarise(entries, catalog=None):
         "confirmed_executions": len(confirmed),
         "converted": None,  # legacy field: never infer savings from prompt hashes
         "trivial_lone_spawns": len(trivial),
+        # Requested and observed are counted apart: a child has a dispatch row
+        # naming the alias the guard sent and a completion row naming the full
+        # ID its transcript shows, and adding the two counted each child twice.
         "agents": dict(collections.Counter(
             "%s @ %s" % (e.get("agent") or "-", e.get("effective_model") or e.get("requested_model") or e.get("model") or "unknown")
-            for e in current
+            for e in dispatches if e.get("decision") != "error"
+        )),
+        "agents_observed": dict(collections.Counter(
+            "%s @ %s" % (e.get("agent") or "-", e.get("effective_model") or "unknown")
+            for e in completions
         )),
     }
 
@@ -581,9 +598,13 @@ def render(summary):
         lines.append("  error types " + ", ".join("%s %d" % kv for kv in summary["error_types"].items()))
     lines.append("  short-brief signals  %d  (heuristic only; not evidence of wasted spend)" % summary["trivial_lone_spawns"])
     lines.extend(_render_outcomes(summary))
-    lines.append("  agent @ model:")
-    for name, count in sorted(summary["agents"].items(), key=lambda kv: (-kv[1], kv[0])):
-        lines.append("    %-44s %d" % (name, count))
+    for label, key in (("dispatched", "agents"), ("observed", "agents_observed")):
+        counts = summary.get(key) or {}
+        if not counts:
+            continue
+        lines.append("  agent @ model, %s:" % label)
+        for name, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
+            lines.append("    %-44s %d" % (name, count))
     return "\n".join(lines)
 
 
