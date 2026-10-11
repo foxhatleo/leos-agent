@@ -58,7 +58,8 @@ containing `rules/preferences.md`.
 Claude Code only, opt-in: the advisor is a stronger model the main model
 consults at decision points, not a delegated worker or a tier. Offer it only
 when asked or when long tasks fail on planning; read `reference/advisor.md`
-first. Show the change with `python3 "<plugin-root>/scripts/claude_advisor.py"
+first. When a needed child tier runs on the parent's own model, also offer
+the `opusplan` main-model setting that file describes; the user sets it. Show the change with `python3 "<plugin-root>/scripts/claude_advisor.py"
 set <model>` and add `--apply` only on the user's explicit request.
 
 Live probes are optional and **never automatic**. Obtain authorization and a

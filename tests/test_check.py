@@ -56,6 +56,26 @@ class TestPortableFrontmatter(unittest.TestCase):
         self.assertEqual(check.non_portable_keys(text), [])
 
 
+class TestSkillTriggerLint(unittest.TestCase):
+    def test_a_model_invocable_skill_needs_a_trigger_clause(self):
+        self.assertTrue(check.skill_trigger_problems("Review a pull request.", True))
+        self.assertEqual(check.skill_trigger_problems("Review a pull request. Use when asked to review a PR.", True), [])
+
+    def test_a_model_invocable_description_has_a_byte_cap(self):
+        long = "Use when asked. " + "x" * check.MODEL_INVOCABLE_DESCRIPTION_CAP
+        self.assertTrue(check.skill_trigger_problems(long, True))
+
+    def test_a_user_invoked_skill_carries_no_trigger(self):
+        self.assertTrue(check.skill_trigger_problems("Write a handoff. Use when context runs low.", False))
+        # The cap guards the always-loaded listing; a hidden skill may run longer.
+        self.assertEqual(check.skill_trigger_problems("Write a handoff. " + "x" * 400, False), [])
+
+    def test_folded_descriptions_are_read_whole(self):
+        text = "---\nname: example\ndescription: >-\n  Load a handoff.\n  Use when one is named.\nargument-hint: x\n---\nBody\n"
+        self.assertEqual(check.frontmatter_description(text), "Load a handoff. Use when one is named.")
+        self.assertEqual(check.frontmatter_description("---\ndescription: Plain one.\n---\n"), "Plain one.")
+
+
 class TestTheGateFailsOnPlantedViolations(unittest.TestCase):
     def test_check_py_refuses_a_non_portable_skill_and_a_claude_rooted_command(self):
         with tempfile.TemporaryDirectory(prefix="leo check gate ") as tmp:

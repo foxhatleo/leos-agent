@@ -231,6 +231,40 @@ def review_peer_setting(harness, issues):
     return result
 
 
+TIER_ORDER = ("cheap", "standard", "premium")
+
+
+def tier_ladder(harness, config, catalog=None):
+    """Whether escalating one tier changes anything: diagnostics, never issues.
+
+    Tier labels are capability choices, so none of these blocks routing. They
+    say when a failed check's one-tier escalation lands on the same model
+    (label-only), when a tier's price is unknown to the catalog, and when a
+    lower tier is priced above the next one up. Reads the local catalog only.
+    """
+    catalog = catalog if catalog is not None else pricing.load()
+    models = {tier: routing.tier_model(harness, tier, config) for tier in TIER_ORDER}
+    configured = [tier for tier in TIER_ORDER if models[tier]]
+    result = {"models": models, "unknown_price": [], "same_model": [], "order": [], "notes": []}
+    for tier in configured:
+        if pricing.resolve(models[tier], catalog).status == "unknown":
+            result["unknown_price"].append(tier)
+            result["notes"].append(f"{tier} model {models[tier]!r} has no reference price; its ceiling and "
+                                   "ordering cannot be checked")
+    for lower, higher in zip(configured, configured[1:]):
+        if models[lower] == models[higher]:
+            result["same_model"].append([lower, higher])
+            result["notes"].append(f"{lower} and {higher} both use {models[lower]!r}: escalating from {lower} "
+                                   "changes only the label")
+            continue
+        status = pricing.compare(models[lower], models[higher], catalog)["status"]
+        status = {"allowed": "ordered", "over-ceiling": "inverted"}.get(status, "unknown")
+        result["order"].append({"lower": lower, "higher": higher, "status": status})
+        if status == "inverted":
+            result["notes"].append(f"{lower} ({models[lower]!r}) is priced above {higher} ({models[higher]!r})")
+    return result
+
+
 def diagnose(harness, root=None):
     root = Path(root) if root else payload.plugin_root()
     report = {"harness": harness, "root": str(root), "capabilities": CAPABILITIES[harness],
@@ -240,6 +274,8 @@ def diagnose(harness, root=None):
     try:
         report["tiers"] = {tier: pricing.resolve(routing.tier_model(harness, tier, config) or "unknown").report()
                            for tier in ("cheap", "standard", "premium")}
+        if harness != "hermes":
+            report["tier_ladder"] = tier_ladder(harness, config)
         report["parent_tier"] = "current parent, determined at dispatch"
         report["policy_bytes"] = len(payload.payload_body(root, harness, config).encode())
         if harness == "cursor":

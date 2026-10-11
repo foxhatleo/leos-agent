@@ -1,6 +1,6 @@
 ---
 name: review-pr
-description: Review a GitHub pull request and stage a pending review for the authenticated user. Never submits a review; does not review the local working diff. Requires authenticated gh.
+description: Review a GitHub pull request and stage a pending review for the authenticated user. Use when asked to review a PR. Never submits a review; does not review the local working diff. Requires authenticated gh.
 argument-hint: "[pr-number]"
 ---
 

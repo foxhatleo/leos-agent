@@ -12,7 +12,8 @@ Each numbered comment in main() states one invariant and why it holds. By topic
            skills/ [skill frontmatter]
   5a-*     installer payloads: Codex twins, provenance, legacy hashes, OpenCode
            root recovery, agent profiles, the routing region, the install rename
-  5b       every skill is user-invoked or deliberately model-invocable
+  5b       every skill is user-invoked or deliberately model-invocable, and
+           only a model-invocable one carries a short "Use when" trigger
            [invocation split]
   5c       bodies reach plugin files only through <plugin-root>, and every
            referenced path exists [plugin-root references]
@@ -93,6 +94,49 @@ def slash_skill_names(frontmatter, skills):
 	match = re.search(r"(?m)^description:(.*)$", frontmatter)
 	names = {skill.parent.name for skill in skills}
 	return sorted(name for name in names if match and re.search(r"(?<![\w/])/" + re.escape(name) + r"\b", match.group(1)))
+
+
+# A model-invocable skill's description sits in every session's skill listing
+# and is the only thing the model reads when deciding to load it.
+TRIGGER_RE = re.compile(r"\b[Uu]se (?:it |this )?when\b")
+MODEL_INVOCABLE_DESCRIPTION_CAP = 300
+
+
+def frontmatter_description(text):
+	"""The description value, with a folded or literal block joined to one line."""
+	if not text.startswith("---\n") or text.count("---") < 2:
+		return ""
+	lines = text.split("---", 2)[1].splitlines()
+	for index, line in enumerate(lines):
+		match = re.match(r"description:[ \t]*(.*?)\s*$", line)
+		if not match:
+			continue
+		value = match.group(1)
+		if value[:1] not in (">", "|"):
+			return value.strip("\"'")
+		block = []
+		for following in lines[index + 1:]:
+			if following and not following[0].isspace():
+				break
+			block.append(following.strip())
+		return " ".join(part for part in block if part)
+	return ""
+
+
+def skill_trigger_problems(description, model_invocable):
+	"""A model-invocable skill says when to load it, briefly; a user-invoked one
+	does not, since the model never chooses it and a trigger would invite that."""
+	problems = []
+	has_trigger = TRIGGER_RE.search(description) is not None
+	if model_invocable:
+		if not has_trigger:
+			problems.append("model-invocable description needs a 'Use when ...' trigger clause")
+		size = len(description.encode("utf-8"))
+		if size > MODEL_INVOCABLE_DESCRIPTION_CAP:
+			problems.append(f"model-invocable description is {size} bytes, over the {MODEL_INVOCABLE_DESCRIPTION_CAP}-byte cap")
+	elif has_trigger:
+		problems.append("user-invoked description must not carry a 'Use when ...' trigger clause")
+	return problems
 
 
 def plugin_root_violations(text):
@@ -525,7 +569,8 @@ def main():
 	MODEL_INVOCABLE = {"review-pr", "handon"}
 	for skill in sorted((ROOT / "skills").glob("*/SKILL.md")) + sorted((ROOT / "skills-claude").glob("*/SKILL.md")):
 		rel = skill.relative_to(ROOT)
-		fm = skill.read_text(encoding="utf-8").split("---", 2)[1]
+		skill_text = skill.read_text(encoding="utf-8")
+		fm = skill_text.split("---", 2)[1]
 		name_match = re.search(r"^name:\s*(\S+)", fm, re.MULTILINE)
 		name = name_match.group(1) if name_match else skill.parent.name
 		disabled = re.search(r"^disable-model-invocation:\s*true", fm, re.MULTILINE) is not None
@@ -533,6 +578,10 @@ def main():
 			check(not disabled, f"{rel}: {name} is meant to be model-invocable; remove disable-model-invocation")
 		else:
 			check(disabled, f"{rel}: needs `disable-model-invocation: true`, or add {name!r} to MODEL_INVOCABLE in check.py")
+		# 5b-trigger. The description is the model's only cue to load a
+		# model-invocable skill, and costs bytes in every session's listing.
+		for problem in skill_trigger_problems(frontmatter_description(skill_text), not disabled):
+			check(False, f"{rel}: {problem}")
 
 		# Claude-only skills are never surfaced to Codex. Portable explicit-only
 		# skills need the corresponding Codex policy file as well.
