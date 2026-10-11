@@ -187,6 +187,24 @@ once to take it out. To upgrade, refresh the marketplace and plugin through
 Claude's plugin manager and start a new session. Third-party marketplace
 auto-update settings may be disabled; do not assume every client updates itself.
 
+Optional cost status line, never installed by default:
+
+```sh
+python3 "<plugin-root>/scripts/leo-install.py" claude --statusline
+```
+
+It sets `statusLine` in Claude's `settings.json` to `scripts/statusline.py`,
+which prints one short line from Claude Code's status-line JSON and the local
+dispatch log: the model, Claude Code's own session cost estimate, and this
+session's children by tier with their reference cost (the same counting and
+pricing as `dispatch_log.py report`; a reference estimate, not a bill). It reads
+local files only, never the network or a model, and falls back to the model name
+on any error. A different `statusLine` already set is a conflict:
+`--force <path to settings.json>` replaces it, and `--uninstall` or
+`--rollback` puts your previous one back. The command embeds the plugin path,
+which changes on upgrade: rerun the command then (`--check --statusline` reports
+a stale path, and `/leos-agent:doctor` reports whether the line is installed).
+
 ### Codex
 
 ```sh

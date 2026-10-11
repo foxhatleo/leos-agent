@@ -303,3 +303,36 @@ def is_empty(text):
     _, spans, _ = properties(text)
     _, mask = scan(text)
     return not spans and not any(mask)
+
+
+def set_property(text, key, value, rendered=None):
+    """Set the top-level `key` to the JSON `value`, in place when it exists.
+
+    `rendered` is the value's own source text when the caller kept it, so a
+    value put back is byte-identical to the one taken out.
+
+    A new property goes after the last one in the object's own style. Nothing
+    else in the file moves, comments included.
+    """
+    text = text or "{}\n"
+    source, spans, close = properties(text)
+    rendered = json.dumps(value) if rendered is None else rendered
+    if key in spans:
+        start, end = spans[key][:2]
+        result = text[:start] + rendered + text[end:]
+    else:
+        last = max((span[1] for span in spans.values()), default=None)
+        result = _append(text, source.index("{"), close, last, json.dumps(key) + ": " + rendered, "  ")
+    properties(result)
+    return result
+
+
+def drop_property(text, key):
+    """Remove the top-level `key`, whatever it holds; a missing key changes nothing."""
+    source, spans, close = properties(text)
+    if key not in spans:
+        return text
+    _, end, _, key_start = spans[key]
+    result = _remove_element(text, key_start, end, source.index("{"), close)
+    properties(result)
+    return result

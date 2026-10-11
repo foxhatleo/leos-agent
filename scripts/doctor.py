@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -139,6 +140,34 @@ def subagent_model(loaded, issues):
     elif named:
         result["note"] = ("default only: leos-agent tiers set frontmatter models and keep them; it applies to agents "
                           "with neither. Claude Code before v2.1.251 let it override frontmatter and dispatch models.")
+    return result
+
+
+def statusline(loaded, issues):
+    """Whether Claude's statusLine is leos-agent's cost line. Opt-in (leo-install.py
+    claude --statusline); reported, never changed here. Another tool's command is
+    named only as "other", never echoed."""
+    found = settings_probe.setting("statusLine", loaded, env_key=False)
+    value = found["value"]
+    command = value.get("command") if isinstance(value, dict) else None
+    result = {"installed": False, "set_in": found["set_in"]}
+    if value is None:
+        result["status"] = "off (opt in with leo-install.py claude --statusline)"
+        return result
+    try:
+        script = shlex.split(command)[-1] if isinstance(command, str) else ""
+    except ValueError:
+        script = ""
+    if os.path.basename(script) != "statusline.py" or os.path.basename(os.path.dirname(script)) != "scripts":
+        result["status"] = "another statusLine is set; leos-agent leaves it alone"
+        return result
+    result.update(installed=True, script=settings_probe.clean(script, 200), script_exists=os.path.isfile(script))
+    if result["script_exists"]:
+        result["status"] = "installed"
+    else:
+        result["status"] = "installed but the script is gone"
+        issues.append("statusLine points at a leos-agent statusline.py that no longer exists; "
+                      "re-run leo-install.py claude --statusline (after an upgrade the plugin path changes)")
     return result
 
 
@@ -350,6 +379,7 @@ def diagnose(harness, root=None):
         report["subagent_model"] = subagent_model(loaded, report["issues"])
         report["forced_subagent_model"] = report["subagent_model"]["forced_model"]
         report["advisor"] = advisor(loaded)
+        report["statusline"] = statusline(loaded, report["issues"])
     if harness == "codex":
         report["hook_trust"] = "Review current definitions in /hooks; this tool does not approve them."
     if harness == "opencode":

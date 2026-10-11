@@ -23,7 +23,7 @@ in use, with any hand amendments. Its `tier_ladder` notes, which are not
 issues, name a tier with no reference price, adjacent tiers on one model
 (escalating between them changes only the label), and a lower tier priced
 above the next. It reads settings key-scoped to report forced
-subagent models and the advisor on Claude, Bash-rewriting output compressors
+subagent models, the advisor and the opt-in cost status line on Claude, Bash-rewriting output compressors
 such as rtk on every harness, with how they interact with dispatch, and the
 cross-model review lens: whether it is enabled, its peer CLI, and whether that
 CLI is on PATH. Its login is checked only when a review runs the lens. These

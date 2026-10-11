@@ -23,6 +23,7 @@ hashes of earlier releases' copies, or this release's own copy. A header saying
 
 Usage:
     leo-install.py <harness> [--dry-run | --uninstall | --check | --rollback] [--force [PATH ...]]
+    leo-install.py claude --statusline [--force PATH]    (opt in to the cost status line)
 
 Harnesses: claude, codex, cursor, hermes, pi, opencode
 """
@@ -33,6 +34,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import sys
 import tempfile
 from pathlib import Path
@@ -1003,6 +1005,99 @@ def manage_opencode_config(root, cfg, args, receipt):
 	return results
 
 
+def statusline_value(root):
+	"""The statusLine setting this plugin's script is shown through."""
+	return {"type": "command", "command": "python3 " + shlex.quote(str(root / "scripts" / "statusline.py"))}
+
+
+def names_path(args, path):
+	"""Whether --force names `path` explicitly. A bare --force never covers a statusLine."""
+	force = getattr(args, "force", None)
+	if not force or force is True:
+		return False
+	target = os.path.realpath(path)
+	return any(os.path.realpath(os.path.abspath(os.path.expanduser(named))) == target for named in force)
+
+
+def manage_statusline(root, cfg, args, receipt):
+	"""Set, keep or take back the `statusLine` in Claude's settings.json.
+
+	Written only on --statusline, and only when the setting is absent or already
+	ours; a different statusLine is a conflict until --force names the file. The
+	receipt keeps the value written, the one it displaced and whether the file was
+	created, so uninstall (or rollback) puts the user's own setting back.
+	"""
+	from jsonc_edit import drop_property, is_empty, properties, set_property
+	path = cfg / "settings.json"
+	label = display(path)
+	raw = receipt.data.get("statusline")
+	record = raw if isinstance(raw, dict) and isinstance(raw.get("value"), dict) else None
+	installing = getattr(args, "statusline", False) and not args.uninstall
+	if not installing and not args.uninstall:
+		# Plain installs leave the setting alone and keep what the receipt knew.
+		receipt.meta = {"statusline": record} if record else None
+		return []
+	if record is None and not installing:
+		return []
+	existed = path.is_file()
+	if path.exists() and not existed:
+		return Result(label, "error", "not a regular file; refusing to edit it")
+	current, crlf = read_text(path) if existed else ("{}\n", False)
+	_, spans, _ = properties(current)
+	present = "statusLine" in spans
+	value = spans["statusLine"][2] if present else None
+	delete = False
+	if args.uninstall:
+		if not present:
+			return Result(label, "unchanged", "statusLine already gone")
+		if value != record["value"]:
+			return Result(label, "preserved", "statusLine changed since leos-agent set it")
+		if record.get("had_prior"):
+			text = record.get("prior_text")
+			if not isinstance(text, str) or json.loads(text) != record.get("prior"):
+				text = None
+			updated = set_property(current, "statusLine", record.get("prior"), rendered=text)
+			detail = "put back your previous statusLine"
+		else:
+			updated, detail = drop_property(current, "statusLine"), ""
+			delete = record.get("created_file") is True and is_empty(updated)
+		if delete:
+			detail = "leos-agent created it and nothing else is in it"
+	else:
+		wanted = statusline_value(root)
+		if not cfg.is_dir():
+			raise ConfigError(f"{display(cfg)} does not exist, so claude is not configured here; "
+				f"{SETUP_HINTS['claude']}. leo-install never creates a harness config directory")
+		ours = record is not None and value == record["value"]
+		if present and value != wanted and not ours and not names_path(args, path):
+			return Result(label, "conflict", "settings.json already sets a different statusLine; re-run with "
+				f"--force {path} to replace it (uninstall puts it back)")
+		new = {"value": wanted}
+		if ours:
+			new.update({k: record[k] for k in ("had_prior", "prior", "prior_text", "created_file") if k in record})
+		elif present and value != wanted:
+			new.update(had_prior=True, prior=value, prior_text=current[spans["statusLine"][0]:spans["statusLine"][1]],
+				created_file=False)
+		elif not present:
+			new.update(created_file=not existed)
+		if present and value == wanted and not ours:
+			new = None  # the user's own identical setting: not ours to take back
+		receipt.meta = {"statusline": new} if new else None
+		updated = current if present and value == wanted else set_property(current, "statusLine", wanted)
+		detail = ""
+	if updated == current and existed:
+		status = "unchanged"
+	else:
+		status = "removed" if delete else ("updated" if existed else "created")
+	diff = unified(path, current if existed else "", "" if delete else updated) if args.dry_run and status != "unchanged" else ""
+	if args.writes and status != "unchanged":
+		if delete:
+			remove_file(path)
+		else:
+			atomic_write(path, updated, crlf)
+	return Result(label, status, detail, diff=diff)
+
+
 def finish_receipt(receipt, args, results):
 	"""Take back copies the receipt lists that no target covers any more, then
 	write (or, on uninstall, remove) the receipt."""
@@ -1046,7 +1141,10 @@ def _run_targets(harness, root, args):
 	config = routing.load() if harness in ("cursor", "opencode") else None
 	cfg = config_dir(harness)
 	require_config_dir(harness, cfg)
-	receipt = Receipt(cfg, harness) if harness in COPYING else None
+	# Claude's receipt exists only for the opt-in statusLine: with neither the flag
+	# nor an earlier receipt, a Claude install writes nothing of its own.
+	receipt = Receipt(cfg, harness) if harness in COPYING or (
+		harness == "claude" and (getattr(args, "statusline", False) or (cfg / RECEIPT).is_file())) else None
 	targets = []
 
 	def migrate(path):
@@ -1085,6 +1183,8 @@ def _run_targets(harness, root, args):
 		# The plugin or extension delivers everything; only an older release's
 		# policy block can be left in the harness's global instruction file.
 		migrate(cfg / {"claude": "CLAUDE.md", "hermes": "SOUL.md", "pi": "AGENTS.md"}[harness])
+		if receipt is not None:
+			targets.append((display(cfg / "settings.json"), lambda: manage_statusline(root, cfg, args, receipt)))
 
 	elif harness == "codex":
 		migrate(cfg / "AGENTS.md")
@@ -1230,7 +1330,13 @@ def main(argv=None):
 	parser.add_argument("--force", nargs="*", metavar="PATH", default=None,
 		help="on install, replace the named files (a conflict, or a preserved older copy); "
 		"with no PATH, replace every conflicting file but no preserved copy")
+	parser.add_argument("--statusline", action="store_true",
+		help="claude only: also set Claude Code's statusLine to leos-agent's cost line; "
+		"never done without this flag, and a different statusLine needs --force <settings.json>")
 	args = parser.parse_args(argv)
+	if args.statusline and (args.harness != "claude" or args.uninstall or args.rollback):
+		parser.error("--statusline applies to a claude install, --dry-run or --check; "
+			"--uninstall and --rollback put the previous statusLine back on their own")
 	args.writes = not (args.dry_run or args.check)
 	if args.rollback:
 		from install_transaction import rollback

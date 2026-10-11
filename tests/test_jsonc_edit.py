@@ -129,5 +129,21 @@ class DropEmptyArrays(unittest.TestCase):
                 self.assertEqual(len(parsed), len(json.loads(edit.clean(text))) - 1)
 
 
+    def test_set_and_drop_property_leave_the_rest_of_the_file_alone(self):
+        value = {"type": "command", "command": "x"}
+        for text in ('{}\n', '{"a": 1}', '{\n  "a": 1, // note\n  "b": [1,\n 2]\n}\n', '{\n  "a": 1,\n}\n'):
+            with self.subTest(text=text):
+                added = edit.set_property(text, "statusLine", value)
+                self.assertEqual(json.loads(edit.clean(added))["statusLine"], value)
+                self.assertEqual(edit.drop_property(added, "statusLine"), text)
+                self.assertEqual(edit.drop_property(text, "statusLine"), text)
+
+    def test_set_property_replaces_in_place_and_can_put_back_the_source_text(self):
+        text = '{\n  "a": 1, // note\n  "statusLine":   {"x":1},\n  "b": 2\n}\n'
+        replaced = edit.set_property(text, "statusLine", {"y": 2})
+        self.assertEqual(replaced, text.replace('{"x":1}', '{"y": 2}'))
+        self.assertEqual(edit.set_property(replaced, "statusLine", {"x": 1}, rendered='{"x":1}'), text)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -453,3 +453,35 @@ class PriceFreshness(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Statusline(DoctorCase):
+    def script(self, exists=True):
+        path = self.root / "plugin" / "scripts" / "statusline.py"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("")
+        if not exists:
+            path.unlink()
+        return path
+
+    def test_it_is_off_until_installed(self):
+        report = doctor.diagnose("claude")["statusline"]
+        self.assertFalse(report["installed"])
+        self.assertIn("--statusline", report["status"])
+
+    def test_the_installed_line_is_recognised_and_a_missing_script_is_an_issue(self):
+        for exists in (True, False):
+            with self.subTest(exists=exists):
+                path = self.script(exists)
+                self.settings({"statusLine": {"type": "command", "command": f"python3 '{path}'"}})
+                result = doctor.diagnose("claude")
+                self.assertTrue(result["statusline"]["installed"])
+                self.assertEqual(result["statusline"]["script_exists"], exists)
+                self.assertEqual(any("statusline.py" in issue for issue in result["issues"]), not exists)
+
+    def test_another_tools_line_is_left_alone_and_not_echoed(self):
+        self.settings({"statusLine": {"type": "command", "command": "sh -c 'echo sk-secret-value'"}})
+        result = doctor.diagnose("claude")
+        self.assertFalse(result["statusline"]["installed"])
+        self.assertNotIn("sk-secret", json.dumps(result["statusline"]))
+        self.assertFalse(any("statusline" in issue for issue in result["issues"]))
