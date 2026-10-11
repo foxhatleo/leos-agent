@@ -20,10 +20,21 @@ lines, or a directory listing, for the surrounding code and for files GitHub
 sent no patch for. Stop and report a moved head. Cover correctness, safety,
 design/tests, and stated requirements within your assigned scope. For a
 specialist question, focus on that risk. Verify exact old/new line numbers
-(LEFT/RIGHT) and report concrete failures rather than guesses. Report only what
-this PR introduces or worsens, not what a linter or compiler would catch. Do
-not read the whole PR merely because you can. No overlapping specialist fan-out
-unless the reviewer explicitly assigned it.
+(LEFT/RIGHT) and report concrete failures rather than guesses. Do not read
+the whole PR merely because you can. No overlapping specialist fan-out unless
+the reviewer explicitly assigned it.
+
+Do not flag:
+
+- pre-existing issues on lines this PR neither changes nor newly reaches;
+- what a compiler, type checker, linter or formatter catches, including style
+  nits it enforces;
+- speculative issues with no concrete input or state that triggers them;
+- general quality wishes (more tests, comments, logging, abstraction) with no
+  failure or stated requirement behind them;
+- behaviour the PR description or ticket says is intended, unless it breaks
+  something else;
+- anything already raised in an open review thread.
 
 A repository-rules lens reads `CLAUDE.md`, `AGENTS.md`, `REVIEW.md` and
 `CONTRIBUTING.md` at the base SHA instead, and reports a violation only when

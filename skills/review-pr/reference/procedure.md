@@ -197,10 +197,9 @@ staged; a lens never validates its own finding.
    more. Pass the score as each comment's `confidence`; stage filters anything
    lower and lists it under `filtered`.
 
-Keep the cost proportionate: a small review validates its few candidates
-itself, in sequence. When a large review has many candidates, one validator
-lens per batch (cheap tier for factual checks, standard otherwise) may check
-them, given the findings, SHA and BASE; not the lens that raised them.
+You run these checks yourself, in sequence. Before staging a `blocking`
+finding or a seriously-problematic verdict, also follow
+`reference/validation.md`.
 
 Prefer problems a human author should act on. Cap new inline comments at 15;
 disclose any meaningful overflow.

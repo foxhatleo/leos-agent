@@ -316,6 +316,11 @@ these contracts when changing it or `scripts/ghreview.py`:
   ready-to-merge stands until the PR diff (hunk headers ignored) changes;
   downgrading it needs an explicit `verdict_override`. Stage and `record` both
   enforce this. Reports give each PR its own `##` section.
+- A blocking finding is staged only after one batched fresh-context
+  `leo-lens` validation (standard tier or above, never cheap; a lens, so depth
+  stays one) confirms it; refuted ones are dropped or downgraded. Non-blocking
+  findings are not sent to it. The procedure text lives in
+  `reference/validation.md`, not `procedure.md`.
 - The cross-model lens (`review_peer.py`) runs only when the user enabled it,
   discloses that the diff goes to a second provider, never counts as coverage,
   and raises confidence only when `independence_verified` is true.

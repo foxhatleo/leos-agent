@@ -434,7 +434,10 @@ package origin is read too. After a complete
 review whose draft is no longer pending, a new head re-reads only the files
 whose patch changed. Each finding is
 re-checked at the SHA before staging, and the repository's own CLAUDE.md,
-AGENTS.md and REVIEW.md rules count only when quoted. Review runs at the
+AGENTS.md and REVIEW.md rules count only when quoted. Blocking findings also
+go, in one batch, to a fresh-context read-only lens at the standard tier or
+above, which confirms or refutes each against the code at the SHA; a refuted
+one is dropped or downgraded. Review runs at the
 standard tier; a consequential PR or an escalation runs it at premium. Neutral
 and seriously-problematic always come with a pending comment; CI never affects
 the verdict. A ready-to-merge verdict stands until the PR diff changes, hunk
