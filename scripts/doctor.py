@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -23,6 +24,35 @@ import state
 # The age past which a catalog is called stale: the refresher retries daily,
 # so a week means refreshes have been failing or are switched off.
 STALE_AFTER_HOURS = 7 * 24
+
+# leo-install.py --check exit statuses (3 is its CHECK_PRESERVED).
+INSTALL_STATUS_PRESERVED = 3
+INSTALL_STATUS = {0: "current", 1: "out-of-date", INSTALL_STATUS_PRESERVED: "preserved-copies"}
+
+
+def opencode_runtime(issues):
+    """How the OpenCode on PATH takes the policy. OpenCode 1 loads the
+    `instructions` file leo-install renders; OpenCode 2 loads neither that
+    entry nor a plugin written to OpenCode 1's plugin API."""
+    result = {"policy_delivery": "rendered by leo-install into leos-agent-routing.md, registered under "
+                                 "`instructions`; it changes only when leo-install reruns, and --check reports "
+                                 "it out of date after a plugin or routing change"}
+    binary = shutil.which("opencode")
+    if not binary:
+        result["version"] = "opencode is not on PATH"
+        return result
+    try:
+        out = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    result["version"] = out or "unknown"
+    match = re.search(r"(\d+)(?:\.\d+)+", out)
+    if match and int(match.group(1)) >= 2:
+        result["policy_delivery"] = "inactive: OpenCode 2 does not load `instructions` entries"
+        issues.append("OpenCode %s loads neither `instructions` entries nor leos-agent's OpenCode 1 plugin: the "
+                      "policy, dispatch guard and observer are inactive; native agents and skills still load"
+                      % match.group(0))
+    return result
 
 
 def price_freshness(catalog):
@@ -289,8 +319,12 @@ def diagnose(harness, root=None):
                                env={**os.environ, "LEOS_AGENT_ROOT": str(root), "LEOS_AGENT_HARNESS": harness,
                                     "LEOS_AGENT_PRICE_REFRESH": "off", "PYTHONDONTWRITEBYTECODE": "1"})
         report["installation_current"] = check.returncode == 0
+        report["installation_status"] = INSTALL_STATUS.get(check.returncode, "check-failed")
         report["installation_report"] = (check.stdout + check.stderr).strip()
-        if check.returncode:
+        if check.returncode == INSTALL_STATUS_PRESERVED:
+            report["issues"].append("preserved edited copies keep an older payload; delete them, or replace the "
+                                    "ones you choose with leo-install.py --force <path>")
+        elif check.returncode:
             report["issues"].append("installed files differ or could not be checked")
     except (OSError, subprocess.SubprocessError) as exc:
         report["issues"].append("installation check: " + str(exc))
@@ -318,6 +352,8 @@ def diagnose(harness, root=None):
         report["advisor"] = advisor(loaded)
     if harness == "codex":
         report["hook_trust"] = "Review current definitions in /hooks; this tool does not approve them."
+    if harness == "opencode":
+        report["opencode"] = opencode_runtime(report["issues"])
     if harness in ("hermes", "pi"):
         report["routing_limit"] = "No native per-dispatch model field; configured tier labels do not establish model selection."
     if harness == "hermes":

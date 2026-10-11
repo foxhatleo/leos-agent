@@ -1,6 +1,5 @@
 /** OpenCode adapter: native agents carry models; task has no model field. */
-import { fileURLToPath } from 'node:url';
-import { guard, bounded, runPython } from './scripts/harness_bridge.js';
+import { guard, bounded, pluginRoot, runPython } from './scripts/harness_bridge.js';
 
 const modelName = (model) => model?.providerID && (model?.modelID || model?.id)
   ? `${model.providerID}/${model.modelID || model.id}` : null;
@@ -19,7 +18,7 @@ const applyInPlace = (target, updated) => {
 };
 
 export const LeosAgent = async (ctx) => {
-  const root = process.env.LEOS_AGENT_ROOT || process.env.PLUGIN_ROOT || fileURLToPath(new URL('.', import.meta.url));
+  const root = pluginRoot(import.meta.url);
   const directory = ctx?.directory || ctx?.worktree || process.cwd();
   const parents = new Map();
   return {

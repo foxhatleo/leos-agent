@@ -25,7 +25,7 @@ The repo root *is* the plugin. Six manifests sit side by side over one tree:
 
 | Path | Role |
 |---|---|
-| `rules/preferences.md` | The always-loaded policy. Cursor reads it raw as an always-apply rule, so the routing region's shipped default is written for Cursor; every other harness renders it live through `scripts/emit_payload.py` or a native hook, replacing that region. |
+| `rules/preferences.md` | The always-loaded policy. Cursor reads it raw as an always-apply rule, so the routing region's shipped default is written for Cursor; OpenCode reads a copy the installer renders, current only until the next upgrade or routing change (`--check` flags it); every other harness renders it live through `scripts/emit_payload.py` or a native hook, replacing that region. |
 | `skills/` | Portable skills. `skills-claude/` holds the two Claude-only ones. `reference/` subdirectories hold deferred procedure text. |
 | `agents/` | Claude Code agent profiles (`leo-cheap`, `leo-standard`, `leo-premium`, `leo-parent`, `leo-reviewer`, and the read-only review lens `leo-lens`, whose tier comes from the dispatch's `model`). The retired `leo-runner`/`leo-executor` names have no profile but still map to cheap/standard in routing code. |
 | `payload/` | Codex agent TOMLs, the bundled price catalog, legacy-copy hashes. |
@@ -230,6 +230,19 @@ The policy in `rules/preferences.md` applies to work on this repo too.
   JSONC with user comments; the installer preserves them and never writes the
   `instructions` line blind. `opencode plugin <pkg> --force` can report success
   while serving a lockfile-pinned old version. Git specs install directly.
+- **OpenCode 2** (checked on 2.0.25, sandboxed): `opencode plugin add <pkg>`
+  installs to `<cache>/opencode/npm/<spec>/<timestamp>/node_modules/<pkg>` and
+  registers it under `plugins`; a `plugin` array is folded into `plugins`. It
+  refuses a file:// link to a file ("configured plugin path must be a
+  directory") and loads only a default export with `id` and `setup(ctx)`, so
+  `index.js` fails to load there. `instructions` is accepted but not loaded;
+  only AGENTS.md is. Agent markdown with v1 `permission:` maps still loads
+  (normalised to `permissions` rules) and `~/.config/opencode/skills` is
+  discovered. A plain-object `{ id, setup, server }` default export loads
+  without depending on `@opencode/plugin`; `ctx.session.hook("context")` and
+  `ctx.tool.hook("execute.before")` are the v2 destinations for policy
+  injection and the guard. Open gap: no port yet, so on OpenCode 2 the policy,
+  guard and observer are inactive.
 - **Hermes** has one global delegation model, not per-task tiers. Preserve that
   native setting; saved tier mappings do not implement per-task routing.
   `SOUL.md` migration applies only if the file already exists.

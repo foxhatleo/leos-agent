@@ -22,7 +22,7 @@ hashes of earlier releases' copies, or this release's own copy. A header saying
 "Managed by leos-agent" is never enough on its own.
 
 Usage:
-    leo-install.py <harness> [--dry-run | --uninstall | --check | --rollback] [--force]
+    leo-install.py <harness> [--dry-run | --uninstall | --check | --rollback] [--force [PATH ...]]
 
 Harnesses: claude, codex, cursor, hermes, pi, opencode
 """
@@ -92,6 +92,10 @@ RECEIPT = "leos-agent-paths.json"
 # rollback and as ownership evidence, then moved to the data directory.
 LEGACY_BACKUP = "leos-agent-install-backup.json"
 COPYING = ("codex", "cursor", "opencode")
+# --check's exit status when nothing would change but a preserved (edited) copy
+# still serves an older payload. Distinct from 1 (out of date or failed) and
+# from argparse's 2.
+CHECK_PRESERVED = 3
 
 # Native config-directory overrides, and how to make each directory exist.
 OVERRIDES = {"claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME", "hermes": "HERMES_HOME",
@@ -226,7 +230,11 @@ def strip_block(original):
 	if not span:
 		return original
 	start, end = span
-	return original[:start] + original[end:]
+	before, after = original[:start], original[end:]
+	# A block set off by a blank line on each side would leave two in a row.
+	if (before.endswith("\n\n") or not before) and after.startswith("\n"):
+		after = after[1:]
+	return before + after
 
 
 def read_text(path):
@@ -490,6 +498,11 @@ class Receipt:
 		self.written = {}
 		self.covered = set()
 		self.meta = None
+		# Directories installs created, relative to the config directory; None
+		# for a receipt written before they were recorded.
+		dirs = self.data.get("created_dirs")
+		self.created_dirs = _strings(dirs) if isinstance(dirs, list) else None
+		self.dirs = []
 
 	def key(self, path):
 		return Path(os.path.relpath(path, self.cfg)).as_posix()
@@ -516,6 +529,8 @@ class Receipt:
 
 	def render(self):
 		data = {"schema": 1, "files": dict(sorted(self.written.items()))}
+		if self.dirs:
+			data["created_dirs"] = self.dirs
 		if self.meta:
 			data.update(self.meta)
 		return json.dumps(data, indent=2) + "\n"
@@ -548,6 +563,24 @@ KEPT = {
 	"legacy": "an older leos-agent copy, edited since",
 	"foreign": "leos-agent did not write it",
 }
+
+
+def forced(args, dest, state):
+	"""Whether --force lets this install replace `dest`, a copy in `state`.
+
+	`--force PATH` names the files to replace, conflicts or preserved older
+	copies alike. A bare --force replaces conflicts only: an edited copy from an
+	older release is replaced only when its path is named.
+	"""
+	force = getattr(args, "force", None)
+	if force is True:
+		force = []
+	if force is None or force is False:
+		return False
+	if not force:
+		return state in ("edited", "foreign")
+	target = os.path.realpath(dest)
+	return any(os.path.realpath(os.path.abspath(os.path.expanduser(path))) == target for path in force)
 
 
 def install_file_copy(dest, payload, args, receipt=None, label=None, model=None):
@@ -584,10 +617,12 @@ def install_file_copy(dest, payload, args, receipt=None, label=None, model=None)
 		current = raw.decode("utf-8")
 		if current != payload:
 			state = ownership(dest, raw, receipt, model=model)
-			if state == "legacy" and not args.force:
-				return Result(label, "preserved", KEPT[state] + "; delete it, or re-run with --force, to take this release's copy")
-			if state in ("edited", "foreign") and not args.force:
-				return Result(label, "conflict", KEPT[state] + "; move your changes elsewhere, or re-run with --force to replace it")
+			if state == "legacy" and not forced(args, dest, state):
+				return Result(label, "preserved", KEPT[state] + f"; delete it, or re-run with --force {dest}, "
+					"to take this release's copy")
+			if state in ("edited", "foreign") and not forced(args, dest, state):
+				return Result(label, "conflict", KEPT[state] + "; move your changes elsewhere, or re-run with "
+					f"--force {dest} to replace it")
 	if receipt is not None:
 		receipt.record(dest, payload)
 	return write_if_changed(dest, payload, current, existed, False, args, label)
@@ -777,32 +812,92 @@ def opencode_config_path(cfg):
 
 def opencode_cache_spec(root):
 	"""The package spec OpenCode installed this root from, when it is OpenCode's own
-	npm cache (<cache>/opencode/packages/<spec>/node_modules/leos-agent).
+	npm cache: <cache>/opencode/packages/<spec>/node_modules/leos-agent on
+	OpenCode 1, <cache>/opencode/npm/<spec>/<timestamp>/node_modules/leos-agent
+	on OpenCode 2.
 
 	A file:// link into that cache breaks when OpenCode cleans or re-resolves it,
-	while the spec itself makes OpenCode reinstall the package there.
+	while the spec itself makes OpenCode reinstall the package there. OpenCode 2
+	names the directory of an untagged `plugin add leos-agent` leos-agent@latest
+	but registers plain `leos-agent`, so that is the spec returned for it.
 	"""
 	parts = Path(root).parts
-	if len(parts) >= 5 and parts[-1] == PROVENANCE and parts[-2] == "node_modules" and parts[-4] == "packages" \
-		and parts[-5] == "opencode":
+	if len(parts) < 5 or parts[-1] != PROVENANCE or parts[-2] != "node_modules":
+		return None
+	if parts[-4] == "packages" and parts[-5] == "opencode":
 		spec = parts[-3]
-		if spec == PROVENANCE or spec.startswith(PROVENANCE + "@"):
-			return spec
-	return None
+	elif len(parts) >= 6 and parts[-3].isdigit() and parts[-5] == "npm" and parts[-6] == "opencode":
+		spec = parts[-4]
+	else:
+		return None
+	if spec == PROVENANCE + "@latest":
+		return PROVENANCE
+	return spec if is_package_spec(spec) else None
+
+
+# OpenCode 1 reads `plugin`; OpenCode 2 reads `plugins` and folds a `plugin`
+# array into it. Entries in either are registrations.
+PLUGIN_KEYS = ("plugin", "plugins")
+OPENCODE_KEYS = ("instructions",) + PLUGIN_KEYS
 
 
 def _strings(value):
 	return [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
 
 
-def edit_opencode_config(path, root, args, wanted, ours, created_keys, created_file, note=""):
+def _entries(value):
+	return list(value) if isinstance(value, list) else []
+
+
+def is_package_spec(name):
+	return isinstance(name, str) and (name == PROVENANCE or name.startswith(PROVENANCE + "@"))
+
+
+def plugin_entry_name(entry):
+	"""The package or path a plugin entry names: a string, OpenCode 1's
+	[name, options] tuple, or OpenCode 2's {"package": name} object."""
+	if isinstance(entry, str):
+		return entry
+	if isinstance(entry, list) and entry and isinstance(entry[0], str):
+		return entry[0]
+	if isinstance(entry, dict) and isinstance(entry.get("package"), str):
+		return entry["package"]
+	return None
+
+
+def links_to(name, root):
+	"""True when a plugin entry names this root (or its index.js) by path or file:// URI."""
+	if not isinstance(name, str):
+		return False
+	if name.startswith("file://"):
+		from urllib.parse import unquote, urlparse
+		name = unquote(urlparse(name).path)
+	if not os.path.isabs(name):
+		return False
+	resolved = Path(root).resolve()
+	return Path(os.path.realpath(name)) in (resolved, resolved / "index.js")
+
+
+def plugin_link(root, key):
+	"""OpenCode 1 imports the entry file a link names; OpenCode 2 refuses a file
+	and loads a plugin directory instead."""
+	resolved = Path(root).resolve()
+	return (resolved if key == "plugins" else resolved / "index.js").as_uri()
+
+
+def edit_opencode_config(path, root, args, wanted, ours, created_keys, created_file, note="",
+	restore=None, displace=None):
 	"""Register `wanted` in one OpenCode config file and take back `ours`.
 
-	Returns (result, registration) where registration is what the receipt keeps
-	about this file: the entries this installer added (not ones the user already
-	had), the keys it created, and whether it created the file itself.
+	`displace` lists user entries to take out (an npm spec that would load the
+	plugin a second time beside a link) and `restore` the ones an earlier run
+	took out and now puts back; neither is recorded as ours. Returns (result,
+	registration) where registration is what the receipt keeps about this file:
+	the entries this installer added (not ones the user already had), the keys
+	it created, and whether it created the file itself.
 	"""
 	from jsonc_edit import drop_empty_array, is_empty, properties, update_array
+	restore, displace = restore or {}, displace or {}
 	label = display(path)
 	existed = path.is_file()
 	if not existed and not wanted:
@@ -811,26 +906,20 @@ def edit_opencode_config(path, root, args, wanted, ours, created_keys, created_f
 	_, spans, _ = properties(current)
 	# Older receipts did not record key ownership. Preserve those keys rather
 	# than guessing that an empty user setting belonged to this installer.
-	created = set(created_keys) | {key for key in wanted if key not in spans}
+	created = set(created_keys) | {key for key, values in wanted.items() if values and key not in spans}
 	created_file = created_file or not existed
 	updated = current
 	registration = {}
-	for key in ("instructions", "plugin"):
+	for key in OPENCODE_KEYS:
 		values = spans.get(key, (None, None, []))[2]
 		if not isinstance(values, list):
 			raise ValueError(f"{label}: {key} must be an array")
 		additions = wanted.get(key, [])
-		remove = [v for v in ours.get(key, []) if v not in additions]
-		for value in values:
-			if not isinstance(value, str):
-				continue
-			# An npm spec would load the plugin a second time beside the link.
-			if key == "plugin" and wanted and additions and additions[0].startswith("file:") and (
-				value == PROVENANCE or value.startswith(PROVENANCE + "@")):
-				remove.append(value)
-			if key == "instructions" and value == str(root / "rules" / "preferences.md"):
-				remove.append(value)
-		updated = update_array(updated, key, additions, remove)
+		remove = [v for v in ours.get(key, []) if v not in additions] + list(displace.get(key, []))
+		if key == "instructions":
+			remove += [v for v in values if v == str(root / "rules" / "preferences.md")]
+		updated = update_array(updated, key, additions + list(restore.get(key, [])), remove,
+			strings_only=key not in PLUGIN_KEYS)
 		registration[key] = [v for v in additions if v in ours.get(key, []) or v not in values]
 		if not wanted and key in created:
 			# Leave behind no key we invented, but never take one that still holds
@@ -860,32 +949,55 @@ def manage_opencode_config(root, cfg, args, receipt):
 	previous = receipt.data
 	recorded = previous.get("config")
 	recorded = Path(recorded) if isinstance(recorded, str) and os.path.isabs(recorded) else None
-	ours = {key: _strings(previous.get(key)) for key in ("instructions", "plugin")}
+	ours = {key: _strings(previous.get(key)) for key in OPENCODE_KEYS}
 	created_keys = set(_strings(previous.get("created_keys")))
 	created_file = previous.get("created_config") is True
+	recorded_displaced = previous.get("displaced") if isinstance(previous.get("displaced"), dict) else {}
+	displaced = {key: _entries(recorded_displaced.get(key)) for key in PLUGIN_KEYS}
 	if args.uninstall:
 		# The file the install edited, wherever the environment points today.
 		path = recorded or opencode_config_path(cfg)
-		return [edit_opencode_config(path, root, args, {}, ours, created_keys, created_file)[0]]
+		return [edit_opencode_config(path, root, args, {}, ours, created_keys, created_file, restore=displaced)[0]]
 	path = opencode_config_path(cfg)
 	results = []
 	if recorded is not None and recorded != path:
 		moved, _ = edit_opencode_config(recorded, root, args, {}, ours, created_keys, created_file,
-			note=f"registration moved to {display(path)}")
+			note=f"registration moved to {display(path)}", restore=displaced)
 		results.append(moved)
 		ours, created_keys, created_file = {}, set(), False
+		displaced = {key: [] for key in PLUGIN_KEYS}
+	spans = {}
+	if path.is_file():
+		from jsonc_edit import properties
+		spans = properties(read_text(path)[0])[1]
+	present = {key: _entries(spans.get(key, (0, 0, []))[2]) for key in PLUGIN_KEYS}
+	# Entries this installer did not add, in either key: the user's own registrations.
+	theirs = [entry for key in PLUGIN_KEYS for entry in present[key] if entry not in ours[key]]
+	# A config already in OpenCode 2's shape gets OpenCode 2's key; any other keeps
+	# OpenCode 1's, which OpenCode 2 reads too.
+	key = "plugins" if "plugins" in spans else "plugin"
 	spec = opencode_cache_spec(root)
-	plugin = [(root / "index.js").resolve().as_uri()]
+	restore = displace = {}
 	if spec is not None:
-		existing = []
-		if path.is_file():
-			from jsonc_edit import properties
-			existing = _strings(properties(read_text(path)[0])[1].get("plugin", (0, 0, []))[2])
-		# Keep whatever spec registered the cached package; add the cache's own
-		# spec only when nothing registers it.
-		plugin = [] if any(v == PROVENANCE or v.startswith(PROVENANCE + "@") for v in existing) else [spec]
-	wanted = {"instructions": [str(cfg / "leos-agent-routing.md")], "plugin": plugin}
-	result, registration = edit_opencode_config(path, root, args, wanted, ours, created_keys, created_file)
+		# Keep whatever registers the cached package, including a spec an install
+		# from a checkout took out; add the cache's own spec only when nothing does.
+		restore = {k: [e for e in displaced[k] if e not in present[k]] for k in PLUGIN_KEYS}
+		registered = any(restore.values()) or any(
+			is_package_spec(plugin_entry_name(entry)) or links_to(plugin_entry_name(entry), root) for entry in theirs)
+		plugin, remaining = ([] if registered else [spec]), {}
+	else:
+		# A link to this checkout. An npm spec would load the plugin a second time
+		# beside it, so it comes out, recorded so uninstall can put it back.
+		plugin = [] if any(links_to(plugin_entry_name(entry), root) for entry in theirs) else [plugin_link(root, key)]
+		displace = {k: [e for e in present[k] if e not in ours[k] and is_package_spec(plugin_entry_name(e))]
+			for k in PLUGIN_KEYS}
+		remaining = {k: [e for e in displaced[k] if e not in present[k]] + displace[k] for k in PLUGIN_KEYS}
+	wanted = {"instructions": [str(cfg / "leos-agent-routing.md")], key: plugin}
+	result, registration = edit_opencode_config(path, root, args, wanted, ours, created_keys, created_file,
+		restore=restore, displace=displace)
+	remaining = {k: v for k, v in remaining.items() if v}
+	if remaining:
+		registration["displaced"] = remaining
 	receipt.meta = registration
 	results.append(result)
 	return results
@@ -913,6 +1025,13 @@ def finish_receipt(receipt, args, results):
 		if receipt.path.is_file():
 			remove_file(receipt.path)
 	else:
+		from install_transaction import ACTIVE
+		transaction = ACTIVE.get()
+		base = receipt.cfg.resolve()
+		new = {Path(os.path.relpath(d, base)).as_posix() for d in (transaction.missing_dirs() if transaction else ())
+			if base in Path(d).parents}
+		kept = {d for d in receipt.created_dirs or () if (base / d).is_dir()}
+		receipt.dirs = sorted(new | kept)
 		text = receipt.render()
 		current = receipt.path.read_text(encoding="utf-8") if receipt.path.is_file() else None
 		if current != text:
@@ -921,9 +1040,10 @@ def finish_receipt(receipt, args, results):
 
 
 def _run_targets(harness, root, args):
-	# Read once per run: routing.load() is used by Codex's TOML rendering and
-	# Cursor's rule, both still per-machine even though the payload is not.
-	config = routing.load()
+	# Read once per run, and only where a copy renders a model from it (Cursor and
+	# OpenCode profiles, OpenCode's policy): an invalid routing.json must not block
+	# another harness's legacy cleanup.
+	config = routing.load() if harness in ("cursor", "opencode") else None
 	cfg = config_dir(harness)
 	require_config_dir(harness, cfg)
 	receipt = Receipt(cfg, harness) if harness in COPYING else None
@@ -1014,21 +1134,25 @@ def _run_targets(harness, root, args):
 		attempt(label, target)
 	if receipt is not None:
 		attempt(display(receipt.path), lambda: finish_receipt(receipt, args, results))
-	return results
+	return results, receipt
 
 
 def run(harness, root, args):
-	from install_transaction import ACTIVE, Transaction, prune_empty_dirs
+	from install_transaction import ACTIVE, Transaction, pending_path, prune_empty_dirs
 	try:
 		cfg = config_dir(harness)
 		require_config_dir(harness, cfg)
 		backup = backup_path(harness)
 	except ConfigError as exc:
 		return [Result(harness, "error", str(exc))]
+	if args.writes and pending_path(backup).exists():
+		# Its original bytes would be lost under a new commit's pending backup.
+		return [Result(harness, "error", f"an interrupted installation left {display(pending_path(backup))}; "
+			f"run leo-install.py {harness} --rollback first")]
 	tx = Transaction(backup, boundaries=(cfg, backup.parent))
 	token = ACTIVE.set(tx) if args.writes else None
 	try:
-		results = _run_targets(harness, root, args)
+		results, receipt = _run_targets(harness, root, args)
 		if not args.writes:
 			return results
 		if any(result.failed for result in results):
@@ -1051,8 +1175,10 @@ def run(harness, root, args):
 					result.detail = "rolled back; a write failed"
 			results.append(Result(harness, "error", str(exc)))
 			return results
-		# Remove only empty directories left by deleted owned files.
-		prune_empty_dirs(tx.changes, cfg)
+		# Remove only empty directories an install created and a deletion emptied.
+		created = None if receipt is None or receipt.created_dirs is None else \
+			[cfg.resolve() / d for d in receipt.created_dirs]
+		prune_empty_dirs(tx.changes, cfg, only=created)
 		migrate_legacy_backup(legacy, backup, superseded=bool(tx.changes))
 		return results
 	except (ValueError, OSError) as exc:
@@ -1101,7 +1227,9 @@ def main(argv=None):
 	)
 	mode.add_argument("--check", action="store_true", help="exit 1 if anything would change")
 	mode.add_argument("--rollback", action="store_true", help="undo the last install or uninstall if files have not since changed")
-	parser.add_argument("--force", action="store_true", help="on install, replace a conflicting file this tool did not write")
+	parser.add_argument("--force", nargs="*", metavar="PATH", default=None,
+		help="on install, replace the named files (a conflict, or a preserved older copy); "
+		"with no PATH, replace every conflicting file but no preserved copy")
 	args = parser.parse_args(argv)
 	args.writes = not (args.dry_run or args.check)
 	if args.rollback:
@@ -1155,6 +1283,11 @@ def main(argv=None):
 		if changed:
 			print(f"\n{len(changed)} target(s) out of date; run leo-install.py {args.harness}")
 			return 1
+		if preserved:
+			# Not "up to date": each preserved file still serves an older payload.
+			print(f"\nnot current: {len(preserved)} preserved file(s) keep an older payload; delete each, "
+				f"or rerun leo-install.py {args.harness} --force <path> for the ones to replace")
+			return CHECK_PRESERVED
 		print("\nup to date")
 		return 0
 	if args.dry_run:

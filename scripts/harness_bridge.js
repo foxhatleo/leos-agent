@@ -1,6 +1,18 @@
 /** Bounded subprocess bridge; no shell interpolation or model requests. */
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// An env override counts only when it holds the payload, as in payload.py's
+// plugin_root(); otherwise the adapter's own directory is the root.
+export function pluginRoot(moduleUrl) {
+  for (const name of ['LEOS_AGENT_ROOT', 'PLUGIN_ROOT']) {
+    const value = process.env[name];
+    if (value && existsSync(join(value, 'rules', 'preferences.md'))) return value;
+  }
+  return fileURLToPath(new URL('.', moduleUrl));
+}
 
 export function runPython(root, harness, script, args = [], event = {}, timeout = 10000) {
   return new Promise((resolve) => {

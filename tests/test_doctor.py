@@ -75,9 +75,50 @@ class ReadOnlyDoctor(DoctorCase):
         (self.local / "routing.json").write_text("{broken")
         result = doctor.diagnose("claude")
         self.assertTrue(result["issues"])
-        self.assertFalse(result["installation_current"])
         self.assertFalse(result["routing_config"]["valid"])
         self.assertEqual(result["routing_config"]["ignored"], ["the whole file"])
+        # Claude's installer renders nothing from routing.json; OpenCode's does.
+        (self.root / "home" / ".config" / "opencode").mkdir(parents=True)
+        with patch.object(doctor.shutil, "which", return_value=None):
+            result = doctor.diagnose("opencode")
+        self.assertFalse(result["installation_current"])
+        self.assertEqual(result["installation_status"], "out-of-date")
+
+    def test_a_preserved_copy_is_not_reported_current(self):
+        cfg = self.root / "home" / ".config" / "opencode"
+        copy = cfg / "skills" / "doctor" / "SKILL.md"
+        copy.parent.mkdir(parents=True)
+        root = Path(__file__).resolve().parents[1]
+        install = [sys.executable, str(root / "scripts" / "leo-install.py"), "opencode"]
+        env = {**os.environ, "LEOS_AGENT_ROOT": str(root), "PYTHONDONTWRITEBYTECODE": "1"}
+        with patch.object(doctor.shutil, "which", return_value=None):
+            check = doctor.subprocess.run(install, capture_output=True, text=True, timeout=60, env=env)
+            self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
+            self.assertEqual(doctor.diagnose("opencode")["installation_status"], "current")
+            # An edited copy an older release left, with no receipt: preserved.
+            doctor.subprocess.run(install + ["--uninstall"], capture_output=True, timeout=60, env=env)
+            copy.parent.mkdir(parents=True, exist_ok=True)
+            copy.write_text("---\nname: doctor\ndescription: leos-agent diagnostics, my way.\n---\n\nMine.\n")
+            check = doctor.subprocess.run(install, capture_output=True, text=True, timeout=60, env=env)
+            self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
+            result = doctor.diagnose("opencode")
+        self.assertFalse(result["installation_current"])
+        self.assertEqual(result["installation_status"], "preserved-copies")
+        self.assertIn("not current", result["installation_report"])
+
+    def test_opencode_2_on_path_is_reported_as_not_loading_the_policy(self):
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir()
+        fake = bin_dir / "opencode"
+        for version, inactive in (("opencode v2.0.25", True), ("2.1.0", True), ("1.18.34", False)):
+            with self.subTest(version=version):
+                fake.write_text("#!/bin/sh\necho %s\n" % version)
+                fake.chmod(0o755)
+                with patch.dict(os.environ, {"PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", "")}):
+                    result = doctor.diagnose("opencode")
+                self.assertEqual(result["opencode"]["version"], version)
+                self.assertEqual(result["opencode"]["policy_delivery"].startswith("inactive"), inactive)
+                self.assertEqual(any("loads neither" in issue for issue in result["issues"]), inactive)
 
     def test_an_invalid_routing_section_is_reported_ignored_and_the_rest_applies(self):
         self.local.mkdir()

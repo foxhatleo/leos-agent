@@ -1,7 +1,9 @@
 """Small positional JSONC edits: preserve unrelated keys, formatting and comments.
 
-Only top-level string-array settings are managed. Invalid/duplicate keys or a
-different setting shape are refused, never normalized into a guessed config.
+Only top-level array settings are managed: string arrays, or, where the caller
+allows it, arrays whose other elements are kept untouched. Invalid/duplicate
+keys or a different setting shape are refused, never normalized into a guessed
+config.
 
 Edits are minimal: an insertion goes after the last property or element in the
 container's own style, and a removal deletes the element, one separating comma
@@ -239,10 +241,12 @@ def _append(text, open_index, close_index, last_stop, rendered, default_indent):
     return text[:last_stop] + ", " + rendered + text[last_stop:]
 
 
-def update_array(text, key, additions=(), removals=()):
+def update_array(text, key, additions=(), removals=(), strings_only=True):
     text = text or "{}\n"
     source, spans, close = properties(text)
-    additions = list(dict.fromkeys(additions))
+    # Order-preserving dedupe that also accepts unhashable (object) elements.
+    additions = list(additions)
+    additions = [v for i, v in enumerate(additions) if v not in additions[:i]]
     if key not in spans:
         if not additions:
             return text
@@ -253,8 +257,9 @@ def update_array(text, key, additions=(), removals=()):
         properties(result)
         return result
     values = spans[key][2]
-    if not isinstance(values, list) or any(not isinstance(v, str) for v in values):
-        raise ValueError(f"{key} must be an array of strings")
+    if not isinstance(values, list) or (strings_only and any(not isinstance(v, str) for v in values)):
+        raise ValueError(f"{key} must be an array of strings" if strings_only else f"{key} must be an array")
+    removals = list(removals)
     wanted = [v for v in values if v not in removals]
     additions = [v for v in additions if v not in wanted]
     if wanted == values and not additions:
