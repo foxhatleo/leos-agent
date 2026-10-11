@@ -453,3 +453,69 @@ class PriceFreshness(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Statusline(DoctorCase):
+    def script(self, exists=True):
+        path = self.root / "plugin" / "scripts" / "statusline.py"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("")
+        if not exists:
+            path.unlink()
+        return path
+
+    def launcher(self, fallback, config=None, marked=True):
+        path = self.root / "local" / "bin" / "statusline"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        header = "# Managed by leos-agent: test launcher" if marked else "# mine"
+        path.write_text(f"#!/usr/bin/env python3\n{header}\nFALLBACK = {json.dumps(str(fallback))}\n"
+                        f"CONFIG = {json.dumps(str(config or self.claude))}\n")
+        self.settings({"statusLine": {"type": "command", "command": f"python3 '{path}'"}})
+        return path
+
+    def test_it_is_off_until_installed(self):
+        report = doctor.diagnose("claude")["statusline"]
+        self.assertFalse(report["installed"])
+        self.assertIn("--statusline", report["status"])
+
+    def test_a_direct_script_line_is_recognised_and_a_missing_script_is_an_issue(self):
+        for exists in (True, False):
+            with self.subTest(exists=exists):
+                path = self.script(exists)
+                self.settings({"statusLine": {"type": "command", "command": f"python3 '{path}'"}})
+                result = doctor.diagnose("claude")
+                self.assertTrue(result["statusline"]["installed"])
+                self.assertEqual(result["statusline"]["script_exists"], exists)
+                self.assertEqual(any("statusline.py" in issue for issue in result["issues"]), not exists)
+
+    def test_a_launcher_that_resolves_is_healthy_and_one_that_cannot_is_an_issue(self):
+        plugin = self.script().parent.parent
+        self.launcher(plugin)
+        healthy = doctor.diagnose("claude")
+        self.assertEqual((healthy["statusline"]["resolves"], healthy["statusline"]["status"]), (True, "installed"))
+        self.assertEqual(healthy["statusline"]["plugin_root"], str(plugin))
+        self.assertFalse(any("launcher" in issue for issue in healthy["issues"]))
+        self.launcher(self.root / "gone")
+        broken = doctor.diagnose("claude")
+        self.assertFalse(broken["statusline"]["resolves"])
+        self.assertTrue(any("launcher finds no" in issue for issue in broken["issues"]))
+
+    def test_the_launcher_is_read_never_run(self):
+        marker = self.root / "ran"
+        path = self.launcher(self.root / "gone")
+        path.write_text(path.read_text() + f"open({str(marker)!r}, 'w').close()\n")
+        doctor.diagnose("claude")
+        self.assertFalse(marker.exists())
+
+    def test_a_launcher_that_is_not_leos_agents_is_an_issue(self):
+        self.launcher(self.script().parent.parent, marked=False)
+        result = doctor.diagnose("claude")
+        self.assertIs(result["statusline"]["resolves"], False)
+        self.assertTrue(any("not leos-agent's" in issue for issue in result["issues"]))
+
+    def test_another_tools_line_is_left_alone_and_not_echoed(self):
+        self.settings({"statusLine": {"type": "command", "command": "sh -c 'echo sk-secret-value'"}})
+        result = doctor.diagnose("claude")
+        self.assertFalse(result["statusline"]["installed"])
+        self.assertNotIn("sk-secret", json.dumps(result["statusline"]))
+        self.assertFalse(any("statusline" in issue for issue in result["issues"]))

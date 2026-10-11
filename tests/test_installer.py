@@ -1399,5 +1399,176 @@ class TestUpgradeFromRelease(unittest.TestCase):
         self.assertEqual(tree(home, skip=()), before)
 
 
+class TestClaudeStatusline(InstallerCase):
+    """The cost status line is written only on request and always taken back."""
+
+    harnesses = ("claude",)
+    MINE = '{"type": "command", "command": "my-line"}'
+
+    def settings(self):
+        return self.cfg("claude") / "settings.json"
+
+    def install(self, **options):
+        return self.run_harness("claude", statusline=True, **options)
+
+    def by_name(self, results):
+        return next(r for r in results if r.target.endswith("settings.json"))
+
+    def written(self):
+        return json.loads(self.settings().read_text())["statusLine"]
+
+    def shim(self):
+        return self.home / ".leos-agent-local" / "bin" / "statusline"
+
+    def test_a_plain_install_never_touches_settings(self):
+        text = f'{{"model": "opus", "statusLine": {self.MINE}}}\n'
+        self.settings().write_text(text)
+        before = tree(self.home)
+        self.assertClean(self.run_harness("claude"))
+        self.assertClean(self.run_harness("claude", uninstall=True))
+        self.assertEqual(tree(self.home), before)
+
+    def test_the_flag_creates_the_setting_and_uninstall_deletes_a_file_it_created(self):
+        before = tree(self.home)
+        results = self.install()
+        self.assertClean(results)
+        self.assertEqual(self.by_name(results).status, "created")
+        value = self.written()
+        self.assertEqual(value["type"], "command")
+        # The setting names the stable launcher, never a versioned plugin path.
+        self.assertEqual(value["command"], f"python3 {self.shim()}")
+        self.assertEqual(self.shim().stat().st_mode & 0o777, 0o700)
+        self.assertEqual(self.shim().parent.stat().st_mode & 0o777, 0o700)
+        text = self.shim().read_text()
+        self.assertIn(f"FALLBACK = {json.dumps(str(ROOT))}", text)
+        self.assertIn(f"CONFIG = {json.dumps(str(self.cfg('claude')))}", text)
+        self.assertEqual({r.status for r in self.install() if r.target.endswith(("settings.json", "statusline"))},
+            {"unchanged"})
+        self.assertClean(self.run_harness("claude", uninstall=True))
+        self.assertEqual(tree(self.home), before)
+        self.assertFalse(self.shim().exists())
+
+    def test_it_preserves_comments_and_other_settings_and_uninstall_restores_the_bytes(self):
+        original = '{\n  "model": "opus", // keep me\n  "env": {"A": "1"}\n}\n'
+        self.settings().write_text(original)
+        self.assertClean(self.install())
+        text = self.settings().read_text()
+        self.assertIn("// keep me", text)
+        from jsonc_edit import clean
+        self.assertEqual(json.loads(clean(text))["env"], {"A": "1"})
+        self.assertClean(self.run_harness("claude", uninstall=True))
+        self.assertEqual(self.settings().read_text(), original)
+
+    def test_a_different_statusline_is_a_conflict_until_force_names_the_file(self):
+        original = f'{{\n  "statusLine":   {self.MINE}\n}}\n'
+        self.settings().write_text(original)
+        before = tree(self.home)
+        for force in (False, [], [str(self.cfg("claude") / "CLAUDE.md")]):
+            with self.subTest(force=force):
+                result = self.by_name(self.install(force=force))
+                self.assertEqual(result.status, "conflict")
+                self.assertIn("--force", result.detail)
+                self.assertEqual(tree(self.home), before)
+        self.assertEqual(self.by_name(self.install(force=[str(self.settings())])).status, "updated")
+        self.assertIn("bin/statusline", self.written()["command"])
+        receipt = json.loads((self.cfg("claude") / "leos-agent-paths.json").read_text())
+        self.assertEqual(receipt["statusline"]["prior"], json.loads(self.MINE))
+        # Uninstall puts the user's own line back, byte for byte.
+        self.assertClean(self.run_harness("claude", uninstall=True))
+        self.assertEqual(self.settings().read_text(), original)
+        self.assertFalse((self.cfg("claude") / "leos-agent-paths.json").exists())
+
+    def test_a_statusline_the_user_changed_after_install_is_preserved_on_uninstall(self):
+        self.assertClean(self.install())
+        self.settings().write_text(f'{{"statusLine": {self.MINE}}}\n')
+        result = self.by_name(self.run_harness("claude", uninstall=True))
+        self.assertEqual(result.status, "preserved")
+        self.assertEqual(self.written(), json.loads(self.MINE))
+
+    def test_an_upgrade_moves_only_the_launchers_fallback_never_the_setting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old = plugin_copy(Path(tmp) / "old")
+            self.assertClean(self.run_harness("claude", root=old, statusline=True))
+            setting = self.settings().read_text()
+            self.assertIn(json.dumps(str(old)), self.shim().read_text())
+            stale = {r.target: r.status for r in self.run_harness("claude", statusline=True, check=True, writes=False)}
+            self.assertEqual(stale[self.label(self.settings())], "unchanged")
+            self.assertEqual(stale["~/.leos-agent-local/bin/statusline"], "updated")
+            self.assertClean(self.install())
+            self.assertIn(json.dumps(str(ROOT)), self.shim().read_text())
+            self.assertEqual(self.settings().read_text(), setting)
+            self.assertEqual(json.loads((self.cfg("claude") / "leos-agent-paths.json").read_text())
+                ["statusline"]["created_file"], True)
+
+    def test_a_foreign_file_at_the_launchers_path_is_a_conflict_and_survives_uninstall(self):
+        self.shim().parent.mkdir(parents=True)
+        self.shim().write_text("#!/bin/sh\necho mine\n")
+        before = tree(self.home, skip=())
+        results = self.install()
+        self.assertEqual({r.target: r.status for r in results}["~/.leos-agent-local/bin/statusline"], "conflict")
+        self.assertEqual(tree(self.home, skip=()), before)
+        self.assertClean(self.install(force=[str(self.shim())]))
+        self.assertIn("Managed by leos-agent", self.shim().read_text())
+
+    def test_uninstall_keeps_a_launcher_the_user_replaced(self):
+        self.assertClean(self.install())
+        self.shim().write_text("#!/bin/sh\necho mine\n")
+        self.assertClean(self.run_harness("claude", uninstall=True))
+        self.assertEqual(self.shim().read_text(), "#!/bin/sh\necho mine\n")
+
+    def test_a_plain_reinstall_keeps_the_record_so_uninstall_still_works(self):
+        self.settings().write_text(f'{{"statusLine": {self.MINE}}}\n')
+        self.assertClean(self.install(force=[str(self.settings())]))
+        self.assertClean(self.run_harness("claude"))
+        self.assertClean(self.run_harness("claude", uninstall=True))
+        self.assertEqual(self.written(), json.loads(self.MINE))
+
+    def test_a_lost_receipt_does_not_leave_the_launcher_or_setting_unmanaged(self):
+        self.assertClean(self.install())
+        (self.cfg("claude") / "leos-agent-paths.json").unlink()
+        self.assertEqual(self.by_name(self.install()).status, "unchanged")
+        self.assertClean(self.run_harness("claude", uninstall=True))
+        self.assertNotIn("statusLine", json.loads(self.settings().read_text()))
+        self.assertFalse(self.shim().exists())
+
+    def test_dry_run_and_check_write_nothing_and_dry_run_shows_the_diff(self):
+        self.settings().write_text("{}\n")
+        before = tree(self.home)
+        preview = self.by_name(self.install(dry_run=True, writes=False))
+        self.assertEqual(preview.status, "updated")
+        self.assertIn("statusLine", preview.diff)
+        self.assertEqual(self.by_name(self.install(check=True, writes=False)).status, "updated")
+        self.assertEqual(tree(self.home), before)
+
+    def test_rollback_restores_settings_and_removes_the_receipt(self):
+        original = f'{{"statusLine": {self.MINE}}}\n'
+        self.settings().write_text(original)
+        before = tree(self.home)
+        cli = self.cli("claude", "--statusline", "--force", str(self.settings()))
+        self.assertEqual(cli.returncode, 0, cli.stdout + cli.stderr)
+        self.assertNotEqual(self.settings().read_text(), original)
+        undone = self.cli("claude", "--rollback")
+        self.assertEqual(undone.returncode, 0, undone.stdout + undone.stderr)
+        self.assertEqual(self.settings().read_text(), original)
+        self.assertEqual(tree(self.home), before)
+        self.assertFalse(self.shim().exists())
+
+    def test_a_missing_config_dir_or_invalid_json_is_an_error_not_a_creation(self):
+        self.settings().write_text("{not json")
+        before = tree(self.home)
+        self.assertEqual(self.by_name(self.install()).status, "error")
+        self.assertEqual(tree(self.home), before)
+        shutil.rmtree(self.cfg("claude"))
+        self.assertEqual(self.by_name(self.install()).status, "error")
+        self.assertFalse(self.cfg("claude").exists())
+
+    def test_the_flag_belongs_to_claude_installs_only(self):
+        for argv in (["codex", "--statusline"], ["claude", "--statusline", "--uninstall"],
+                     ["claude", "--statusline", "--rollback"]):
+            with self.subTest(argv=argv):
+                done = self.cli(*argv)
+                self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

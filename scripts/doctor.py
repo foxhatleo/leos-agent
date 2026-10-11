@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -19,6 +20,7 @@ import routing
 import routing_engine
 from routing_engine import CAPABILITIES
 import settings_probe
+import statusline_shim
 import state
 
 # The age past which a catalog is called stale: the refresher retries daily,
@@ -139,6 +141,62 @@ def subagent_model(loaded, issues):
     elif named:
         result["note"] = ("default only: leos-agent tiers set frontmatter models and keep them; it applies to agents "
                           "with neither. Claude Code before v2.1.251 let it override frontmatter and dispatch models.")
+    return result
+
+
+def statusline(loaded, issues):
+    """Whether Claude's statusLine is leos-agent's cost line. Opt-in (leo-install.py
+    claude --statusline); reported, never changed here. Another tool's command is
+    named only as "other", never echoed. The launcher is read, not run: its two
+    baked paths go through the same resolution it uses at run time."""
+    found = settings_probe.setting("statusLine", loaded, env_key=False)
+    value = found["value"]
+    command = value.get("command") if isinstance(value, dict) else None
+    result = {"installed": False, "set_in": found["set_in"]}
+    if value is None:
+        result["status"] = "off (opt in with leo-install.py claude --statusline)"
+        return result
+    try:
+        script = shlex.split(command)[-1] if isinstance(command, str) else ""
+    except ValueError:
+        script = ""
+    name, folder = os.path.basename(script), os.path.basename(os.path.dirname(script))
+    if not ((name, folder) in (("statusline", "bin"), ("statusline.py", "scripts"))):
+        result["status"] = "another statusLine is set; leos-agent leaves it alone"
+        return result
+    result.update(installed=True, script=settings_probe.clean(script, 200))
+    again = "re-run leo-install.py claude --statusline"
+    try:
+        with open(script, encoding="utf-8") as handle:
+            text = handle.read()
+    except (OSError, UnicodeDecodeError):
+        text = None
+    if name == "statusline.py":
+        result["script_exists"] = text is not None
+        result["status"] = "installed" if text is not None else "installed but the script is gone"
+        if text is None:
+            issues.append(f"statusLine points at a statusline.py that no longer exists; {again}")
+        return result
+    lines = (text or "").split("\n")
+    marked = len(lines) > 1 and "Managed by leos-agent" in lines[1]
+    constants = {}
+    for key in ("FALLBACK", "CONFIG"):
+        match = re.search(rf'(?m)^{key} = ("(?:[^"\\]|\\.)*")$', text or "")
+        try:
+            constants[key] = json.loads(match.group(1)) if match else None
+        except ValueError:
+            constants[key] = None
+    if text is None or not marked or None in constants.values():
+        result.update(status="installed but the launcher is missing or not leos-agent's", resolves=False)
+        issues.append(f"statusLine points at a launcher that is missing or not leos-agent's; {again}")
+        return result
+    root = statusline_shim.resolve(constants["FALLBACK"], constants["CONFIG"])
+    result.update(resolves=root is not None, plugin_root=settings_probe.clean(root, 200) if root else None)
+    if root is None:
+        result["status"] = "installed but the launcher finds no plugin to run"
+        issues.append(f"the statusLine launcher finds no leos-agent plugin with scripts/statusline.py; {again}")
+    else:
+        result["status"] = "installed"
     return result
 
 
@@ -350,6 +408,7 @@ def diagnose(harness, root=None):
         report["subagent_model"] = subagent_model(loaded, report["issues"])
         report["forced_subagent_model"] = report["subagent_model"]["forced_model"]
         report["advisor"] = advisor(loaded)
+        report["statusline"] = statusline(loaded, report["issues"])
     if harness == "codex":
         report["hook_trust"] = "Review current definitions in /hooks; this tool does not approve them."
     if harness == "opencode":

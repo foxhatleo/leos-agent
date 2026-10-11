@@ -35,6 +35,13 @@ or silently approve hook trust. What it does per harness:
 - Claude, Hermes and Pi: only remove a policy block an older release left in
   the global instruction file. Their plugin or extension supplies everything
   else, so on a machine without such a block there is nothing to do.
+- Claude `--statusline`, only when the user asks for it: write a launcher to
+  `~/.leos-agent-local/bin/statusline` and set `statusLine` in `settings.json`
+  to it (model, session cost, children by tier with reference cost). The
+  launcher finds the current plugin at run time, so upgrades need no rerun.
+  Other settings stay as they are; a different `statusLine` is a conflict
+  unless `--force <settings.json>` names the file, and uninstall or rollback
+  puts it back and removes the launcher.
 
 All three file-writing harnesses also remove unchanged copies of the retired
 `leo-runner` and `leo-executor` profiles. The harness config directory must
