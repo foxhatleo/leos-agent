@@ -437,7 +437,14 @@ re-checked at the SHA before staging, and the repository's own CLAUDE.md,
 AGENTS.md and REVIEW.md rules count only when quoted. Blocking findings also
 go, in one batch, to a fresh-context read-only lens at the standard tier or
 above, which confirms or refutes each against the code at the SHA; a refuted
-one is dropped or downgraded. Review runs at the
+one is dropped or downgraded. When you submit a review it staged, the next
+review of that PR notes which staged comments you deleted, rewrote or
+downgraded, as data-only entries (category, path glob, a short normalized
+pattern) in `~/.leos-agent-local/review-learnings/<owner>__<repo>.json`.
+Reviews read them only when entries exist, may use them to omit or downgrade
+a non-blocking finding and report each such suppression, and never suppress a
+blocking one. `ghreview.py learnings -R OWNER/REPO list` shows them and
+`forget --id ID` or `forget --all` drops them. Review runs at the
 standard tier; a consequential PR or an escalation runs it at premium. Neutral
 and seriously-problematic always come with a pending comment; CI never affects
 the verdict. A ready-to-merge verdict stands until the PR diff changes, hunk

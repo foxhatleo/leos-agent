@@ -46,7 +46,8 @@ for (`Result:` and `Verified:`), and nothing else:
 ```json
 {"status":"done", "covered_paths":["src/a.ts"], "gaps":[],
  "findings":[{"path":"src/a.ts","line":42,"side":"RIGHT",
- "severity":"major","confidence":95,"note":"specific failure and triggering condition",
+ "severity":"major","confidence":95,"category":"error-handling",
+ "note":"specific failure and triggering condition",
  "fix":"optional concrete fix"}]}
 ```
 
@@ -54,6 +55,7 @@ for (`Result:` and `Verified:`), and nothing else:
 actually read; the reviewer reports it as coverage. Use `needs-context` with
 explicit gaps if incomplete. Severity is blocking (stops the merge), major
 (must be addressed), minor (worth fixing, the author's call), or nit.
+`category` is a short lowercase label for the kind of problem.
 `confidence` (0–100) is how sure you are the failure is real and in scope;
 the reviewer re-checks every finding and drops those under 80. No findings is
 valid. The reviewer owns every mutation.

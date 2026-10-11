@@ -199,7 +199,8 @@ staged; a lens never validates its own finding.
 
 You run these checks yourself, in sequence. Before staging a `blocking`
 finding or a seriously-problematic verdict, also follow
-`reference/validation.md`.
+`reference/validation.md`. Then, if `ghreview.py learnings -R OWNER/REPO list`
+prints entries, apply them as `reference/learnings.md` says.
 
 Prefer problems a human author should act on. Cap new inline comments at 15;
 disclose any meaningful overflow.
@@ -221,7 +222,8 @@ file outside the repository:
 ```json
 {"verdict": "neutral",
  "reviewed": ["src/a.ts", "src/a.test.ts"],
- "comments": [{"path": "src/a.ts", "line": 42, "side": "RIGHT", "body": "…", "confidence": 90}],
+ "comments": [{"path": "src/a.ts", "line": 42, "side": "RIGHT", "body": "…", "confidence": 90,
+               "severity": "major", "category": "error-handling"}],
  "notes": ["Could not read LIN-123; its acceptance criteria are unchecked."]}
 ```
 
@@ -329,7 +331,7 @@ them into one list. Each section has:
 - Existing threads: left, pending reply, or resolved; resolutions are already
   public. For outdated lines use original_line; file-level only if both lines
   are null. Mention replaced drafts and any recovery files.
-- Carried, omitted and filtered findings, coverage (from the stage result,
+- Carried, omitted, filtered and suppressed findings, coverage (from the stage result,
   including any `carried_from` and carried files), excluded files, and ticket
   coverage. A carried finding is only visible to whoever opens the draft, so
   it still belongs in the report. Never hide a failed lens or imply it

@@ -242,7 +242,7 @@ class TestStaticPromptBudget(unittest.TestCase):
     def test_deferred_review_and_claude_only_bodies_are_budgeted(self):
         measure = self.load_measure()
         values = measure.measurements()
-        for name in ("review_procedure_bytes", "review_validation_bytes"):
+        for name in ("review_procedure_bytes", "review_validation_bytes", "review_learnings_bytes"):
             with self.subTest(measurement=name):
                 self.assertIn(name, values)
                 self.assertIn(name, measure.LIMITS)
