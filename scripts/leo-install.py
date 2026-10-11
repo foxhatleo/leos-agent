@@ -880,11 +880,12 @@ def links_to(name, root):
 	return Path(os.path.realpath(name)) in (resolved, resolved / "index.js")
 
 
-def plugin_link(root, key):
-	"""OpenCode 1 imports the entry file a link names; OpenCode 2 refuses a file
-	and loads a plugin directory instead."""
-	resolved = Path(root).resolve()
-	return (resolved if key == "plugins" else resolved / "index.js").as_uri()
+def plugin_link(root):
+	"""A link to the plugin directory. OpenCode 2 refuses a link to a file, and
+	OpenCode 1 (1.4 and later, as index.js's default export needs) loads a
+	directory through package.json's `main`. An earlier release linked
+	index.js; links_to still recognises that entry, so an install replaces it."""
+	return Path(root).resolve().as_uri()
 
 
 def edit_opencode_config(path, root, args, wanted, ours, created_keys, created_file, note="",
@@ -990,7 +991,7 @@ def manage_opencode_config(root, cfg, args, receipt):
 	else:
 		# A link to this checkout. An npm spec would load the plugin a second time
 		# beside it, so it comes out, recorded so uninstall can put it back.
-		plugin = [] if any(links_to(plugin_entry_name(entry), root) for entry in theirs) else [plugin_link(root, key)]
+		plugin = [] if any(links_to(plugin_entry_name(entry), root) for entry in theirs) else [plugin_link(root)]
 		displace = {k: [e for e in present[k] if e not in ours[k] and is_package_spec(plugin_entry_name(e))]
 			for k in PLUGIN_KEYS}
 		remaining = {k: [e for e in displaced[k] if e not in present[k]] + displace[k] for k in PLUGIN_KEYS}

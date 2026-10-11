@@ -623,7 +623,7 @@ class TestOpenCodeConfigLocation(InstallerCase):
         target = elsewhere / "opencode.json"
         target.write_text("{}\n")
         self.assertClean(self.run_harness("opencode", env={"OPENCODE_CONFIG": str(target)}), "install")
-        self.assertIn("index.js", target.read_text())
+        self.assertIn(ROOT.resolve().as_uri(), target.read_text())
         self.assertFalse((self.cfg("opencode") / "opencode.json").exists())
         self.assertClean(self.run_harness("opencode", uninstall=True), "uninstall")
         self.assertEqual(target.read_text(), "{}\n")
@@ -636,7 +636,7 @@ class TestOpenCodeConfigLocation(InstallerCase):
         jsonc.write_text("{\n  // mine\n}\n")
         results = self.by_target(self.run_harness("opencode"))
         self.assertEqual(results["~/.config/opencode/opencode.json"].status, "removed")
-        self.assertIn("index.js", jsonc.read_text())
+        self.assertIn(ROOT.resolve().as_uri(), jsonc.read_text())
         self.assertFalse(json_path.exists())
         self.run_harness("opencode", uninstall=True)
         self.assertEqual(jsonc.read_text(), "{\n  // mine\n}\n")
@@ -671,7 +671,18 @@ class TestOpenCodeConfigLocation(InstallerCase):
         path = self.cfg("opencode") / "opencode.json"
         path.write_text('{"plugin": ["leos-agent@12.0.0"]}')
         self.run_harness("opencode")
-        self.assertEqual(json.loads(path.read_text())["plugin"], [(ROOT / "index.js").resolve().as_uri()])
+        self.assertEqual(json.loads(path.read_text())["plugin"], [ROOT.resolve().as_uri()])
+
+    def test_an_earlier_index_js_link_becomes_a_directory_link(self):
+        """OpenCode 2 refuses a link to a file; the directory loads on both."""
+        path = self.cfg("opencode") / "opencode.json"
+        old = (ROOT / "index.js").resolve().as_uri()
+        path.write_text(json.dumps({"plugin": [old]}) + "\n")
+        (self.cfg("opencode") / "leos-agent-paths.json").write_text(json.dumps({"plugin": [old], "instructions": []}))
+        self.assertClean(self.run_harness("opencode"), "install")
+        self.assertEqual(json.loads(path.read_text())["plugin"], [ROOT.resolve().as_uri()])
+        self.assertClean(self.run_harness("opencode", uninstall=True), "uninstall")
+        self.assertEqual(json.loads(path.read_text())["plugin"], [])
 
     def test_uninstall_puts_back_the_npm_spec_a_checkout_install_took_out(self):
         path = self.cfg("opencode") / "opencode.json"
