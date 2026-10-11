@@ -37,6 +37,27 @@ spec.loader.exec_module(tag_release)
 VERSIONED = tag_release.VERSIONED
 
 
+# Git exports repository-locating variables to its hooks. A commit from a
+# linked worktree passes that worktree's absolute index path, so fixture git
+# commands run under the pre-commit hook would stage into the real checkout.
+# Process-local config overrides (GIT_CONFIG_*) still reach the fixtures.
+REPO_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_PREFIX", "GIT_GRAFT_FILE",
+            "GIT_SHALLOW_FILE", "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE")
+_inherited = {}
+
+
+def setUpModule():
+    for name in REPO_ENV:
+        if name in os.environ:
+            _inherited[name] = os.environ.pop(name)
+
+
+def tearDownModule():
+    os.environ.update(_inherited)
+    _inherited.clear()
+
+
 def git(*args, cwd, check=True):
     result = subprocess.run(
         ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", *args],
@@ -345,6 +366,20 @@ class TestTheCheckoutIsTrustedOnlyWhenItShouldBe(ReleaseRepo):
         head = git("rev-parse", "HEAD", cwd=clone)
         result, _ = self.tag_release(clone, "--expect-sha", head)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+class TestFixturesStayOutOfTheCallersRepository(unittest.TestCase):
+    def test_an_inherited_index_is_never_written(self):
+        # What the pre-commit hook hands down when committing from a worktree.
+        tmp = Path(tempfile.mkdtemp(prefix="leo tag release env "))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        outer_index = tmp / "outer-index"
+        env = dict(os.environ, GIT_INDEX_FILE=str(outer_index), PYTHONDONTWRITEBYTECODE="1")
+        name = "test_tag_release.TestTheCheckoutIsTrustedOnlyWhenItShouldBe.test_a_dirty_checkout_is_refused"
+        result = subprocess.run([sys.executable, "-m", "unittest", name], cwd=str(ROOT / "tests"), env=env,
+                                capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr[-2000:])
+        self.assertFalse(outer_index.exists())
 
 
 if __name__ == "__main__":
