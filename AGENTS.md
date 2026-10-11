@@ -163,6 +163,10 @@ The policy in `rules/preferences.md` applies to work on this repo too.
   (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `HERMES_HOME`, `PI_CODING_AGENT_DIR`,
   `OPENCODE_CONFIG_DIR`, `OPENCODE_CONFIG`, `XDG_CONFIG_HOME`,
   `LEOS_AGENT_LOCAL_PATH`) so fixtures never reach real user files.
+  Fixture git commands must also drop inherited repository-locating
+  variables (`GIT_DIR`, `GIT_INDEX_FILE`, `GIT_WORK_TREE`, ...): the
+  pre-commit hook in a linked worktree passes absolute ones, and a leak once
+  set `core.bare` and repointed worktree HEADs in the shared repository.
 - Never rely on `${CLAUDE_PLUGIN_ROOT}` in skill, command, or agent body text.
   Claude Code substitutes it inline in those bodies (not in the Bash tool's
   environment), but the other five harnesses read them verbatim, so a portable
