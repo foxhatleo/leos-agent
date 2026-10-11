@@ -25,7 +25,7 @@ The repo root *is* the plugin. Six manifests sit side by side over one tree:
 
 | Path | Role |
 |---|---|
-| `rules/preferences.md` | The always-loaded policy. Cursor reads it raw as an always-apply rule; every other harness renders it live through `scripts/emit_payload.py` or a native hook. |
+| `rules/preferences.md` | The always-loaded policy. Cursor reads it raw as an always-apply rule, so the routing region's shipped default is written for Cursor; every other harness renders it live through `scripts/emit_payload.py` or a native hook, replacing that region. |
 | `skills/` | Portable skills. `skills-claude/` holds the two Claude-only ones. `reference/` subdirectories hold deferred procedure text. |
 | `agents/` | Claude Code agent profiles (`leo-cheap`, `leo-standard`, `leo-premium`, `leo-parent`, `leo-reviewer`, and the read-only review lens `leo-lens`, whose tier comes from the dispatch's `model`). The retired `leo-runner`/`leo-executor` names have no profile but still map to cheap/standard in routing code. |
 | `payload/` | Codex agent TOMLs, the bundled price catalog, legacy-copy hashes. |
@@ -53,6 +53,11 @@ python3 scripts/measure_context.py --check
   after the last commit of a series. Do not repeat the suite between edits.
 - Between steps, run the narrowest thing that covers the change, for example
   one test module. Widen only when a targeted run fails in a surprising way.
+- `tests/claude/*.test.ts` sit outside the four gates and CI: they need the
+  `claude` binary. `claude plugin test .` runs them against Claude Code's mod
+  test kit with stubbed engine events, so no model calls. Run it with the
+  harness config env vars sandboxed whenever `hooks/claude-spawn.js`, its
+  `modules` entry, or the guard's Claude correction path changes.
 - `check.py` is the structural gate (version agreement, manifest paths, skill
   frontmatter, invocation split, plugin-root references, installer
   idempotency, marker safety, determinism). Read its numbered comments before

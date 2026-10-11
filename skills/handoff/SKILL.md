@@ -1,7 +1,7 @@
 ---
 name: handoff
 disable-model-invocation: true
-description: Write the current session's context to a leos-agent handoff document so a later session — in this harness or another — can pick the work up with /handon.
+description: Write the current session's context to a leos-agent handoff document so a later session — in this harness or another — can pick the work up with the handon skill.
 argument-hint: "[what to emphasise]"
 ---
 
@@ -86,7 +86,7 @@ That path is fixed and needs no plugin root.
    - **Gotchas** — traps, approaches already tried and rejected, and anything
      that only works in one harness.
 
-4. **Report** the name and `/handon <name>`.
+4. **Report** the name and that the handon skill resumes it (`/handon <name>` on Claude Code).
 
 ## Two rules that decide whether it is worth loading
 
