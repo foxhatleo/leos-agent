@@ -70,7 +70,9 @@ parked with `block` produces no lines at all until it is unblocked or pushed.
    releasing: a newer notification supersedes it, or the head was handled. `start` spends one of the head's attempts and begins
    a 30-minute lease that the running monitor keeps alive for up to two hours,
    so a foreground reviewer needs no renewal. To hold it longer, run `renew`
-   with the same arguments.
+   with the same arguments. A refused renew means another worker owns the
+   head: stop that review, make no further mutation, do not record or
+   release, and report it.
 2. Run `review-pr` for that PR with the observed SHA, claim, and OWNER/REPO;
    on a re-review, also the `prev=` SHA as the previous reviewed head; plus a
    short summary of any linked ticket you can read (the reviewer has no
@@ -89,10 +91,13 @@ parked with `block` produces no lines at all until it is unblocked or pushed.
    The report must have `complete: true`, the same full SHA, a `coverage`
    block with no `unreviewed` files, and a verdict that obeys the review rules
    (neutral has at least one pending comment or note; a standing ready-to-merge
-   is replaced only with `verdict_override`). A staged review ID is verified
-   against GitHub. Use the SHA actually reviewed, never the latest head
-   substituted after a push. Do not record partial coverage, incomplete
-   staging, failed replies, or an unresolved required action.
+   is replaced only with `verdict_override`). A seriously-problematic report
+   whose blocking finding is staged records with files still unreviewed:
+   partial coverage blocks readiness, not a verified blocking verdict. A staged
+   review ID is verified against GitHub. Use the SHA actually reviewed, never
+   the latest head substituted after a push. Do not record any other partial
+   coverage, incomplete staging, failed replies, or an unresolved required
+   action.
 
    `record` stores the verdict with the head. A ready-to-merge verdict stands:
    a later head whose PR diff is unchanged (a merge from the base) is carried
@@ -105,8 +110,9 @@ parked with `block` produces no lines at all until it is unblocked or pushed.
    `--acknowledge-omitted "<reason>"`, which records the head and states the
    dismissal in the report. Never pass it to clear a report you have not read.
 4. On a refusal only the user can resolve, above all a pending draft the
-   stage refused to replace (exit 3), do not record and do not release. Park
-   the head, then ask the user:
+   stage refused to replace (exit 3) or a changed file the reviewer could not
+   read at all (too large for `show`, or past GitHub's file listing), do not
+   record and do not release. Park the head, then ask the user:
 
    ```
    python3 "<plugin-root>/scripts/watch_review.py" block -C <repo> N \

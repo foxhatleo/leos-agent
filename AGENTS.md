@@ -296,7 +296,10 @@ these contracts when changing it or `scripts/ghreview.py`:
   SHA-bound evidence. Resolution is public; an outdated line is not a fix.
 - Watcher emission/staging is not completion. Require coverage and successful
   intended actions at that SHA; retain leases, bounded retries, and failure
-  reports. Partial coverage blocks readiness, not a verified blocking verdict.
+  reports. Partial coverage blocks readiness, not a verified blocking verdict:
+  `record` accepts a seriously-problematic report with files unread (its
+  record keeps `coverage_complete: false`); any other verdict needs them read.
+  A renew refused as superseded means stop work on that head and report it.
   A decision only Leo can make parks the head (`block`) instead of burning
   retries. The first tick emits without settling.
 - A verdict stage records with `coverage_complete` (every changed

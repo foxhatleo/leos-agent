@@ -31,7 +31,9 @@ both SHAs with `Result: blocked`; the watcher emits the new head itself.
 
 With a claim token in the brief, renew it about every 15 minutes of work:
 `python3 "<plugin-root>/scripts/watch_review.py" renew -C <repo-dir> N --claim TOKEN`.
-Never record or release it; the parent does.
+Never record or release it; the parent does. If renew refuses the claim
+(superseded or released), another worker owns the head: stop, make no further
+mutation, and report the refusal with `Result: blocked`.
 
 CI is not part of the review. Do not investigate failing or pending checks,
 and never let CI state move the verdict. You may run `gh pr checks N -R OWNER/REPO`
@@ -336,8 +338,8 @@ them into one list. Each section has:
 - Cross-model lens: not run (and why), or route, requested and reported model,
   `independence_verified`, cost, and that the PR diff was sent to that provider.
 - Absolute path to stage-result.json. Watchers may record completion only if
-  review coverage and all intended staging/actions completed successfully at
-  that SHA.
+  review coverage (or, for seriously-problematic, its staged blocking finding)
+  and all intended staging/actions completed successfully at that SHA.
 - Last, separated from the verdict: `CI (informational): <state>`.
 
 Say comments/replies are pending only when they were actually staged. Never
