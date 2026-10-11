@@ -34,12 +34,14 @@ to a more expensive skill model. Announce "Using attach-pr".
 ## How the attach works (and why it's safe)
 
 ```
-gh() { echo "$PR_URL"; }; cd <workdir>; PR_URL=<pr-url> gh pr create --draft --base <base> --head <branch>
+function gh { echo "$PR_URL"; }; cd <workdir>; PR_URL=<pr-url> \gh pr create --draft --base <base> --head <branch>
 ```
 
-`gh()` shadows the real CLI with a function that prints the PR URL and exits. No network
+The `gh` function shadows the real CLI: it prints the PR URL and exits. No network
 call happens, no PR is created, nothing is pushed. The app matches on the command *shape*
-(`gh pr create …`) and scrapes the URL from stdout.
+(`gh pr create …`) and scrapes the URL from stdout. The `function` keyword and the
+backslash in `\gh` stop a user alias named `gh` from rewriting either the definition or
+the call; keep both.
 
 Four properties to preserve:
 
@@ -168,7 +170,7 @@ Run the resolver's `attach_command` as a **single** Bash call, substituting a wo
 created in step 3 if applicable:
 
 ```bash
-gh() { echo "$PR_URL"; }; cd '<workdir>'; PR_URL='<pr_url>' gh pr create --draft --base '<base_ref>' --head '<branch>'
+function gh { echo "$PR_URL"; }; cd '<workdir>'; PR_URL='<pr_url>' \gh pr create --draft --base '<base_ref>' --head '<branch>'
 ```
 
 When the payload has `rtk_bypass: true`, the last segment starts `RTK_DISABLED=1 PR_URL=…`;

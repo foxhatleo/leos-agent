@@ -147,12 +147,15 @@ def rtk_rewrite(command):
     """rtk's Claude hook, reduced to the rule that matters here: split on `;`,
     strip the env prefix, skip a segment whose prefix holds RTK_DISABLED=, and
     turn `gh pr ...` (without --json) into `rtk gh pr ...`, which runs the
-    real gh. Returns the rewritten command, or None when nothing changes."""
+    real gh. Returns the rewritten command, or None when nothing changes.
+    A leading backslash (alias suppression) is assumed not to stop it: the
+    opt-out, not the spelling, is what keeps the stub safe."""
     segments, changed = [], False
     for segment in command.split(";"):
         body = segment.strip()
         match = ENV_PREFIX.match(body)
         prefix, rest = (match.group(0), body[match.end():]) if match else ("", body)
+        rest = rest[1:] if rest.startswith("\\gh") else rest
         if "RTK_DISABLED=" not in prefix and re.match(r"gh\s+(pr|issue|run|repo|api|release)(\s|$)", rest) \
                 and "--json" not in rest:
             body, changed = prefix + "rtk " + rest, True
@@ -175,6 +178,26 @@ class AttachCommand(unittest.TestCase):
             env = {"PATH": "/nonexistent", "HOME": tmp}
             result = subprocess.run(["/bin/bash", "-c", command], env=env, capture_output=True, text=True)
         self.assertEqual((result.returncode, result.stdout), (0, "https://github.com/o/r/pull/7\n"))
+
+    def test_a_user_alias_named_gh_neither_breaks_nor_bypasses_the_stub(self):
+        """Claude Code's Bash tool replays the user's aliases. With `gh() {`
+        an alias made bash reject the line and would have sent the call to the
+        alias's wrapper; a fake gh on PATH proves the real CLI never runs."""
+        url = "https://github.com/o/r/pull/7"
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp) / "gh"
+            fake.write_text("#!/bin/sh\necho REAL-GH\n")
+            fake.chmod(0o755)
+            command = resolver.build_attach_command(tmp, url, "main", "b", rtk=True)
+            for shell, setup in (("/bin/bash", "shopt -s expand_aliases\n"), ("/bin/zsh", "")):
+                if not os.path.exists(shell):
+                    continue
+                for alias in ("alias gh='op plugin run -- gh'\n", "alias gh='REAL=1 gh'\n"):
+                    with self.subTest(shell=shell, alias=alias):
+                        script = setup + alias + "op() { command gh; }\n" + command
+                        env = {"PATH": "%s:/usr/bin:/bin" % tmp, "HOME": tmp}
+                        result = subprocess.run([shell, "-c", script], env=env, capture_output=True, text=True)
+                        self.assertEqual((result.returncode, result.stdout), (0, url + "\n"), result.stderr)
 
 
 class Ownership(unittest.TestCase):
