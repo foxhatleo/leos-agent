@@ -115,7 +115,7 @@ The policy in `rules/preferences.md` applies to work on this repo too.
   completion rows depend on the installed build firing the hook, and the
   report names silent harnesses.
 - Tier labels are capability choices, not a guaranteed price ordering. Unknown
-  IDs, ambiguous prices, and input/output crossovers remain explicit diagnostics.
+  IDs, ambiguous prices, and input/output/cache-rate crossovers remain explicit diagnostics.
   Price aliases must never rewrite the model ID sent to a harness. Catalog
   prices establish neither account access nor subscription-credit charges.
   Routing tests prove selection behavior, not equal quality: compare representative

@@ -227,18 +227,42 @@ def _steps(match):
     return sorted(steps, key=lambda step: step[0])
 
 
-def _rates_at(match, steps, tokens):
-    """Prompt and completion rates for a request of `tokens` prompt tokens."""
+CACHE_KEYS = ("input_cache_read", "input_cache_write")
+
+
+def _rate(row, base, key, cached):
+    """`key`'s rate in conditional `row` over `base`. A model that lists no
+    rate for a cache category anywhere bills those tokens as prompt tokens."""
+    if key in CACHE_KEYS and key not in cached:
+        key = "prompt"
+    return decimal(row.get(key, base.get(key)))
+
+
+def _cached(match):
+    """The cache categories the base row or any conditional row of `match` prices."""
+    rows = [match.pricing] + [v for v in match.pricing.get("overrides", []) if isinstance(v, dict)]
+    return {key for row in rows for key in row if key in CACHE_KEYS}
+
+
+def _rates_at(match, steps, tokens, keys):
+    """The `keys` rates for a request of `tokens` prompt tokens."""
     active = match.pricing
     for threshold, override in steps:
         if threshold <= tokens:
             active = override
-    return [decimal(active.get(key, match.pricing.get(key))) for key in ("prompt", "completion")]
+    cached = _cached(match)
+    return [_rate(active, match.pricing, key, cached) for key in keys]
 
 
 def compare(child, parent, catalog=None):
     """Return allowed/over-ceiling/unknown with auditable reference matches.
 
+Prompt and completion rates decide the ceiling. A child is allowed only when
+its cache read and cache write rates are no dearer as well: a dispatched child
+mostly re-reads cached context, so one cheaper per prompt token but dearer per
+cached token is a crossover (basis cache-rate), never proof of savings. A
+model that lists no rate for a cache category is compared at its prompt rate
+there, which is what it bills those tokens at.
 Prompt-size tiers are compared at every threshold either model has, with both
 models priced for the same request. A child priced at or above the parent at
 the base rate is over the ceiling even when a long-prompt tier crosses over:
@@ -256,7 +280,21 @@ request. Fixed request/reasoning fees make this comparison unknown.
     if c.model["id"] == p.model["id"]:
         report["status"] = "allowed"
         return report
+    status, basis = _dominance(c, p, ("prompt", "completion"))
+    # A cache category counts when either model prices it.
+    cache = [key for key in CACHE_KEYS if key in _cached(c) | _cached(p)]
+    if status == "allowed" and cache:
+        status, basis = _dominance(c, p, ("prompt", "completion", *cache))
+        if status == "unknown":
+            basis = "cache-rate"
+    report["status"] = status
+    if basis:
+        report["basis"] = basis
+    return report
 
+
+def _dominance(c, p, keys):
+    """(status, basis) comparing the `keys` rates of two priced matches."""
     def ranges(match):
         prices = match.pricing
         if any(decimal(prices.get(k, 0)) != 0 for k in ("request", "internal_reasoning")):
@@ -264,9 +302,9 @@ request. Fixed request/reasoning fees make this comparison unknown.
         overrides = prices.get("overrides", [])
         if not isinstance(overrides, list) or any(not isinstance(v, dict) for v in overrides):
             return None
-        out = []
-        for key in ("prompt", "completion"):
-            values = [decimal(prices.get(key))] + [decimal(v.get(key, prices.get(key))) for v in overrides]
+        out, cached = [], _cached(match)
+        for key in keys:
+            values = [_rate(row, prices, key, cached) for row in [prices] + overrides]
             if None in values:
                 return None
             out.append((min(values), max(values)))
@@ -274,23 +312,22 @@ request. Fixed request/reasoning fees make this comparison unknown.
 
     cr, pr = ranges(c), ranges(p)
     if cr is None or pr is None:
-        return report
+        return "unknown", None
     cs, ps = _steps(c), _steps(p)
     if cs is not None and ps is not None:
         points = sorted({0} | {t for t, _ in cs} | {t for t, _ in ps})
         rates = [pair for point in points
-                 for pair in zip(_rates_at(c, cs, point), _rates_at(p, ps, point))]
+                 for pair in zip(_rates_at(c, cs, point, keys), _rates_at(p, ps, point, keys))]
         if any(None in pair for pair in rates):
-            return report
-        base = rates[:2]
+            return "unknown", None
+        base = rates[:len(keys)]
         if all(cv <= pv for cv, pv in rates):
-            report["status"] = "allowed"
-        elif all(cv >= pv for cv, pv in rates) and any(cv > pv for cv, pv in rates):
-            report["status"] = "over-ceiling"
-        elif all(cv >= pv for cv, pv in base) and any(cv > pv for cv, pv in base):
-            report["status"] = "over-ceiling"
-            report["basis"] = "base-rate"
-        return report
+            return "allowed", None
+        if all(cv >= pv for cv, pv in rates) and any(cv > pv for cv, pv in rates):
+            return "over-ceiling", None
+        if all(cv >= pv for cv, pv in base) and any(cv > pv for cv, pv in base):
+            return "over-ceiling", "base-rate"
+        return "unknown", None
 
     def schedule(match):
         return [json.dumps({k: v for k, v in override.items() if k not in PRICE_KEYS}, sort_keys=True)
@@ -300,18 +337,18 @@ request. Fixed request/reasoning fees make this comparison unknown.
         # When schedules agree, compare corresponding rates. Taking unrelated
         # min/max ranges would miss Terra > Sol under every matching condition.
         pairs = [(c.pricing, p.pricing)] + list(zip(c.pricing.get("overrides", []), p.pricing.get("overrides", [])))
-        rates = [(decimal(cv.get(k, c.pricing[k])), decimal(pv.get(k, p.pricing[k])))
-                 for cv, pv in pairs for k in ("prompt", "completion")]
+        rates = [(_rate(cv, c.pricing, k, _cached(c)), _rate(pv, p.pricing, k, _cached(p)))
+                 for cv, pv in pairs for k in keys]
         if all(cv <= pv for cv, pv in rates):
-            report["status"] = "allowed"
-        elif all(cv >= pv for cv, pv in rates) and any(cv > pv for cv, pv in rates):
-            report["status"] = "over-ceiling"
-        return report
+            return "allowed", None
+        if all(cv >= pv for cv, pv in rates) and any(cv > pv for cv, pv in rates):
+            return "over-ceiling", None
+        return "unknown", None
     if all(cv[1] <= pv[0] for cv, pv in zip(cr, pr)):
-        report["status"] = "allowed"
-    elif all(cv[0] >= pv[1] for cv, pv in zip(cr, pr)) and any(cv[0] > pv[1] for cv, pv in zip(cr, pr)):
-        report["status"] = "over-ceiling"
-    return report
+        return "allowed", None
+    if all(cv[0] >= pv[1] for cv, pv in zip(cr, pr)) and any(cv[0] > pv[1] for cv, pv in zip(cr, pr)):
+        return "over-ceiling", None
+    return "unknown", None
 
 
 def refresh(force=False, opener=None):
