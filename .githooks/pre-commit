@@ -7,6 +7,10 @@ export LEOS_AGENT_PRICE_REFRESH=off
 export PYTHONDONTWRITEBYTECODE=1
 root=$(git rev-parse --show-toplevel)
 cd "$root"
+# Git hands hooks repository-locating variables; from a linked worktree they
+# are absolute paths. Tests that build fixture repositories must not inherit
+# them, or their git commands act on this repository instead.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
 python3 -m unittest discover -s tests
 node --test tests/js/*.test.js
 python3 scripts/check.py
