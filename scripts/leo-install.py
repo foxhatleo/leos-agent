@@ -23,7 +23,7 @@ hashes of earlier releases' copies, or this release's own copy. A header saying
 
 Usage:
     leo-install.py <harness> [--dry-run | --uninstall | --check | --rollback] [--force [PATH ...]]
-    leo-install.py claude --statusline [--force PATH]    (opt in to the cost status line)
+    leo-install.py claude --statusline [--force PATH]    (opt in to the cost status line launcher)
 
 Harnesses: claude, codex, cursor, hermes, pi, opencode
 """
@@ -1005,9 +1005,33 @@ def manage_opencode_config(root, cfg, args, receipt):
 	return results
 
 
-def statusline_value(root):
-	"""The statusLine setting this plugin's script is shown through."""
-	return {"type": "command", "command": "python3 " + shlex.quote(str(root / "scripts" / "statusline.py"))}
+SHIM_MARKER = "Managed by leos-agent"
+
+
+def shim_path():
+	"""The launcher's home, in the data directory (beside the install backups)."""
+	import state
+	root = Path(state._data_root()).expanduser()
+	if not root.is_absolute():
+		raise ConfigError(f"LEOS_AGENT_LOCAL_PATH={str(root)!r} is not an absolute path; set it to one, or unset it")
+	return root / "bin" / "statusline"
+
+
+def shim_text(root, cfg):
+	"""scripts/statusline_shim.py with the root it is installed from and the Claude
+	config directory baked in. The status line itself is found at run time."""
+	text = (root / "scripts" / "statusline_shim.py").read_text(encoding="utf-8")
+	for name, value in (("FALLBACK", str(root)), ("CONFIG", str(cfg))):
+		line = f'{name} = ""\n'
+		if text.count(line) != 1:
+			raise ValueError(f"{display(root / 'scripts' / 'statusline_shim.py')} lost its {name} placeholder")
+		text = text.replace(line, f"{name} = {json.dumps(value)}\n")
+	return text
+
+
+def statusline_value(shim):
+	"""The statusLine setting: the stable launcher, not a versioned plugin path."""
+	return {"type": "command", "command": "python3 " + shlex.quote(str(shim))}
 
 
 def names_path(args, path):
@@ -1019,13 +1043,47 @@ def names_path(args, path):
 	return any(os.path.realpath(os.path.abspath(os.path.expanduser(named))) == target for named in force)
 
 
+def manage_shim(shim, text, record, args):
+	"""Write, keep or take back the launcher file. Returns (result, sha256 or None)."""
+	from install_transaction import ACTIVE
+	label = display(shim)
+	existed = shim.is_file()
+	if shim.exists() and not existed:
+		return Result(label, "error", "not a regular file; refusing to replace it"), None
+	raw = shim.read_bytes() if existed else None
+	current = raw.decode("utf-8", "replace") if existed else ""
+	lines = current.split("\n")
+	mine = existed and ((len(lines) > 1 and SHIM_MARKER in lines[1])
+		or (record is not None and record.get("shim_sha256") == digest(raw)))
+	if args.uninstall:
+		if not existed:
+			return Result(label, "unchanged", "not present"), None
+		if not mine:
+			return Result(label, "preserved", "leos-agent did not write it"), None
+		if args.writes:
+			remove_file(shim)
+		return Result(label, "removed"), None
+	if existed and not mine and not names_path(args, shim):
+		return Result(label, "conflict", f"leos-agent did not write it; move it, or re-run with --force {shim}"), None
+	sha = digest(encode(text))
+	if existed and current == text:
+		return Result(label, "unchanged"), sha
+	diff = unified(shim, current, text) if args.dry_run else ""
+	if args.writes:
+		if not shim.parent.is_dir():
+			os.makedirs(shim.parent, mode=0o700)
+		ACTIVE.get().stage(shim, encode(text), 0o700)
+	return Result(label, "updated" if existed else "created", diff=diff), sha
+
+
 def manage_statusline(root, cfg, args, receipt):
-	"""Set, keep or take back the `statusLine` in Claude's settings.json.
+	"""Set, keep or take back the launcher and the `statusLine` that runs it.
 
 	Written only on --statusline, and only when the setting is absent or already
 	ours; a different statusLine is a conflict until --force names the file. The
-	receipt keeps the value written, the one it displaced and whether the file was
-	created, so uninstall (or rollback) puts the user's own setting back.
+	receipt keeps the value written, the one it displaced (with its source text),
+	whether the file was created, and the launcher's hash, so uninstall (or
+	rollback) puts the user's own setting back and removes the launcher.
 	"""
 	from jsonc_edit import drop_property, is_empty, properties, set_property
 	path = cfg / "settings.json"
@@ -1041,17 +1099,20 @@ def manage_statusline(root, cfg, args, receipt):
 		return []
 	existed = path.is_file()
 	if path.exists() and not existed:
-		return Result(label, "error", "not a regular file; refusing to edit it")
+		return [Result(label, "error", "not a regular file; refusing to edit it")]
 	current, crlf = read_text(path) if existed else ("{}\n", False)
 	_, spans, _ = properties(current)
 	present = "statusLine" in spans
 	value = spans["statusLine"][2] if present else None
 	delete = False
+	extra = []
 	if args.uninstall:
+		if record.get("shim"):
+			extra.append(manage_shim(Path(record["shim"]), "", record, args)[0])
 		if not present:
-			return Result(label, "unchanged", "statusLine already gone")
+			return [Result(label, "unchanged", "statusLine already gone")] + extra
 		if value != record["value"]:
-			return Result(label, "preserved", "statusLine changed since leos-agent set it")
+			return [Result(label, "preserved", "statusLine changed since leos-agent set it")] + extra
 		if record.get("had_prior"):
 			text = record.get("prior_text")
 			if not isinstance(text, str) or json.loads(text) != record.get("prior"):
@@ -1064,15 +1125,20 @@ def manage_statusline(root, cfg, args, receipt):
 		if delete:
 			detail = "leos-agent created it and nothing else is in it"
 	else:
-		wanted = statusline_value(root)
 		if not cfg.is_dir():
 			raise ConfigError(f"{display(cfg)} does not exist, so claude is not configured here; "
 				f"{SETUP_HINTS['claude']}. leo-install never creates a harness config directory")
+		shim = shim_path()
+		wanted = statusline_value(shim)
 		ours = record is not None and value == record["value"]
 		if present and value != wanted and not ours and not names_path(args, path):
-			return Result(label, "conflict", "settings.json already sets a different statusLine; re-run with "
-				f"--force {path} to replace it (uninstall puts it back)")
+			return [Result(label, "conflict", "settings.json already sets a different statusLine; re-run with "
+				f"--force {path} to replace it (uninstall puts it back)")]
+		shim_result, sha = manage_shim(shim, shim_text(root, cfg), record, args)
+		extra.append(shim_result)
 		new = {"value": wanted}
+		if sha:
+			new.update(shim=str(shim), shim_sha256=sha)
 		if ours:
 			new.update({k: record[k] for k in ("had_prior", "prior", "prior_text", "created_file") if k in record})
 		elif present and value != wanted:
@@ -1080,9 +1146,7 @@ def manage_statusline(root, cfg, args, receipt):
 				created_file=False)
 		elif not present:
 			new.update(created_file=not existed)
-		if present and value == wanted and not ours:
-			new = None  # the user's own identical setting: not ours to take back
-		receipt.meta = {"statusline": new} if new else None
+		receipt.meta = {"statusline": new}
 		updated = current if present and value == wanted else set_property(current, "statusLine", wanted)
 		detail = ""
 	if updated == current and existed:
@@ -1095,7 +1159,7 @@ def manage_statusline(root, cfg, args, receipt):
 			remove_file(path)
 		else:
 			atomic_write(path, updated, crlf)
-	return Result(label, status, detail, diff=diff)
+	return [Result(label, status, detail, diff=diff)] + extra
 
 
 def finish_receipt(receipt, args, results):

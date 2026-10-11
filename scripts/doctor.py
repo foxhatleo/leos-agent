@@ -20,6 +20,7 @@ import routing
 import routing_engine
 from routing_engine import CAPABILITIES
 import settings_probe
+import statusline_shim
 import state
 
 # The age past which a catalog is called stale: the refresher retries daily,
@@ -146,7 +147,8 @@ def subagent_model(loaded, issues):
 def statusline(loaded, issues):
     """Whether Claude's statusLine is leos-agent's cost line. Opt-in (leo-install.py
     claude --statusline); reported, never changed here. Another tool's command is
-    named only as "other", never echoed."""
+    named only as "other", never echoed. The launcher is read, not run: its two
+    baked paths go through the same resolution it uses at run time."""
     found = settings_probe.setting("statusLine", loaded, env_key=False)
     value = found["value"]
     command = value.get("command") if isinstance(value, dict) else None
@@ -158,16 +160,43 @@ def statusline(loaded, issues):
         script = shlex.split(command)[-1] if isinstance(command, str) else ""
     except ValueError:
         script = ""
-    if os.path.basename(script) != "statusline.py" or os.path.basename(os.path.dirname(script)) != "scripts":
+    name, folder = os.path.basename(script), os.path.basename(os.path.dirname(script))
+    if not ((name, folder) in (("statusline", "bin"), ("statusline.py", "scripts"))):
         result["status"] = "another statusLine is set; leos-agent leaves it alone"
         return result
-    result.update(installed=True, script=settings_probe.clean(script, 200), script_exists=os.path.isfile(script))
-    if result["script_exists"]:
-        result["status"] = "installed"
+    result.update(installed=True, script=settings_probe.clean(script, 200))
+    again = "re-run leo-install.py claude --statusline"
+    try:
+        with open(script, encoding="utf-8") as handle:
+            text = handle.read()
+    except (OSError, UnicodeDecodeError):
+        text = None
+    if name == "statusline.py":
+        result["script_exists"] = text is not None
+        result["status"] = "installed" if text is not None else "installed but the script is gone"
+        if text is None:
+            issues.append(f"statusLine points at a statusline.py that no longer exists; {again}")
+        return result
+    lines = (text or "").split("\n")
+    marked = len(lines) > 1 and "Managed by leos-agent" in lines[1]
+    constants = {}
+    for key in ("FALLBACK", "CONFIG"):
+        match = re.search(rf'(?m)^{key} = ("(?:[^"\\]|\\.)*")$', text or "")
+        try:
+            constants[key] = json.loads(match.group(1)) if match else None
+        except ValueError:
+            constants[key] = None
+    if text is None or not marked or None in constants.values():
+        result.update(status="installed but the launcher is missing or not leos-agent's", resolves=False)
+        issues.append(f"statusLine points at a launcher that is missing or not leos-agent's; {again}")
+        return result
+    root = statusline_shim.resolve(constants["FALLBACK"], constants["CONFIG"])
+    result.update(resolves=root is not None, plugin_root=settings_probe.clean(root, 200) if root else None)
+    if root is None:
+        result["status"] = "installed but the launcher finds no plugin to run"
+        issues.append(f"the statusLine launcher finds no leos-agent plugin with scripts/statusline.py; {again}")
     else:
-        result["status"] = "installed but the script is gone"
-        issues.append("statusLine points at a leos-agent statusline.py that no longer exists; "
-                      "re-run leo-install.py claude --statusline (after an upgrade the plugin path changes)")
+        result["status"] = "installed"
     return result
 
 

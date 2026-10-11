@@ -13,6 +13,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 import dispatch_log
 import statusline
+import statusline_shim
 
 CATALOG = {"schema": 1, "source": "fixture", "fetched_at": 0, "models": [
     {"id": "anthropic/claude-haiku-4.5", "pricing": {"prompt": "0.000001", "completion": "0.000005"}}]}
@@ -117,6 +118,89 @@ class Process(unittest.TestCase):
             self.assertEqual((done.returncode, done.stderr), (0, ""))
             self.assertEqual(done.stdout, "Opus | children cheap 1 standard 1\n")
             self.assertEqual(sorted(p.name for p in local.iterdir()), before)
+
+
+def plugin(base, version, with_script=True):
+    root = Path(base) / version
+    (root / "scripts").mkdir(parents=True)
+    if with_script:
+        (root / "scripts" / "statusline.py").write_text(
+            f'import sys\nsys.stdin.read()\nprint("from {version}")\n')
+    return root
+
+
+class Shim(unittest.TestCase):
+    """The launcher settings.json points at: resolves the current plugin at run time."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name)
+        self.cache = self.tmp / "cfg" / "plugins" / "cache" / "market" / "leos-agent"
+
+    def resolve(self, fallback="", environ=None):
+        return statusline_shim.resolve(fallback, str(self.tmp / "cfg"), environ or {})
+
+    def test_the_template_has_each_placeholder_exactly_once(self):
+        text = (SCRIPTS / "statusline_shim.py").read_text()
+        for name in ("FALLBACK", "CONFIG"):
+            self.assertEqual(text.count(f'{name} = ""\n'), 1)
+        self.assertIn("Managed by leos-agent", text.split("\n")[1])
+
+    def test_the_explicit_root_wins_then_the_newest_cached_version_then_the_fallback(self):
+        plugin(self.cache, "12.2026100100.0")
+        new = plugin(self.cache, "12.2026101103.0")
+        plugin(self.cache, "12.2026101200.0", with_script=False)
+        other = plugin(self.tmp / "other", "x")
+        fallback = plugin(self.tmp / "fb", "y")
+        self.assertEqual(self.resolve(str(fallback), {"LEOS_AGENT_ROOT": str(other)}), str(other))
+        self.assertEqual(self.resolve(str(fallback)), str(new))
+        # Versions compare as numbers: 9.x is older than 12.x although "9" sorts after "1" as text.
+        plugin(self.cache, "9.2026999999.0")
+        self.assertEqual(self.resolve(str(fallback)), str(new))
+        import shutil
+        shutil.rmtree(self.cache)
+        self.assertEqual(self.resolve(str(fallback)), str(fallback))
+        self.assertIsNone(self.resolve(str(self.tmp / "gone")))
+        self.assertEqual(self.resolve(str(fallback), {"LEOS_AGENT_ROOT": str(self.tmp / "nothing")}), str(fallback))
+
+    def test_the_environments_config_dir_outranks_the_baked_one(self):
+        elsewhere = plugin(self.tmp / "else" / "plugins" / "cache" / "m" / "leos-agent", "1.0.0")
+        plugin(self.cache, "2.0.0")
+        self.assertEqual(self.resolve(environ={"CLAUDE_CONFIG_DIR": str(self.tmp / "else")}), str(elsewhere))
+
+    def render(self, fallback, config):
+        text = (SCRIPTS / "statusline_shim.py").read_text()
+        return (text.replace('FALLBACK = ""', "FALLBACK = " + json.dumps(str(fallback)), 1)
+                .replace('CONFIG = ""', "CONFIG = " + json.dumps(str(config)), 1))
+
+    def launch(self, shim, **env):
+        base = {k: v for k, v in os.environ.items() if k not in ("LEOS_AGENT_ROOT", "CLAUDE_CONFIG_DIR")}
+        base.update(HOME=str(self.tmp), PYTHONDONTWRITEBYTECODE="1", **env)
+        return subprocess.run([sys.executable, str(shim)], input=json.dumps(event()), env=base,
+                              capture_output=True, text=True, timeout=30, cwd=str(self.tmp))
+
+    def test_running_the_launcher_runs_the_resolved_script_in_one_process(self):
+        plugin(self.cache, "12.2026101103.0")
+        shim = self.tmp / "statusline"
+        shim.write_text(self.render(self.tmp / "gone", self.tmp / "cfg"))
+        done = self.launch(shim)
+        self.assertEqual((done.returncode, done.stdout, done.stderr), (0, "from 12.2026101103.0\n", ""))
+        # An upgrade drops a newer version into the cache; nothing is reinstalled.
+        plugin(self.cache, "12.2026101104.0")
+        self.assertEqual(self.launch(shim).stdout, "from 12.2026101104.0\n")
+
+    def test_no_plugin_anywhere_prints_the_plainest_line_and_succeeds(self):
+        shim = self.tmp / "statusline"
+        shim.write_text(self.render(self.tmp / "gone", self.tmp / "cfg"))
+        done = self.launch(shim)
+        self.assertEqual((done.returncode, done.stdout, done.stderr), (0, "Claude\n", ""))
+
+    def test_the_real_script_runs_through_the_launcher(self):
+        shim = self.tmp / "statusline"
+        shim.write_text(self.render(SCRIPTS.parent, self.tmp / "cfg"))
+        done = self.launch(shim, LEOS_AGENT_LOCAL_PATH=str(self.tmp / "local"), LEOS_AGENT_PRICE_REFRESH="off")
+        self.assertEqual((done.returncode, done.stdout, done.stderr), (0, "Opus\n", ""))
 
 
 if __name__ == "__main__":

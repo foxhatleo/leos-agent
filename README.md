@@ -193,17 +193,21 @@ Optional cost status line, never installed by default:
 python3 "<plugin-root>/scripts/leo-install.py" claude --statusline
 ```
 
-It sets `statusLine` in Claude's `settings.json` to `scripts/statusline.py`,
-which prints one short line from Claude Code's status-line JSON and the local
-dispatch log: the model, Claude Code's own session cost estimate, and this
-session's children by tier with their reference cost (the same counting and
-pricing as `dispatch_log.py report`; a reference estimate, not a bill). It reads
-local files only, never the network or a model, and falls back to the model name
-on any error. A different `statusLine` already set is a conflict:
-`--force <path to settings.json>` replaces it, and `--uninstall` or
-`--rollback` puts your previous one back. The command embeds the plugin path,
-which changes on upgrade: rerun the command then (`--check --statusline` reports
-a stale path, and `/leos-agent:doctor` reports whether the line is installed).
+It sets `statusLine` in Claude's `settings.json` to a small launcher it writes to
+`~/.leos-agent-local/bin/statusline` (private, outside the versioned plugin cache).
+At run time the launcher picks the plugin root from `LEOS_AGENT_ROOT`, else the
+newest `leos-agent` version in Claude's plugin cache, else the root it was
+installed from, and runs `scripts/statusline.py` in the same process, so plugin
+upgrades never need a reinstall. The script prints one short line from Claude
+Code's status-line JSON and the local dispatch log: the model, Claude Code's own
+session cost estimate, and this session's children by tier with their reference
+cost (the same counting and pricing as `dispatch_log.py report`; a reference
+estimate, not a bill). It reads local files only, never the network or a model,
+and prints the model name, or just "Claude", on any error. A different
+`statusLine` already set is a conflict: `--force <path to settings.json>`
+replaces it, and `--uninstall` or `--rollback` puts your previous one back and
+removes the launcher. `/leos-agent:doctor` reports whether the line is installed
+and the launcher resolves a plugin.
 
 ### Codex
 
