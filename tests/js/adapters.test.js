@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { LeosAgent } from '../../index.js';
+import plugin from '../../index.js';
+
+const LeosAgent = plugin.server;
 import piExtension from '../../pi-extension.js';
 import { pluginRoot, runPython } from '../../scripts/harness_bridge.js';
 

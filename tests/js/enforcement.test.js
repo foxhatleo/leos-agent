@@ -5,7 +5,9 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { LeosAgent } from '../../index.js';
+import plugin from '../../index.js';
+
+const LeosAgent = plugin.server;
 import piExtension from '../../pi-extension.js';
 
 const root = resolve(import.meta.dirname, '../..');

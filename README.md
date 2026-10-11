@@ -121,7 +121,8 @@ operation.
 | Claude Code | SessionStart, including forks | `agent.spawn` model setting on builds where it covers teammates too ([hooks/README.md](hooks/README.md#claude-agentspawn-mod)), else Agent/Task argument correction; native profiles | SubagentStop final message, child transcript fallback, child usage from transcript | On the Agent/Task path the first dispatch may precede parent transcript persistence; missing parent data permits dispatch with a diagnostic. Forced settings/provider substitutions also limit enforcement. |
 | Codex | Separate native SessionStart hook | Tier-enforcing explicit spawn selection; model-free native profiles | SubagentStop final message, rollout fallback, cumulative token counts | Hooks need native trust. A renamed multi-agent tool namespace is not matched. Other/customized profiles can still override spawn settings. Encrypted briefs make the escalation marker unobservable; recorded as such. |
 | Cursor | Native always-apply rule | Installed user agents; resolved subagentStart model ceiling | subagentStop summary and status, joined by call id; no usage | No invented Task model argument; hook diagnostics distinguish planned models from completion. Worker no-delegation is instruction-only: no per-agent tool restriction, and no parent-agent identity at subagentStart. |
-| OpenCode | One registered rendered instruction | Native agent selection, confirmed through the SDK | `tool.execute.after` output of a foreground `task`, joined by call id, child model from task metadata; no usage | Task has no model field; a correction that cannot be applied blocks the task. A slash-command subtask's own model is not visible to the guard. Source/config paths must remain valid. |
+| OpenCode 1 (1.4+) | One registered rendered instruction | Native agent selection, confirmed through the SDK | `tool.execute.after` output of a foreground `task`, joined by call id, child model from task metadata; no usage | Task has no model field; a correction that cannot be applied blocks the task. A slash-command subtask's own model is not visible to the guard. Source/config paths must remain valid. |
+| OpenCode 2 | Plugin context hook, rendered once per session | `subagent` model argument, moved to the parent's model when the call or its agent would run over it; native agents listed through the plugin context | `execute.after` result of a foreground `subagent`, joined by call id, child model from the child session's own requests; no usage | `instructions` entries are not loaded. A background subagent's completion is not observed. Source/config paths must remain valid. |
 | Hermes | Frozen system-prompt section | Global native delegation-model ceiling when parent/model are observable | `subagent_stop` per child (`post_tool_call` only when the build lacks it); no usage | Native delegation has one global model, not separate per-task tiers. Older builds skip post-tool hooks for built-in tools; the report then says no completion signal was observed. |
 | Pi | Extension caches rendered body per session | Advisory policy; dispatches are logged without a model check | `tool_result` text and usage for a tool named `subagent` | No native per-spawn model guarantee for third-party subagent tools. |
 
@@ -252,8 +253,12 @@ python3 ~/.local/share/leos-agent/scripts/leo-install.py opencode
 Then restart OpenCode. The installer registers the checkout's plugin URI and
 one rendered instruction in the active config (`OPENCODE_CONFIG`, else
 `opencode.jsonc`, else `opencode.json`), and copies the native agent profiles
-(the four tiers, the reviewer and the read-only review lens) and skill/reference copies
-with the checkout's absolute path baked in. It preserves JSONC comments and
+(the four tiers, the reviewer and the read-only review lens) and, on OpenCode 1,
+skill/reference copies with the checkout's absolute path baked in. On OpenCode
+2, which the installer recognises from `opencode --version`, the plugin
+registers the skills itself: the installer copies none and takes back unchanged
+copies an earlier install left, keeping edited ones, which OpenCode then uses
+in place of the plugin's. It preserves JSONC comments and
 unrelated configuration, and uninstall edits the same file the install did.
 Inside OpenCode the install skill is `/leo-install`. Upgrade the checkout with
 `git pull --ff-only`, rerun the same command, and restart. The rendered
@@ -284,10 +289,12 @@ changes (each OpenCode 2 package update, or a pinned `leos-agent@<version>`
 spec). Installing from a checkout takes a `leos-agent` package entry out so the
 plugin does not load twice, and uninstall puts it back.
 
-OpenCode 2 runs only plugins written to its own plugin API and does not load
-`instructions` entries, so there the policy, the dispatch guard and the
-observer are inactive; the native agent profiles and skills still load. The
-doctor skill reports this for the `opencode` on `PATH`.
+OpenCode 2 does not load `instructions` entries. There the plugin adds the
+same policy to each session's model requests through its context hook,
+rendered once per session, so it follows upgrades and routing changes without
+a rerun. The native agent profiles load on both. OpenCode 1
+needs 1.4 or later, the first release that loads the plugin's single default
+export; the doctor skill reports both cases for the `opencode` on `PATH`.
 
 ### Hermes
 

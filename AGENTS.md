@@ -226,24 +226,41 @@ The policy in `rules/preferences.md` applies to work on this repo too.
   parent-agent identity at `subagentStart`; worker no-delegation is prose only.
   Validate against native templates and disclose runtime coverage separately.
 - **OpenCode** config can add skill directories (`skills.paths`, `skills.urls`)
-  and plugins get a `config(cfg)` hook, but the installer still copies skills
-  with the absolute plugin root baked in. Its config is
+  and plugins get a `config(cfg)` hook, but on OpenCode 1 the installer still
+  copies skills with the absolute plugin root baked in. Its config is
   JSONC with user comments; the installer preserves them and never writes the
   `instructions` line blind. `opencode plugin <pkg> --force` can report success
   while serving a lockfile-pinned old version. Git specs install directly.
-- **OpenCode 2** (checked on 2.0.25, sandboxed): `opencode plugin add <pkg>`
-  installs to `<cache>/opencode/npm/<spec>/<timestamp>/node_modules/<pkg>` and
-  registers it under `plugins`; a `plugin` array is folded into `plugins`. It
-  refuses a file:// link to a file ("configured plugin path must be a
-  directory") and loads only a default export with `id` and `setup(ctx)`, so
-  `index.js` fails to load there. `instructions` is accepted but not loaded;
-  only AGENTS.md is. Agent markdown with v1 `permission:` maps still loads
-  (normalised to `permissions` rules) and `~/.config/opencode/skills` is
-  discovered. A plain-object `{ id, setup, server }` default export loads
-  without depending on `@opencode/plugin`; `ctx.session.hook("context")` and
-  `ctx.tool.hook("execute.before")` are the v2 destinations for policy
-  injection and the guard. Open gap: no port yet, so on OpenCode 2 the policy,
-  guard and observer are inactive.
+- **OpenCode 2** (checked on 2.0.25 and 2.0.26, sandboxed, against a local
+  stub provider): `opencode plugin add <pkg>` installs to
+  `<cache>/opencode/npm/<spec>/<timestamp>/node_modules/<pkg>` and registers it
+  under `plugins`; a `plugin` array is folded into `plugins`. It refuses a
+  link to a file ("configured plugin path must be a directory"), so the
+  installer links the plugin directory, which OpenCode 1.4+ also loads through
+  `main`. It reads only the default export, which must hold `id` and
+  `setup(ctx)`; OpenCode 1.4+ calls that object's `server()` and ignores other
+  exports, so `index.js` exports nothing else (an older loader walking every
+  export would load a second copy). `instructions` is accepted but not loaded;
+  only AGENTS.md is. The plugin injects the policy with
+  `ctx.session.hook("context")` (push onto `event.system`), guards
+  `ctx.tool.hook("execute.before")` for the `subagent` tool, whose input is
+  `{agent, description, prompt, model?, sessionID?, background?}` and whose
+  child runs on `model`, else the agent's model, else the parent session's.
+  Assigning `event.input` changes what runs; a throw fails the call and the
+  model sees the message. `execute.after` carries `result.output` =
+  `{sessionID, status, output}`; a background launch has status `running`.
+  `ctx.agent.list()` returns `{data: [{id, model?}]}`; session info carries no
+  model, so the adapter remembers each session's model from its context
+  requests. The plugin registers the skills with `ctx.skill.transform`
+  (`scripts/opencode_skills.py` renders them as leo-install's copies; Skill.Info
+  is `{id, name, description?, autoinvoke?, path, content}`, `add` replaces by
+  id, and the skill tool lists files beside `path`). It skips an id OpenCode
+  already discovered, so a copy the user edited wins. leo-install probes
+  `opencode --version` (`opencode_version.py`, about 50 ms) and on 2.x copies
+  no skills and takes back unchanged ones; an unknown release keeps copying. Agent markdown with v1 `permission:` maps still loads; whether
+  `task: deny` covers `subagent` is unchecked, but the default
+  `experimental.subagent_depth` of 1 stops a child from dispatching. `opencode run --standalone` reads stdin when
+  it is not a terminal: give it `< /dev/null` in scripts.
 - **Hermes** has one global delegation model, not per-task tiers. Preserve that
   native setting; saved tier mappings do not implement per-task routing.
   `SOUL.md` migration applies only if the file already exists.

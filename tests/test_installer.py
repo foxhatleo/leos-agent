@@ -54,11 +54,19 @@ def args(**overrides):
     return types.SimpleNamespace(**values)
 
 
+def without_opencode(path):
+    """PATH minus every directory holding an `opencode`: the installer and
+    doctor probe its release, and a test must not depend on the machine's."""
+    return os.pathsep.join(d for d in path.split(os.pathsep) if d and not os.access(os.path.join(d, "opencode"), os.X_OK))
+
+
 def isolated(installer, home):
-    """Patches for a hermetic install: fake $HOME, empty machine-local config."""
+    """Patches for a hermetic install: fake $HOME, empty machine-local config,
+    no `opencode` on PATH."""
     return (
         mock.patch.object(installer.Path, "home", return_value=home),
-        mock.patch.dict(os.environ, {"LEOS_AGENT_LOCAL_PATH": str(home / ".leos-agent-local")}),
+        mock.patch.dict(os.environ, {"LEOS_AGENT_LOCAL_PATH": str(home / ".leos-agent-local"),
+                                     "PATH": without_opencode(os.environ.get("PATH", ""))}),
     )
 
 
@@ -120,7 +128,8 @@ class InstallerCase(unittest.TestCase):
 
     def cli(self, harness, *flags, env=None):
         environment = {**os.environ, "HOME": str(self.home), "LEOS_AGENT_LOCAL_PATH": str(self.home / ".leos-agent-local"),
-                       "LEOS_AGENT_PRICE_REFRESH": "off", "PYTHONDONTWRITEBYTECODE": "1", **(env or {})}
+                       "LEOS_AGENT_PRICE_REFRESH": "off", "PYTHONDONTWRITEBYTECODE": "1",
+                       "PATH": without_opencode(os.environ.get("PATH", "")), **(env or {})}
         for name in ("LEOS_AGENT_ROOT", "CLAUDE_PLUGIN_ROOT", "PLUGIN_ROOT"):
             environment.pop(name, None)
         return subprocess.run([sys.executable, str(ROOT / "scripts" / "leo-install.py"), harness, *flags],
@@ -613,6 +622,54 @@ class TestOpenCodePayload(InstallerCase):
         self.assertTrue(command.exists())
 
 
+class TestOpenCode2Skills(InstallerCase):
+    """On OpenCode 2 the plugin registers the skills (index.js), so copies go."""
+    harnesses = ("opencode",)
+
+    def on_path(self, version_output):
+        bin_dir = self.home / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        fake = bin_dir / "opencode"
+        fake.write_text("#!/bin/sh\necho '%s'\n" % version_output)
+        fake.chmod(0o755)
+        return {"PATH": str(bin_dir) + os.pathsep + without_opencode(os.environ.get("PATH", ""))}
+
+    def skills(self):
+        return sorted(p.relative_to(self.cfg("opencode")).as_posix()
+                      for p in (self.cfg("opencode") / "skills").rglob("*.md")) \
+            if (self.cfg("opencode") / "skills").is_dir() else []
+
+    def test_opencode_2_gets_no_skill_copies_and_the_rest_installs(self):
+        v2 = self.on_path("opencode v2.0.26")
+        self.assertClean(self.run_harness("opencode", env=v2), "install")
+        self.assertEqual(self.skills(), [])
+        self.assertTrue((self.cfg("opencode") / "agents" / "leo-cheap.md").is_file())
+        self.assertIn(ROOT.resolve().as_uri(), (self.cfg("opencode") / "opencode.json").read_text())
+        check = self.cli("opencode", "--check", env=v2)
+        self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
+
+    def test_moving_to_opencode_2_takes_back_unchanged_copies_and_keeps_edited_ones(self):
+        self.assertClean(self.run_harness("opencode"), "OpenCode 1 install")
+        copied = self.skills()
+        self.assertIn("skills/doctor/SKILL.md", copied)
+        self.assertIn("skills/review-pr/reference/procedure.md", copied)
+        edited = self.cfg("opencode") / "skills" / "handoff" / "SKILL.md"
+        edited.write_text(edited.read_text() + "\nMy own step.\n")
+        results = self.by_target(self.run_harness("opencode", env=self.on_path("2.1.0")))
+        self.assertEqual(self.skills(), ["skills/handoff/SKILL.md"])
+        self.assertIn("My own step.", edited.read_text())
+        kept = results[self.label(edited)]
+        self.assertEqual(kept.status, "preserved")
+        removed = results[self.label(self.cfg("opencode") / "skills" / "doctor" / "SKILL.md")]
+        self.assertEqual((removed.status, removed.detail), ("removed", self.installer.OPENCODE2_SKILLS))
+
+    def test_an_unknown_release_keeps_copying(self):
+        for env in (self.on_path("not a version"), {"PATH": without_opencode(os.environ.get("PATH", ""))}):
+            with self.subTest(env=env):
+                self.assertClean(self.run_harness("opencode", env=env), "install")
+                self.assertIn("skills/doctor/SKILL.md", self.skills())
+
+
 class TestOpenCodeConfigLocation(InstallerCase):
     harnesses = ("opencode",)
 
@@ -623,7 +680,7 @@ class TestOpenCodeConfigLocation(InstallerCase):
         target = elsewhere / "opencode.json"
         target.write_text("{}\n")
         self.assertClean(self.run_harness("opencode", env={"OPENCODE_CONFIG": str(target)}), "install")
-        self.assertIn("index.js", target.read_text())
+        self.assertIn(ROOT.resolve().as_uri(), target.read_text())
         self.assertFalse((self.cfg("opencode") / "opencode.json").exists())
         self.assertClean(self.run_harness("opencode", uninstall=True), "uninstall")
         self.assertEqual(target.read_text(), "{}\n")
@@ -636,7 +693,7 @@ class TestOpenCodeConfigLocation(InstallerCase):
         jsonc.write_text("{\n  // mine\n}\n")
         results = self.by_target(self.run_harness("opencode"))
         self.assertEqual(results["~/.config/opencode/opencode.json"].status, "removed")
-        self.assertIn("index.js", jsonc.read_text())
+        self.assertIn(ROOT.resolve().as_uri(), jsonc.read_text())
         self.assertFalse(json_path.exists())
         self.run_harness("opencode", uninstall=True)
         self.assertEqual(jsonc.read_text(), "{\n  // mine\n}\n")
@@ -671,7 +728,18 @@ class TestOpenCodeConfigLocation(InstallerCase):
         path = self.cfg("opencode") / "opencode.json"
         path.write_text('{"plugin": ["leos-agent@12.0.0"]}')
         self.run_harness("opencode")
-        self.assertEqual(json.loads(path.read_text())["plugin"], [(ROOT / "index.js").resolve().as_uri()])
+        self.assertEqual(json.loads(path.read_text())["plugin"], [ROOT.resolve().as_uri()])
+
+    def test_an_earlier_index_js_link_becomes_a_directory_link(self):
+        """OpenCode 2 refuses a link to a file; the directory loads on both."""
+        path = self.cfg("opencode") / "opencode.json"
+        old = (ROOT / "index.js").resolve().as_uri()
+        path.write_text(json.dumps({"plugin": [old]}) + "\n")
+        (self.cfg("opencode") / "leos-agent-paths.json").write_text(json.dumps({"plugin": [old], "instructions": []}))
+        self.assertClean(self.run_harness("opencode"), "install")
+        self.assertEqual(json.loads(path.read_text())["plugin"], [ROOT.resolve().as_uri()])
+        self.assertClean(self.run_harness("opencode", uninstall=True), "uninstall")
+        self.assertEqual(json.loads(path.read_text())["plugin"], [])
 
     def test_uninstall_puts_back_the_npm_spec_a_checkout_install_took_out(self):
         path = self.cfg("opencode") / "opencode.json"

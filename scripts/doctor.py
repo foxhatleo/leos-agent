@@ -13,6 +13,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dispatch_guard
+import opencode_version
 import payload
 import pricing
 import review_peer
@@ -34,26 +35,20 @@ INSTALL_STATUS = {0: "current", 1: "out-of-date", INSTALL_STATUS_PRESERVED: "pre
 
 def opencode_runtime(issues):
     """How the OpenCode on PATH takes the policy. OpenCode 1 loads the
-    `instructions` file leo-install renders; OpenCode 2 loads neither that
-    entry nor a plugin written to OpenCode 1's plugin API."""
+    `instructions` file leo-install renders; OpenCode 2 does not load that
+    entry, and the plugin adds the policy to each model request instead.
+    index.js's one default export needs OpenCode 1.4 or later."""
     result = {"policy_delivery": "rendered by leo-install into leos-agent-routing.md, registered under "
                                  "`instructions`; it changes only when leo-install reruns, and --check reports "
                                  "it out of date after a plugin or routing change"}
-    binary = shutil.which("opencode")
-    if not binary:
-        result["version"] = "opencode is not on PATH"
-        return result
-    try:
-        out = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=10).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        out = ""
-    result["version"] = out or "unknown"
-    match = re.search(r"(\d+)(?:\.\d+)+", out)
-    if match and int(match.group(1)) >= 2:
-        result["policy_delivery"] = "inactive: OpenCode 2 does not load `instructions` entries"
-        issues.append("OpenCode %s loads neither `instructions` entries nor leos-agent's OpenCode 1 plugin: the "
-                      "policy, dispatch guard and observer are inactive; native agents and skills still load"
-                      % match.group(0))
+    result["version"], version = opencode_version.probe()
+    if version and version >= (2, 0):
+        result["policy_delivery"] = ("rendered live by the plugin into each session's model requests "
+                                     "(OpenCode 2 context hook); `instructions` entries are not loaded")
+        result["skills"] = "registered by the plugin; leo-install keeps only copies the user edited"
+    elif version and version < (1, 4):
+        issues.append("OpenCode %d.%d cannot load leos-agent's plugin, which needs OpenCode 1.4 or later: the dispatch "
+                      "guard and observer are inactive" % version)
     return result
 
 

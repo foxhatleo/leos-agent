@@ -20,6 +20,13 @@ PROBED = ("CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL_FORCE", "CLA
     + settings_probe.THIRD_PARTY_PROVIDERS
 
 
+
+def without_opencode(path):
+    """PATH minus every directory holding an `opencode`: the installer and
+    doctor probe its release, and a test must not depend on the machine's."""
+    return os.pathsep.join(d for d in path.split(os.pathsep) if d and not os.access(os.path.join(d, "opencode"), os.X_OK))
+
+
 class DoctorCase(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -28,7 +35,8 @@ class DoctorCase(unittest.TestCase):
         self.claude = self.root / "claude"
         self.local = self.root / "local"
         env = patch.dict(os.environ, {"HOME": str(self.root / "home"), "CLAUDE_CONFIG_DIR": str(self.claude),
-                                      "LEOS_AGENT_LOCAL_PATH": str(self.local), "LEOS_AGENT_PRICE_REFRESH": "off"})
+                                      "LEOS_AGENT_LOCAL_PATH": str(self.local), "LEOS_AGENT_PRICE_REFRESH": "off",
+                                      "PATH": without_opencode(os.environ.get("PATH", ""))})
         env.start()
         self.addCleanup(env.stop)
         for name in OVERRIDES[1:] + PROBED:
@@ -106,19 +114,23 @@ class ReadOnlyDoctor(DoctorCase):
         self.assertEqual(result["installation_status"], "preserved-copies")
         self.assertIn("not current", result["installation_report"])
 
-    def test_opencode_2_on_path_is_reported_as_not_loading_the_policy(self):
+    def test_opencode_on_path_names_how_the_policy_arrives(self):
+        """OpenCode 2 takes the policy from the plugin's context hook; an
+        OpenCode 1 before 1.4 cannot load the plugin's default export."""
         bin_dir = self.root / "bin"
         bin_dir.mkdir()
         fake = bin_dir / "opencode"
-        for version, inactive in (("opencode v2.0.25", True), ("2.1.0", True), ("1.18.34", False)):
+        for version, delivery, too_old in (("opencode v2.0.25", "rendered live", False), ("2.1.0", "rendered live", False),
+                                           ("1.18.34", "rendered by leo-install", False),
+                                           ("1.3.17", "rendered by leo-install", True)):
             with self.subTest(version=version):
                 fake.write_text("#!/bin/sh\necho %s\n" % version)
                 fake.chmod(0o755)
                 with patch.dict(os.environ, {"PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", "")}):
                     result = doctor.diagnose("opencode")
                 self.assertEqual(result["opencode"]["version"], version)
-                self.assertEqual(result["opencode"]["policy_delivery"].startswith("inactive"), inactive)
-                self.assertEqual(any("loads neither" in issue for issue in result["issues"]), inactive)
+                self.assertTrue(result["opencode"]["policy_delivery"].startswith(delivery))
+                self.assertEqual(any("cannot load" in issue for issue in result["issues"]), too_old)
 
     def test_an_invalid_routing_section_is_reported_ignored_and_the_rest_applies(self):
         self.local.mkdir()

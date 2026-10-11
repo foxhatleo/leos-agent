@@ -18,7 +18,8 @@ CAPABILITIES = {
     "codex": {"tools": ("spawn_agent", "collaborationspawn_agent"), "model_field": "model", "rewrite": False,
               "profiles": True},
     "cursor": {"tools": ("Task", "task"), "model_field": None, "rewrite": False, "profiles": True},
-    "opencode": {"tools": ("task",), "model_field": None, "rewrite": True, "profiles": True},
+    # OpenCode 1's `task` takes no model; OpenCode 2's `subagent` takes one.
+    "opencode": {"tools": ("task", "subagent"), "model_field": None, "rewrite": True, "profiles": True},
     "hermes": {"tools": ("delegate_task",), "model_field": None, "rewrite": False, "profiles": False},
     "pi": {"tools": ("subagent",), "model_field": None, "rewrite": False, "profiles": False},
 }
@@ -48,6 +49,10 @@ CLAUDE_FORK = "fork"
 
 
 CONFIG_INVALID = "routing-config-invalid"
+
+# OpenCode 2's dispatch tool: {agent, description, prompt, model?, sessionID?,
+# background?}. Its `model` is "providerID/modelID", optionally "#variant".
+OPENCODE_SUBAGENT = "subagent"
 
 
 def load_config():
@@ -236,6 +241,45 @@ def _claude(result, args, agent, tier, requested, parent, config, catalog, effec
     return result
 
 
+def _opencode_subagent(result, args, agent, parent, config, catalog, native_profiles):
+    """OpenCode 2. The child runs on the call's `model`, else its agent's own
+    model, else the parent session's. The hook replaces the input, so a child
+    over the parent's price is moved onto the parent's model; nothing blocks."""
+    requested = args.get("model")
+    requested = requested.strip() if isinstance(requested, str) and requested.strip() else None
+    result["requested_model"] = requested
+    if requested is None and agent == "general" and "leo-standard" in native_profiles:
+        # As on OpenCode 1: select only an agent the running harness confirms exists.
+        updated = copy.deepcopy(args)
+        updated["agent"] = "leo-standard"
+        decision = _opencode_subagent(dict(result), updated, "leo-standard", parent, config, catalog,
+                                      native_profiles)
+        if decision["action"] == "allow":
+            decision.update(action="correct", updated_input=updated)
+        return decision
+    native = native_profiles.get(agent)
+    if requested is None and not isinstance(native, dict):
+        result["reason"] = "unconfigured-native-profile"
+        return result
+    selected = requested or native.get("model") or parent
+    if not selected:
+        result["reason"] = "parent-model-unavailable"
+        return result
+    result["effective_model"] = selected
+    if parent:
+        # A variant selects settings of the same model, not another price.
+        result["price"] = pricing.compare(selected.split("#", 1)[0], parent, catalog)
+    status = (result["price"] or {}).get("status")
+    if status == "over-ceiling":
+        updated = copy.deepcopy(args)
+        updated["model"] = parent
+        result.update(action="correct", reason="over-ceiling", updated_input=updated, effective_model=parent)
+        return result
+    result["reason"] = ("parent-model-unavailable" if not parent else
+                        "price-unknown" if status in (None, "unknown") else "within-ceiling")
+    return result
+
+
 def route(harness, tool, args, parent=None, config=None, catalog=None, effective_model=None, native_profiles=None,
           default_model=None):
     """Return an advisory decision; adapters implement only native controls.
@@ -260,6 +304,11 @@ model an agent whose definition names none runs on when `model` is omitted.
     agent = agent_name(args)
     tier = tier_for(agent)
     native_profiles = native_profiles or {}
+    if harness == "opencode" and tool == OPENCODE_SUBAGENT:
+        decision = _opencode_subagent(result, args, agent, parent, config, catalog, native_profiles)
+        if "diagnostic" in result:
+            decision["diagnostic"] = result["diagnostic"]
+        return decision
     if harness == "opencode":
         native = native_profiles.get(agent)
         if isinstance(native, dict):

@@ -94,9 +94,11 @@ rules, `scripts/accounting.py`. A Claude child that reports through its
 hand-back tool is read from the report that went through. Cursor's subagentStop carries the
 child's `summary`, call id and child conversation id; without a summary the
 row says status-only. Background Cursor subagents may send no subagentStop or
-null fields. OpenCode uses `tool.execute.after` on `task`, taking the agent from
+null fields. OpenCode 1 uses `tool.execute.after` on `task`, taking the agent from
 the executed arguments and the child model from task metadata; a background
-task fires it at launch and is not recorded. Pi uses `tool_result` on
+task fires it at launch and is not recorded. OpenCode 2 uses `execute.after`
+on `subagent`, with the child model its session's own requests went to; a
+background launch reports status `running` and is not recorded. Pi uses `tool_result` on
 `subagent`. Hermes records each child from `subagent_stop`, keyed by its child
 session; `post_tool_call` sees a background handle or the same children, so it
 records only on a build that never fires `subagent_stop`. The guard records the
@@ -136,7 +138,11 @@ native agents and `delegate_task` takes no model: every delegate runs on
 the parent, the block says to do the work in the current session or to have
 the user lower or unset `delegation.model`.
 
-OpenCode executes the `args` object it passes to `tool.execute.before`, so a
+OpenCode 2 runs whatever `input` its `execute.before` event holds when the
+hooks finish, so a correction replaces it; the `subagent` tool takes a model,
+so a child over the parent is moved onto the parent's model and nothing is
+refused. The rest of this paragraph is OpenCode 1.
+OpenCode 1 executes the `args` object it passes to `tool.execute.before`, so a
 correction edits that object in place, and one that cannot be applied blocks the
 task. Slash-command subtasks pass through the same hook, but the hook input
 omits the command's model, which the task runs on when its agent pins none; the
