@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { LeosAgent } from '../../index.js';
 import piExtension from '../../pi-extension.js';
-import { runPython } from '../../scripts/harness_bridge.js';
+import { pluginRoot, runPython } from '../../scripts/harness_bridge.js';
 
 const root = resolve(import.meta.dirname, '../..');
 process.env.LEOS_AGENT_PRICE_REFRESH = 'off';
@@ -116,6 +116,49 @@ test('Pi uses one skill discovery source and caches session payload', async () =
   assert.equal(first.systemPrompt, second.systemPrompt);
   assert.ok(first.systemPrompt.startsWith('original\n\n'));
   assert.ok(first.systemPrompt.includes('Cost-aware delegation'));
+});
+
+const withRoot = async (value, body) => {
+  const saved = process.env.LEOS_AGENT_ROOT;
+  process.env.LEOS_AGENT_ROOT = value;
+  try { return await body(); } finally { process.env.LEOS_AGENT_ROOT = saved; }
+};
+
+test('an env root without the payload is ignored in favour of the adapter directory', async () => {
+  const empty = mkdtempSync(join(tmpdir(), 'leo not a root '));
+  try {
+    assert.equal(pluginRoot(new URL('../../index.js', import.meta.url)), root);
+    await withRoot(empty, async () => {
+      assert.equal(resolve(pluginRoot(new URL('../../index.js', import.meta.url))), root);
+      const hooks = {};
+      piExtension({ on: (name, callback) => { hooks[name] = callback; } });
+      const result = await hooks.before_agent_start({ systemPrompt: 'original' });
+      assert.ok(result.systemPrompt.includes('Cost-aware delegation'));
+    });
+  } finally { rmSync(empty, { recursive: true, force: true }); }
+});
+
+test('Pi renders a failing payload once per session, not once per turn', async () => {
+  const fake = mkdtempSync(join(tmpdir(), 'leo failing root '));
+  try {
+    mkdirSync(join(fake, 'rules'));
+    mkdirSync(join(fake, 'scripts'));
+    writeFileSync(join(fake, 'rules/preferences.md'), 'x\n');
+    const counter = join(fake, 'calls');
+    writeFileSync(join(fake, 'scripts/emit_payload.py'),
+      `import sys\nopen(${JSON.stringify(counter)}, "a").write("x")\nsys.exit(1)\n`);
+    await withRoot(fake, async () => {
+      const hooks = {};
+      piExtension({ on: (name, callback) => { hooks[name] = callback; } });
+      for (let turn = 0; turn < 3; turn += 1) {
+        assert.equal(await hooks.before_agent_start({ systemPrompt: 'original' }), undefined);
+      }
+      assert.equal(readFileSync(counter, 'utf8'), 'x');
+      await hooks.session_start({});
+      await hooks.before_agent_start({ systemPrompt: 'original' });
+      assert.equal(readFileSync(counter, 'utf8'), 'xx');
+    });
+  } finally { rmSync(fake, { recursive: true, force: true }); }
 });
 
 test('bridge handles spaces and terminates a hung script', async () => {
