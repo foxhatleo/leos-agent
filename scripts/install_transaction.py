@@ -93,9 +93,27 @@ class Transaction:
             if not any(b.is_dir() and (parent == b or b in parent.parents) for b in self.boundaries):
                 raise OSError(errno.ENOENT, f"refusing to create {parent}: it is outside the directories this run may write")
 
+    def missing_dirs(self):
+        """Directories this commit would create: the missing parents of its writes."""
+        out = set()
+        for path, (_, after, _) in self.changes.items():
+            if after is None:
+                continue
+            parent = Path(path).parent
+            while not parent.exists() and parent != parent.parent:
+                out.add(parent)
+                parent = parent.parent
+        return out
+
     def commit(self):
         if not self.changes:
             return
+        # A pending backup is the only record of an interrupted commit's original
+        # bytes. Overwriting it would make that commit impossible to undo.
+        pending = pending_path(self.backup)
+        if pending.exists():
+            raise OSError(errno.EEXIST, f"an interrupted installation left {pending}; roll it back "
+                          "(leo-install.py <harness> --rollback) before installing again")
         for path, (before, _, _) in self.changes.items():
             current = snapshot(path)
             if current != before:
@@ -106,12 +124,14 @@ class Transaction:
             {"path": str(path), "before": base64.b64encode(before).decode() if isinstance(before, bytes) else None,
              **({"before_symlink": before.target} if isinstance(before, Symlink) else {}),
              "after_sha256": digest(after), "mode": mode}
-            for path, (before, after, mode) in self.changes.items()]}
+            for path, (before, after, mode) in self.changes.items()],
+            # Only these may be pruned on rollback: an empty directory that was
+            # already there belongs to the user.
+            "created_dirs": sorted(str(d) for d in self.missing_dirs())}
         # Persist recovery before any target change, under a pending name: the
         # last good backup is replaced only once every write below has landed,
         # so a failed commit cannot cost the ability to undo the previous one.
         # Nothing is transmitted; backups remain private on this machine.
-        pending = pending_path(self.backup)
         replace(pending, (json.dumps(backup, indent=2) + "\n").encode())
         applied = []
         try:
@@ -165,7 +185,9 @@ def rollback(backup, boundary=None, redo=None):
         tx.stage(path, original, entry["mode"])
     restored = len(tx.changes)
     tx.commit()
-    prune_empty_dirs(tx.changes, boundary)
+    created = data.get("created_dirs")
+    prune_empty_dirs(tx.changes, boundary,
+                     only=[Path(d) for d in created if isinstance(d, str)] if isinstance(created, list) else None)
     # A completed rollback leaves nothing of its own behind: the redo receipt it
     # just wrote, and the backup it consumed, are both spent.
     tx.backup.unlink(missing_ok=True)
@@ -173,16 +195,28 @@ def rollback(backup, boundary=None, redo=None):
     return restored
 
 
-def prune_empty_dirs(changes, boundary):
-    """Remove directories emptied by a deletion, never past `boundary`."""
+def prune_empty_dirs(changes, boundary, only=None):
+    """Remove directories emptied by a deletion, never past `boundary`.
+
+    `only` names the directories an installation recorded creating; no other
+    directory is removed, since an empty one that was already there is the
+    user's. Without that record (an install from before it was kept), a direct
+    child of `boundary` such as ~/.codex/agents is never removed: it may have
+    existed first.
+    """
     if boundary is None:
         return
     boundary = Path(boundary).resolve()
+    allowed = None if only is None else {Path(d).resolve() for d in only}
     for path, entry in changes.items():
         if entry[1] is not None:
             continue
         parent = Path(path).parent.resolve()
         while parent != boundary and boundary in parent.parents:
+            if allowed is not None and parent not in allowed:
+                break
+            if allowed is None and parent.parent == boundary:
+                break
             try:
                 parent.rmdir()
             except OSError:

@@ -196,7 +196,8 @@ codex plugin add leos-agent@leos-agent
 
 Then run the install skill in a Codex session by mentioning `$leos-agent:install`
 (or pick it from `/skills`). It is required here: it writes the cheap,
-standard, premium, parent and reviewer agent TOMLs into `~/.codex/agents`.
+standard, premium, parent and reviewer agent TOMLs, plus the read-only review
+lens, into `~/.codex/agents`.
 Review the current hook definitions in `/hooks`; enabling a plugin does not
 trust its hooks automatically. On upgrade, refresh the marketplace/plugin,
 rerun `$leos-agent:install`, and review any changed hook definition. The
@@ -228,13 +229,16 @@ python3 ~/.local/share/leos-agent/scripts/leo-install.py opencode
 
 Then restart OpenCode. The installer registers the checkout's plugin URI and
 one rendered instruction in the active config (`OPENCODE_CONFIG`, else
-`opencode.jsonc`, else `opencode.json`), and copies native agent profiles and
-skill/reference copies with the checkout's absolute path baked in. It preserves
-JSONC comments and unrelated configuration, and uninstall edits the same file
-the install did. Inside OpenCode the install skill is `/leo-install`. Upgrade the
-checkout with `git pull --ff-only`, rerun the same command, and restart.
+`opencode.jsonc`, else `opencode.json`), and copies the native agent profiles
+(the four tiers, the reviewer and the read-only review lens) and skill/reference copies
+with the checkout's absolute path baked in. It preserves JSONC comments and
+unrelated configuration, and uninstall edits the same file the install did.
+Inside OpenCode the install skill is `/leo-install`. Upgrade the checkout with
+`git pull --ff-only`, rerun the same command, and restart. The rendered
+instruction is a copy of the policy: it changes only when the installer reruns,
+and `--check` reports it out of date after an upgrade or a routing change.
 
-The npm package is also published as `leos-agent`:
+The npm package is also published as `leos-agent`. On OpenCode 1:
 
 ```sh
 opencode plugin leos-agent --global
@@ -242,11 +246,26 @@ root="${XDG_CACHE_HOME:-$HOME/.cache}/opencode/packages/leos-agent/node_modules/
 python3 "$root/scripts/leo-install.py" opencode
 ```
 
-Run from OpenCode's package cache, the installer keeps the `leos-agent`
-package entry rather than linking into the cache, so OpenCode can fetch the
-package again after cleaning it. The skill copies still point into the cache:
-rerun the installer whenever that directory changes (a pinned
-`leos-agent@<version>` spec gets its own directory).
+On OpenCode 2, `opencode plugin add` installs it under a timestamped directory:
+
+```sh
+opencode plugin add leos-agent
+root="$(ls -d "${XDG_CACHE_HOME:-$HOME/.cache}"/opencode/npm/leos-agent@latest/*/node_modules/leos-agent | tail -n 1)"
+python3 "$root/scripts/leo-install.py" opencode
+```
+
+Run from OpenCode's package cache, the installer keeps the package entry
+(`plugin` on OpenCode 1, `plugins` on OpenCode 2) rather than linking into the
+cache, so OpenCode can fetch the package again after cleaning it. The skill
+copies still point into the cache: rerun the installer whenever that directory
+changes (each OpenCode 2 package update, or a pinned `leos-agent@<version>`
+spec). Installing from a checkout takes a `leos-agent` package entry out so the
+plugin does not load twice, and uninstall puts it back.
+
+OpenCode 2 runs only plugins written to its own plugin API and does not load
+`instructions` entries, so there the policy, the dispatch guard and the
+observer are inactive; the native agent profiles and skills still load. The
+doctor skill reports this for the `opencode` on `PATH`.
 
 ### Hermes
 
@@ -302,10 +321,14 @@ records the sha256 of every file it writes in `leos-agent-paths.json` in the
 harness config directory, and a file is replaced or removed only while it
 still matches that receipt, this release's copy, or a copy an earlier release
 wrote. On install, an edited copy or a file leos-agent never wrote is a
-conflict that stops the run (`--force` replaces that file); an edited copy from
-a release older than v12 is reported as `preserved` and the rest continues. On
-uninstall, anything not provably ours is `preserved`, and `--force` does not
-change that. Copies of the retired `leo-runner` and `leo-executor` profiles are
+conflict that stops the run (`--force <path>` replaces that file, a bare
+`--force` every conflicting file); an edited copy from a release older than v12
+is reported as `preserved` and the rest continues, and only a `--force <path>`
+naming it replaces it. `--check` exits 3, not 0, while a preserved copy keeps
+an older payload. A pending backup left by an interrupted install blocks the
+next install until `--rollback` undoes it. Uninstall and rollback remove only
+directories an install created. On uninstall, anything not provably ours is
+`preserved`, and `--force` does not change that. Copies of the retired `leo-runner` and `leo-executor` profiles are
 removed when unchanged and preserved otherwise.
 
 Run `--uninstall` before removing the native plugin/source. It removes owned

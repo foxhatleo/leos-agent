@@ -20,15 +20,18 @@ that need machine-specific paths or models. It does not install other harnesses
 or silently approve hook trust. What it does per harness:
 
 - Codex: install the cheap, standard, premium, parent, and reviewer agent
-  TOMLs; remove a legacy global policy block. Review hook trust in `/hooks`
-  afterward. Rerun after upgrading the plugin.
-- Cursor: install native user agent profiles; remove the old global routing
-  rule that stock Cursor did not load. The plugin supplies its native rule.
-  Rerun after changing tier mappings.
+  TOMLs and the read-only review lens; remove a legacy global policy block.
+  Review hook trust in `/hooks` afterward. Rerun after upgrading the plugin.
+- Cursor: install the same six native user agent profiles; remove the old
+  global routing rule that stock Cursor did not load. The plugin supplies its
+  native rule. Rerun after changing tier mappings.
 - OpenCode: register the plugin and one rendered instruction in the active
-  JSON/JSONC config while preserving comments/unrelated entries; install native
-  agents and skill/reference copies; remove unchanged old command wrappers.
-  Rerun after a source/cache path changes, then restart OpenCode.
+  JSON/JSONC config while preserving comments/unrelated entries; install the
+  six native agents and skill/reference copies; remove unchanged old command
+  wrappers. The instruction is a rendered copy of the policy: rerun after an
+  upgrade, a routing change, or a source/cache path change, then restart
+  OpenCode. OpenCode 2 loads neither that instruction nor this plugin's hooks;
+  only the agents and skills apply there.
 - Claude, Hermes and Pi: only remove a policy block an older release left in
   the global instruction file. Their plugin or extension supplies everything
   else, so on a machine without such a block there is nothing to do.
@@ -48,16 +51,18 @@ continues.
 Modes:
 
 - `--dry-run`: preview with diffs; writes nothing.
-- `--check`: read-only; nonzero if artifacts differ or a check fails. It cannot
-  prove the plugin is active in a running session.
+- `--check`: read-only; exit 1 if artifacts differ or a check fails, 3 if
+  only preserved copies keep an older payload. It cannot prove the plugin is
+  active in a running session.
 - `--rollback`: undo the last install or uninstall only where current bytes
   still match the applied or original state. Refuse intervening user edits.
 - `--uninstall`: remove owned artifacts and registrations; files that are not
   provably ours are `preserved`, even with `--force`. Keep routing config,
   handoffs, and user data. Run before removing the native plugin/source.
 
-Report changed, preserved, and failed targets accurately. Use `--force` only for
-a specific conflicting file the user explicitly wants replaced. Never work
+Report changed, preserved, and failed targets accurately. Use `--force <path>`
+only for a specific conflicting or preserved file the user explicitly wants
+replaced; a bare `--force` replaces every conflict. Never work
 around a conflict by directly overwriting the file. Successful install/update
 starts a bounded background price refresh unless LEOS_AGENT_PRICE_REFRESH=off;
 a network failure preserves the last catalog and does not invalidate installed

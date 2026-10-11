@@ -23,6 +23,18 @@ class Transactions(unittest.TestCase):
             self.assertFalse(b.exists())
             self.assertEqual(a.read_text(), "concurrent edit")
 
+    def test_a_pending_backup_is_never_overwritten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pending = transaction.pending_path(root / "backup.json")
+            pending.write_text('{"schema": 1, "files": []}\n')
+            tx = transaction.Transaction(root / "backup.json")
+            tx.stage(root / "a", b"new")
+            with self.assertRaises(OSError):
+                tx.commit()
+            self.assertEqual(pending.read_text(), '{"schema": 1, "files": []}\n')
+            self.assertFalse((root / "a").exists())
+
     def test_failure_rolls_back_prior_writes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -224,12 +236,14 @@ class SymlinkAndCleanup(unittest.TestCase):
             (boundary / "deep").mkdir(parents=True)
             alias = root / "alias"
             alias.symlink_to(boundary, target_is_directory=True)
-            transaction.prune_empty_dirs({alias / "deep" / "x": (b"x", None, 0o600)}, boundary)
+            transaction.prune_empty_dirs({alias / "deep" / "x": (b"x", None, 0o600)}, boundary,
+                                         only=[boundary / "deep"])
             self.assertFalse((boundary / "deep").exists())
             outside = root / "outside"
             outside.mkdir()
             (boundary / "external").symlink_to(outside, target_is_directory=True)
-            transaction.prune_empty_dirs({boundary / "external" / "x": (b"x", None, 0o600)}, boundary)
+            transaction.prune_empty_dirs({boundary / "external" / "x": (b"x", None, 0o600)}, boundary,
+                                         only=[boundary / "external", outside])
             self.assertTrue(outside.is_dir())
             self.assertTrue(boundary.is_dir())
 
@@ -255,10 +269,39 @@ class SymlinkAndCleanup(unittest.TestCase):
             boundary = root / "config"
             leaf = boundary / "deep" / "x.md"
             leaf.parent.mkdir(parents=True)
-            transaction.prune_empty_dirs({leaf: (b"x", None, 0o600)}, boundary)
+            transaction.prune_empty_dirs({leaf: (b"x", None, 0o600)}, boundary,
+                                         only=[boundary / "deep", boundary, root])
             self.assertFalse((boundary / "deep").exists())
             self.assertTrue(boundary.is_dir())
             self.assertTrue(root.is_dir())
+
+    def test_pruning_keeps_an_empty_directory_no_install_created(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            boundary = Path(tmp).resolve()
+            leaf = boundary / "agents" / "deep" / "x.md"
+            leaf.parent.mkdir(parents=True)
+            gone = {leaf: (b"x", None, 0o600)}
+            transaction.prune_empty_dirs(gone, boundary, only=[])
+            self.assertTrue(leaf.parent.is_dir(), "not recorded as created")
+            # Without any record, a top-level directory such as ~/.codex/agents
+            # may have existed first; only what sits below it goes.
+            transaction.prune_empty_dirs(gone, boundary)
+            self.assertFalse(leaf.parent.exists())
+            self.assertTrue((boundary / "agents").is_dir())
+
+    def test_rollback_prunes_only_the_directories_its_install_created(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            (root / "agents").mkdir()
+            backup = root / "backups" / "backup.json"
+            backup.parent.mkdir()
+            tx = transaction.Transaction(backup)
+            tx.stage(root / "agents" / "a.md", b"installed\n")
+            tx.stage(root / "skills" / "doctor" / "SKILL.md", b"installed\n")
+            tx.commit()
+            transaction.rollback(backup, root)
+            self.assertTrue((root / "agents").is_dir(), "it existed before the install")
+            self.assertFalse((root / "skills").exists())
 
 
 if __name__ == "__main__":

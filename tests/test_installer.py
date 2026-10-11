@@ -228,6 +228,19 @@ class TestCodexPayload(InstallerCase):
         self.assertEqual(forced.status, "updated")
         self.assertNotIn("my-custom", target.read_text())
 
+    def test_uninstall_keeps_an_agents_directory_that_was_already_there(self):
+        agents = self.cfg("codex") / "agents"
+        agents.mkdir()
+        self.assertClean(self.run_harness("codex"), "install")
+        self.assertClean(self.run_harness("codex", uninstall=True), "uninstall")
+        self.assertTrue(agents.is_dir())
+        self.assertEqual(list(agents.iterdir()), [])
+        agents.rmdir()
+        self.assertClean(self.run_harness("codex"), "fresh install")
+        self.assertEqual(json.loads((self.cfg("codex") / "leos-agent-paths.json").read_text())["created_dirs"], ["agents"])
+        self.assertClean(self.run_harness("codex", uninstall=True), "fresh uninstall")
+        self.assertFalse(agents.exists(), "the install created it")
+
     def test_foreign_agent_is_not_overwritten_without_force(self):
         target = self.cfg("codex") / "agents" / "leo-cheap.toml"
         target.parent.mkdir(parents=True)
@@ -382,6 +395,34 @@ class TestPreReceiptUpgrade(InstallerCase):
         self.assertEqual(self.by_target(results)["~/.config/opencode/skills/doctor/SKILL.md"].status, "preserved")
         self.assertIn("Mine.", dest.read_text())
         self.assertTrue((self.cfg("opencode") / "skills" / "handoff" / "SKILL.md").is_file())
+
+    def test_force_replaces_a_preserved_copy_only_when_its_path_is_named(self):
+        dest = self.cfg("opencode") / "skills" / "doctor" / "SKILL.md"
+        other = self.cfg("opencode") / "skills" / "handoff" / "SKILL.md"
+        for path in (dest, other):
+            path.parent.mkdir(parents=True)
+            path.write_text("---\nname: x\ndescription: leos-agent copy, my way.\n---\n\nMine.\n")
+        label = self.label(dest)
+        bare = self.by_target(self.run_harness("opencode", force=[]))
+        self.assertEqual(bare[label].status, "preserved")
+        self.assertIn("Mine.", dest.read_text())
+        named = self.by_target(self.run_harness("opencode", force=[str(dest)]))
+        self.assertEqual(named[label].status, "updated")
+        self.assertNotIn("Mine.", dest.read_text())
+        self.assertEqual(named[self.label(other)].status, "preserved")
+        self.assertIn("Mine.", other.read_text())
+
+    def test_force_with_a_path_replaces_only_that_conflict(self):
+        agents = self.cfg("codex") / "agents"
+        agents.mkdir(parents=True)
+        for name in ("leo-cheap", "leo-standard"):
+            (agents / f"{name}.toml").write_text('name = "mine"\n')
+        results = self.by_target(self.run_harness("codex", force=[str(agents / "leo-cheap.toml")]))
+        self.assertEqual(results["~/.codex/agents/leo-standard.toml"].status, "conflict")
+        self.assertEqual((agents / "leo-cheap.toml").read_text(), 'name = "mine"\n', "a conflict aborts the run")
+        results = self.cli("codex", "--force", str(agents / "leo-cheap.toml"), str(agents / "leo-standard.toml"))
+        self.assertEqual(results.returncode, 0, results.stdout + results.stderr)
+        self.assertNotIn("mine", (agents / "leo-standard.toml").read_text())
 
     def test_a_stale_receipt_entry_is_taken_back_only_when_unchanged(self):
         self.run_harness("codex")
@@ -632,6 +673,74 @@ class TestOpenCodeConfigLocation(InstallerCase):
         self.run_harness("opencode")
         self.assertEqual(json.loads(path.read_text())["plugin"], [(ROOT / "index.js").resolve().as_uri()])
 
+    def test_uninstall_puts_back_the_npm_spec_a_checkout_install_took_out(self):
+        path = self.cfg("opencode") / "opencode.json"
+        path.write_text('{"plugin": ["leos-agent@12.0.0", "other"]}')
+        self.assertClean(self.run_harness("opencode"), "install")
+        self.assertNotIn("leos-agent@12.0.0", path.read_text())
+        self.assertClean(self.run_harness("opencode"), "rerun")
+        self.assertClean(self.run_harness("opencode", uninstall=True), "uninstall")
+        self.assertEqual(sorted(json.loads(path.read_text())["plugin"]), ["leos-agent@12.0.0", "other"])
+
+    def test_opencode_2_cache_layout_names_the_registered_spec(self):
+        cache = self.home / ".cache/opencode/npm"
+        spec = self.installer.opencode_cache_spec
+        self.assertEqual(spec(cache / "leos-agent@latest/1791729942414/node_modules/leos-agent"), "leos-agent")
+        self.assertEqual(spec(cache / "leos-agent@12.1.0/1791729942414/node_modules/leos-agent"), "leos-agent@12.1.0")
+        self.assertEqual(spec(self.home / ".cache/opencode/packages/leos-agent/node_modules/leos-agent"), "leos-agent")
+        self.assertIsNone(spec(cache / "other@latest/1791729942414/node_modules/leos-agent"))
+        self.assertIsNone(spec(ROOT))
+
+    def test_a_plugins_entry_registers_the_opencode_2_cache_package(self):
+        """`opencode plugin add leos-agent` writes OpenCode 2's plural key; a link
+        beside it would load the plugin twice."""
+        cache_root = plugin_copy(self.home / ".cache/opencode/npm/leos-agent@latest/1791729942414/node_modules/leos-agent")
+        path = self.cfg("opencode") / "opencode.json"
+        original = '{\n  "plugins": [\n    "leos-agent"\n  ]\n}\n'
+        path.write_text(original)
+        for phase in ("install", "rerun"):
+            self.assertClean(self.run_harness("opencode", root=cache_root), phase)
+            config = json.loads(path.read_text())
+            self.assertEqual(config["plugins"], ["leos-agent"], phase)
+            self.assertNotIn("plugin", config, phase)
+        self.assertClean(self.run_harness("opencode", root=cache_root, uninstall=True), "uninstall")
+        self.assertEqual(path.read_text(), original)
+
+    def test_a_cache_install_keeps_its_own_spec_on_every_rerun(self):
+        """The spec an earlier run added is ours, not a registration that makes
+        the next run take it out again."""
+        cache_root = plugin_copy(self.home / ".cache/opencode/packages/leos-agent/node_modules/leos-agent")
+        path = self.cfg("opencode") / "opencode.json"
+        path.write_text("{}\n")
+        for phase in ("install", "second", "third"):
+            self.assertClean(self.run_harness("opencode", root=cache_root), phase)
+            self.assertEqual(json.loads(path.read_text())["plugin"], ["leos-agent"], phase)
+        self.assertFalse([r.target for r in self.run_harness("opencode", root=cache_root) if r.changed])
+        self.run_harness("opencode", root=cache_root, uninstall=True)
+        self.assertEqual(path.read_text(), "{}\n")
+
+    def test_an_opencode_2_config_gets_a_directory_link_beside_its_other_plugins(self):
+        path = self.cfg("opencode") / "opencode.json"
+        other = {"package": "@acme/plugin", "options": {"strict": True}}
+        path.write_text(json.dumps({"plugins": ["leos-agent", other]}, indent=2) + "\n")
+        self.assertClean(self.run_harness("opencode"), "install")
+        config = json.loads(path.read_text())
+        self.assertEqual(config["plugins"], [other, ROOT.resolve().as_uri()])
+        self.assertNotIn("plugin", config)
+        self.assertClean(self.run_harness("opencode", uninstall=True), "uninstall")
+        self.assertEqual(sorted(json.loads(path.read_text())["plugins"], key=json.dumps), sorted(["leos-agent", other], key=json.dumps))
+
+    def test_a_users_own_link_to_this_root_is_a_registration(self):
+        path = self.cfg("opencode") / "opencode.json"
+        original = '{"plugins": ["' + str(ROOT.resolve()) + '"]}\n'
+        path.write_text(original)
+        self.assertClean(self.run_harness("opencode"), "install")
+        config = json.loads(path.read_text())
+        self.assertEqual(config["plugins"], [str(ROOT.resolve())])
+        self.assertNotIn("plugin", config, "a second registration of the same root")
+        self.run_harness("opencode", uninstall=True)
+        self.assertEqual(path.read_text(), original)
+
 
 class TestConfigDirectories(InstallerCase):
     def test_a_missing_config_dir_is_an_error_and_nothing_is_created(self):
@@ -738,6 +847,32 @@ class TestBackupsAndRollback(InstallerCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn("restored 0 files", result.stdout)
         self.assertFalse((self.cfg("opencode") / "agents").exists())
+
+    def test_an_interrupted_install_must_be_rolled_back_before_another(self):
+        """A second commit used to overwrite the pending backup holding the
+        interrupted commit's original bytes."""
+        import install_transaction
+        notes = self.cfg("codex") / "AGENTS.md"
+        original = "# mine\n\n" + TestLegacyBlockMigration.LEGACY
+        notes.write_text(original)
+        real = install_transaction.os.replace
+
+        def interrupted(src, dst):
+            if str(src).endswith(".pending"):
+                raise KeyboardInterrupt
+            return real(src, dst)
+        with mock.patch.object(install_transaction.os, "replace", side_effect=interrupted), \
+                self.assertRaises(KeyboardInterrupt):
+            self.run_harness("codex")
+        self.assertEqual(notes.read_text(), "# mine\n", "the interrupted commit had applied its writes")
+        (self.cfg("codex") / "agents" / "leo-cheap.toml").unlink()
+        results = self.run_harness("codex")
+        self.assertTrue(any(r.failed and "--rollback" in r.detail for r in results), [(r.status, r.detail) for r in results])
+        self.assertFalse((self.cfg("codex") / "agents" / "leo-cheap.toml").exists())
+        result = self.cli("codex", "--rollback", env={"CODEX_HOME": str(self.cfg("codex"))})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(notes.read_text(), original)
+        self.assertClean(self.run_harness("codex"), "install after rollback")
 
     def test_rollback_with_nothing_to_roll_back_says_so(self):
         result = self.cli("codex", "--rollback", env={"CODEX_HOME": str(self.cfg("codex"))})
@@ -972,8 +1107,8 @@ class TestCursorRoutingRule(InstallerCase):
         results = self.by_target(self.run_harness("cursor"))
         self.assertEqual(results[self.label(rule)].status, "removed")
         self.assertFalse(rule.exists())
-        self.assertFalse(rule.parent.exists(), "the emptied rules/ directory should go too")
-        rule.parent.mkdir()
+        # No install recorded creating rules/, and the user may have: it stays.
+        self.assertTrue(rule.parent.is_dir())
         for text in (released + "my note\n", "# somebody else's rule"):
             rule.write_text(text)
             results = self.by_target(self.run_harness("cursor"))
@@ -1005,6 +1140,25 @@ class TestLegacyBlockMigration(InstallerCase):
         self.assertIn("After the block.", after)
         [again] = self.run_harness("claude")
         self.assertEqual(again.status, "unchanged")
+
+    def test_a_mid_file_block_leaves_one_blank_line_not_two(self):
+        target = self.seed("# Mine\n\n" + self.LEGACY + "\nAfter the block.\n")
+        self.run_harness("claude")
+        self.assertEqual(target.read_text(encoding="utf-8"), "# Mine\n\nAfter the block.\n")
+        target = self.seed(self.LEGACY + "\nAfter the block.\n")
+        self.run_harness("claude")
+        self.assertEqual(target.read_text(encoding="utf-8"), "After the block.\n")
+
+    def test_invalid_routing_config_does_not_block_legacy_cleanup(self):
+        local = self.home / ".leos-agent-local"
+        local.mkdir()
+        (local / "routing.json").write_text('{"claude": "not an object"}')
+        target = self.seed("# Mine\n\n" + self.LEGACY)
+        [result] = self.run_harness("claude")
+        self.assertEqual(result.status, "migrated", result.detail)
+        self.assertEqual(target.read_text(encoding="utf-8"), "# Mine\n")
+        (self.home / ".cursor").mkdir()
+        self.assertTrue(any(r.failed for r in self.run_harness("cursor")), "cursor renders models from it")
 
     def test_file_holding_only_a_block_is_deleted(self):
         target = self.seed(self.LEGACY)
