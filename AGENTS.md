@@ -206,7 +206,9 @@ The policy in `rules/preferences.md` applies to work on this repo too.
   bypass it or assume enabling a plugin approves hooks. Batch related releases.
   `spawn_agent` selects the model by `model` and `reasoning_effort`; `agent_type`,
   offered once roles exist, layers its role config after them. A role cannot
-  set `sandbox_mode`: a child keeps its parent's sandbox. Multi-agent v2
+  set `sandbox_mode`: a child keeps its parent's sandbox (codex-rs
+  `agent/role.rs` drops it, though OpenAI's subagents page still shows
+  read-only roles), so payload TOMLs carry only keys a role applies. Multi-agent v2
   hooks name the tool `collaborationspawn_agent`. Use `fork_turns="none"` for fresh
   context. Customized profiles can override spawn selection. Encrypted or absent
   rollout briefs are unavailable data, not zero-length work.

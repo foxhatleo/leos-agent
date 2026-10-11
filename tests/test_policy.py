@@ -32,6 +32,17 @@ OPENCODE_AGENT_KEYS = {
 # these caps turns, so a Cursor copy has no counterpart to maxTurns.
 CURSOR_AGENT_KEYS = {"name", "description", "model", "readonly", "is_background"}
 
+# Keys a Codex agent-role file can change in the child (codex-rs core
+# agent/role.rs, AgentRoleOverrides, plus the file's identity fields). A role
+# never replaces the parent session's authority, so `sandbox_mode` and other
+# permission keys parse and are then dropped: a read-only line there would
+# promise a sandbox the child never gets.
+CODEX_ROLE_KEYS = {
+    "name", "description", "nickname_candidates", "developer_instructions", "model",
+    "model_reasoning_effort", "model_reasoning_summary", "model_verbosity", "personality",
+    "service_tier", "features", "skills",
+}
+
 
 def frontmatter_keys(text):
     fm = text.split("---", 2)[1]
@@ -45,6 +56,12 @@ class TestRouting(unittest.TestCase):
             with self.subTest(profile=name):
                 self.assertNotIn('model =', text)
                 self.assertNotIn('model_reasoning_effort =', text)
+
+    def test_codex_profiles_set_only_keys_a_role_can_apply(self):
+        for path in sorted((ROOT / "payload" / "codex-agents").glob("*.toml")):
+            keys = set(re.findall(r"(?m)^([A-Za-z_][\w-]*)\s*=", path.read_text(encoding="utf-8")))
+            with self.subTest(profile=path.stem):
+                self.assertEqual(keys - CODEX_ROLE_KEYS, set())
 
     def test_claude_workers_bake_their_tier_model_and_cannot_delegate(self):
         # The Claude profiles bake the tier's model into the agent type, so a
