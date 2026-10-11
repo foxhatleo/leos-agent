@@ -109,6 +109,25 @@ class SharedRules(unittest.TestCase):
         self.assertEqual(deltas.step(codex_event(tokens(20, 0, 2), tokens(20, 0, 2))["payload"]), ((20, 0, 0, 2), accounting.RESET))
         self.assertEqual(deltas.step({"type": "token_count", "info": ["not", "a", "dict"]}), (None, accounting.MISSING_TOTAL))
 
+    def test_event_usage_shapes_come_out_disjoint_and_sum(self):
+        claude = accounting.event_usage({"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 100,
+                                         "cache_creation_input_tokens": 7, "service_tier": "standard"})
+        self.assertEqual(claude, {"input": 10, "output": 5, "cache_read": 100, "cache_write": 7})
+        # Codex input includes its cached input; counting both would charge
+        # the cached tokens twice, once at the prompt rate.
+        codex = accounting.event_usage({"input_tokens": 3, "cached_input_tokens": 2, "output_tokens": 1,
+                                        "reasoning_output_tokens": 9})
+        self.assertEqual(codex, {"input": 1, "output": 1, "cache_read": 2})
+        self.assertEqual(accounting.event_usage({"prompt_tokens": 50, "cached_tokens": 40, "completion_tokens": 2.0}),
+                         {"input": 10, "cache_read": 40, "output": 2})
+        self.assertEqual(accounting.event_usage({"input": 7, "output": 1}), {"input": 7, "output": 1})
+        for junk in ({"model": "x", "ok": True}, "12", {"input_tokens": float("inf"), "output_tokens": -1}):
+            self.assertIsNone(accounting.event_usage(junk))
+        total = accounting.add_usage(None, claude)
+        total = accounting.add_usage(total, codex)
+        self.assertEqual(total, {"input": 11, "output": 6, "cache_read": 102, "cache_write": 7})
+        self.assertIs(accounting.add_usage(total, None), total)
+
     def test_reference_range_prices_conditional_rows_as_a_range_and_keeps_gaps_explicit(self):
         sonnet = pricing.resolve("claude-sonnet-5", CATALOG)
         low, high, unpriced = accounting.reference_range(sonnet, {"input": 1000, "output": 100})

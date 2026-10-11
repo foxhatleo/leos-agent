@@ -98,6 +98,18 @@ class Signals(unittest.TestCase):
         self.assertEqual((row["outcome"], row["verified"]), ("partial", False))
         self.assertLess(len(self.raw()), 2000)
 
+    def test_reason_and_status_reach_the_log_only_as_enums(self):
+        observe_agent.observe({"hook_event_name": "SubagentStop", "agent_id": "e1", "status": "Completed",
+                               "reason": "hermes-subagent-stop"}, "hermes")
+        row = dispatch_log.read()[-1]
+        self.assertEqual((row["status"], row["reason"]), ("completed", "hermes-subagent-stop"))
+        observe_agent.observe({"hook_event_name": "SubagentStop", "agent_id": "e2",
+                               "status": "failed: token PRIVATE_STATUS in /Users/x", "reason": "see PRIVATE_REASON"},
+                              "hermes")
+        row = dispatch_log.read()[-1]
+        self.assertEqual((row["status"], row["reason"]), ("other", "child-model-unavailable"))
+        self.assertNotIn(b"PRIVATE_", self.raw())
+
     def test_declared_source_and_usage_from_the_envelope_win(self):
         observe_agent.observe({"hook_event_name": "SubagentStop", "toolCallId": "c1", "result_text": "Result: escalate\nVerified: none",
                                "outcome_source": "tool-output", "usage": {"input": 7, "output": 1}}, "opencode")

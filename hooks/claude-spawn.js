@@ -15,12 +15,15 @@
  * inherits the variable but not CLAUDE_PLUGIN_ROOT, so tests and manual runs
  * inside a session still get decisions. This hook decides only while the
  * variable holds its root, so a failed session.start leaves the command guard
- * in charge and a dispatch is never decided twice. Builds before 2.1.289 raise
+ * in charge and a dispatch is never decided twice. A spawn the guard could not
+ * decide here is let through with an error row, and the variable is cleared so
+ * the command guard decides the session's later dispatches. Builds before 2.1.289 raise
  * no agent.spawn for teammates; there the variable is cleared instead.
  */
 
 const DEFAULT_RETRY = 'Retry with an explicit model within the parent price ceiling.';
 const GUARD_TIMEOUT_MS = 10000;
+const BREADCRUMB_TIMEOUT_MS = 3000;
 const SPAWN_FLOOR = [2, 1, 289];
 
 /** Whether this Claude Code build raises agent.spawn for every spawn the command guard sees. */
@@ -83,8 +86,33 @@ async function decide($, e) {
     stdin: JSON.stringify(guardEvent(e, { id, cwd })),
     timeoutMs: GUARD_TIMEOUT_MS,
   });
-  if (run.exitCode !== 0) throw new Error(`dispatch guard exited ${run.exitCode}`);
+  if (run.exitCode !== 0) {
+    const error = new Error(`dispatch guard exited ${run.exitCode}`);
+    error.name = 'GuardExit';
+    throw error;
+  }
   return JSON.parse(run.stdout);
+}
+
+/**
+ * A spawn let through undecided must not pass unseen: write the guard's error
+ * row, best effort, and hand later dispatches back to the command guard, which
+ * decides and logs them itself. Never throws.
+ */
+async function standDown($, error) {
+  try {
+    await $.env.set('LEOS_AGENT_CLAUDE_SPAWN_MOD', undefined);
+  } catch {
+    // The command guard stays out; the error row below still records the failure.
+  }
+  try {
+    const type = typeof error?.name === 'string' && error.name ? error.name : 'other';
+    await $.process.run(['python3', `${$.plugin.root}/scripts/dispatch_guard.py`, '--spawn-mod-failed', type], {
+      env: { LEOS_AGENT_HARNESS: 'claude' }, stdin: '', timeoutMs: BREADCRUMB_TIMEOUT_MS,
+    });
+  } catch {
+    // Python itself is unavailable; the debug line is all there is.
+  }
 }
 
 /** @type {import('claude-code').Register} */
@@ -115,6 +143,7 @@ export const register = (on) => {
       answer = answerFor(e, await decide($, e));
     } catch (error) {
       $.ui.log(`routing bridge failed; spawn allowed without a price check: ${error?.message ?? error}`, { to: 'debug' });
+      await standDown($, error);
     }
     if (answer.deny) return { deny: answer.deny };
     return next(Object.hasOwn(answer, 'model') ? { ...e, model: answer.model } : e);

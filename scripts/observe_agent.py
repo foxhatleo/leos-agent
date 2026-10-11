@@ -11,6 +11,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import accounting
 import dispatch_guard
 import dispatch_log
 import outcome
@@ -65,7 +66,7 @@ def signals(event):
         handed = outcome.parse(session_models.transcript_handback_text(path, outcome.TAIL_BYTES))
         if handed["outcome"] != "unknown" or handed["verified"] is not None:
             parsed, source = handed, "handback"
-    usage = outcome.usage_from(event.get("usage"))
+    usage = accounting.event_usage(event.get("usage"))
     complete, turns = usage is not None, None
     if usage is None and path:
         stats = session_models.transcript_stats(path)
@@ -122,7 +123,7 @@ def contract_prompt(event, harness):
     if dispatch_guard.guard_mode()[0] != "on":
         return None
     from routing_engine import tier_for
-    if tier_for(dispatch_guard._first_str(event, dispatch_guard.AGENT_KEYS)) is None:
+    if tier_for(dispatch_guard.agent_name(event)) is None:
         return None
     text = event.get("last_assistant_message")
     if not isinstance(text, str):
@@ -233,8 +234,8 @@ def observe(event, harness):
     # now rather than leaving the row unattributed until SessionEnd.
     model = session_models.transcript_model(session_models.child_transcript(event))
     declared = event.get("child_model") if isinstance(event.get("child_model"), str) and event["child_model"] else None
-    reason = event.get("reason") if isinstance(event.get("reason"), str) else None
-    agent = dispatch_guard._first_str(event, dispatch_guard.AGENT_KEYS) or None
+    reason = dispatch_log.enum_token(event.get("reason"))
+    agent = dispatch_guard.agent_name(event)
     child = dispatch_guard._first_str(event, AGENT_ID_KEYS) or None
     session = dispatch_guard._first_str(event, SESSION_KEYS)
     row = {"v": dispatch_log.RECORD_VERSION,
@@ -244,7 +245,8 @@ def observe(event, harness):
            "effective_model": model or declared, "agent": agent, "agent_id": child,
            "session": dispatch_log.digest(session),
            "call_id": dispatch_guard._first_str(event, CALL_KEYS) or None,
-           "status": event.get("status") if isinstance(event.get("status"), str) else None,
+           # A status that is present but not enum-shaped is `other`, never echoed.
+           "status": None if event.get("status") is None else dispatch_log.enum_token(event["status"]) or "other",
            **signals(event)}
     tier = lens_tier(agent, harness, model or declared)
     if tier:

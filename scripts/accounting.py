@@ -101,6 +101,54 @@ def codex_request(delta):
     return max(0, inp - read - write), read, write, output
 
 
+# A completion event's own usage, in whichever shape its harness reports:
+# Claude's message usage, Codex's token counts, OpenAI chat usage, or the
+# plain TOKEN_KEYS names an adapter writes. First listed key wins per category.
+EVENT_USAGE_KEYS = {
+    "input": ("input_tokens", "input", "prompt_tokens", "inputTokens"),
+    "cache_read": ("cache_read_input_tokens", "cache_read", "cached_input_tokens", "cacheRead", "cached_tokens"),
+    "cache_write": ("cache_creation_input_tokens", "cache_write", "cache_write_input_tokens", "cacheWrite"),
+    "output": ("output_tokens", "output", "completion_tokens", "outputTokens"),
+}
+# Cached-input keys of the shapes whose input count already includes cached
+# input (Codex token counts, OpenAI chat usage); the others report it apart.
+INCLUSIVE_CACHE_KEYS = ("cached_input_tokens", "cached_tokens")
+
+
+def event_usage(mapping):
+    """{input, cache_read, cache_write, output} from a completion event's usage, or None when nothing numeric.
+
+    Categories come out disjoint, as everywhere else here: an inclusive
+    shape's input has its cached input taken out, as codex_request does.
+    Unknown keys are ignored; booleans are not counts.
+    """
+    if not isinstance(mapping, dict):
+        return None
+    out, source = {}, {}
+    for field, keys in EVENT_USAGE_KEYS.items():
+        for key in keys:
+            value = mapping.get(key)
+            if isinstance(value, float) and value.is_integer():
+                value = int(value)  # a JSON 12.0; never NaN or infinity
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                out[field], source[field] = value, key
+                break
+    if "input" in out and source.get("cache_read") in INCLUSIVE_CACHE_KEYS:
+        out["input"] = codex_request((out["input"], out["cache_read"], out.get("cache_write", 0), 0))[0]
+    return out or None
+
+
+def add_usage(total, part):
+    """Sum two usage dicts field-wise; None is the identity."""
+    if not part:
+        return total
+    if not total:
+        return dict(part)
+    for key, value in part.items():
+        total[key] = total.get(key, 0) + value
+    return total
+
+
 def reference_range(match, amounts):
     """(low, high, unpriced) for token `amounts` keyed by TOKEN_KEYS, at one catalog match.
 

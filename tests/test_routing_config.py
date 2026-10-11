@@ -127,6 +127,9 @@ class TestValidation(RoutingCase):
                 contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaises(self.routing.RoutingError):
                 self.routing.main(["set", "--harness", "claude", "--cheap", "claude-haiku-4-5-20251001"])
+            # A dry run refuses the same thing rather than previewing it as fine.
+            with self.assertRaises(self.routing.RoutingError):
+                self.routing.main(["set", "--harness", "claude", "--cheap", "claude-haiku-4-5-20251001", "--dry-run"])
         self.assertFalse((self.data / "routing.json").exists())
 
     def test_bare_string_is_shorthand_for_a_model(self):

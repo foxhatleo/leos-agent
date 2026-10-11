@@ -31,6 +31,15 @@ class RoutingEngine(unittest.TestCase):
         self.assertEqual(result["updated_input"], dict(args, model="sonnet"))
         self.assertNotIn("model", args)
 
+    def test_the_engine_reads_every_agent_key_the_guard_logs(self):
+        """The guard logs the agent from any of its keys; a key the engine did
+        not read routed a leo-cheap dispatch as an unnamed one."""
+        import dispatch_guard
+        for key in dispatch_guard.AGENT_KEYS:
+            with self.subTest(key=key):
+                result = self.route("codex", {key: "leo-cheap", "message": "x"}, "gpt-6.1-sol")
+                self.assertIn("gpt-6-luna", result.get("retry") or "", key)
+
     def test_cheap_parent_cannot_be_upgraded_by_standard_default(self):
         result = self.route("claude", {"subagent_type": "leo-standard", "prompt": "Diagnose"}, "haiku")
         self.assertEqual(result["updated_input"]["model"], "haiku")
@@ -162,6 +171,10 @@ class ClaudeModelOrder(unittest.TestCase):
         # is that same choice, so filling it cannot depend on the parent.
         cheap = self.route({"subagent_type": "leos-agent:leo-cheap"}, None)
         self.assertEqual(cheap["updated_input"]["model"], "haiku")
+        # No ceiling was applied, and the reason says so rather than reading
+        # as an ordinary tier default.
+        self.assertEqual((cheap["action"], cheap["reason"], cheap["price"]),
+                         ("correct", "parent-model-unavailable", None))
 
     def test_codex_parent_level_with_an_unknown_parent_is_not_given_the_standard_tier(self):
         for args in ({"agent_type": "leo-parent", "message": "x"}, {"message": "x"}):
