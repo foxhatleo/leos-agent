@@ -44,8 +44,8 @@ Verify runtime evidence available in this session:
   folder is assumed to load.
 - OpenCode: live plugin entry and rendered instruction registered in the
   active JSON/JSONC config; installed native agents and copied skill paths.
-  On OpenCode 2 the report's `opencode.policy_delivery` is inactive: it loads
-  neither `instructions` entries nor this plugin's OpenCode 1 hooks.
+  On OpenCode 2, `opencode.policy_delivery` names the plugin's context hook:
+  `instructions` entries are not loaded. OpenCode 1 before 1.4 cannot load it.
 - Hermes: registered skills and frozen policy section; observe global
   delegation-model limitations and API-model diagnostics.
 - Pi: loaded extension, one skills discovery source, and cached policy body;
