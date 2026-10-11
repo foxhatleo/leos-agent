@@ -234,6 +234,21 @@ class TestSuppressionInStage(LearningCase):
         self.assertIn("blocking", err)
         self.assertEqual(len(fake.posted), posted)
 
+    def test_a_major_finding_is_downgraded_never_omitted(self):
+        fake, learning = self.learned_id()
+        posted = len(fake.posted)
+        code, _, err = self.stage_with([{"path": "a.py", "severity": "major", "action": "omitted",
+                                         "learning": learning, "reason": "learned"}])
+        self.assertEqual(code, 2)
+        self.assertIn("major", err)
+        self.assertEqual(len(fake.posted), posted)
+        for severity, action in (("major", "downgraded"), ("minor", "omitted"), ("nit", "omitted")):
+            with self.subTest(severity=severity, action=action):
+                code, report, err = self.stage_with([{"path": "a.py", "severity": severity, "action": action,
+                                                      "learning": learning, "reason": "learned"}])
+                self.assertEqual(code, 0, err)
+                self.assertEqual(report["suppressed"][0]["action"], action)
+
     def test_a_suppression_must_name_a_recorded_learning(self):
         self.learned_id()
         code, _, err = self.stage_with([{"path": "a.py", "severity": "minor", "action": "omitted",
@@ -247,6 +262,48 @@ class TestSuppressionInStage(LearningCase):
             dict(self.COMMENTS[0], severity="critical")]}, self.H1)
         self.assertEqual(code, 2)
         self.assertIn("severity", err)
+        self.assertEqual(fake.posted, [])
+
+
+class TestValidationRecord(LearningCase):
+    BLOCKING = {"path": "a.py", "line": 4, "side": "RIGHT", "body": "off-by-one: the last row is skipped",
+                "severity": "blocking", "category": "correctness"}
+
+    def stage_blocking(self, validation, *extra):
+        return self.stage("Owner/Repo", {"verdict": "seriously-problematic", "reviewed": ["a.py"],
+                                         "comments": [self.BLOCKING], "validation": validation}, self.H1, *extra)
+
+    def test_validation_is_recorded_with_the_verdict(self):
+        self.github(self.H1, self.FILES)
+        code, report, err = self.stage_blocking([
+            {"path": "a.py", "line": 4, "result": "CONFIRMED", "independent": True,
+             "evidence": "a.py:4 loops to len-1\x1b[0m"}])
+        self.assertEqual(code, 0, err)
+        self.assertEqual(report["validation"][0]["result"], "CONFIRMED")
+        self.assertNotIn("\x1b", report["validation"][0]["evidence"])
+        record = ghreview.load_verdict("Owner/Repo", 1)
+        self.assertEqual(record["validation"], report["validation"])
+
+    def test_validation_is_optional_and_self_checks_are_kept_distinct(self):
+        self.github(self.H1, self.FILES)
+        code, report, err = self.stage_blocking(None)
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("validation", ghreview.load_verdict("Owner/Repo", 1))
+        code, report, err = self.stage_blocking([
+            {"path": "a.py", "line": 4, "result": "UNCERTAIN", "independent": False}], "--dry-run")
+        self.assertEqual(code, 0, err)
+        self.assertIs(report["validation"][0]["independent"], False)
+
+    def test_malformed_validation_is_refused_before_staging(self):
+        fake = self.github(self.H1, self.FILES)
+        for bad in ([{"path": "a.py", "result": "PROBABLY", "independent": True}],
+                    [{"path": "a.py", "result": "CONFIRMED"}],
+                    [{"result": "REFUTED", "independent": True}],
+                    {"path": "a.py"}):
+            with self.subTest(bad=bad):
+                code, _, err = self.stage_blocking(bad)
+                self.assertEqual(code, 2)
+                self.assertIn("validation", err)
         self.assertEqual(fake.posted, [])
 
 

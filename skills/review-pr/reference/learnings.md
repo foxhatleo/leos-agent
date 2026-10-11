@@ -13,10 +13,10 @@ python3 "<plugin-root>/scripts/ghreview.py" learnings -R OWNER/REPO list
 
 Apply them after validating findings (§3) and before staging:
 
-- A learning is advisory. It can justify omitting or downgrading a
-  non-blocking finding whose category, path and pattern match the entry. A
-  single-count entry is weak evidence, and a `major` finding states a real
-  failure: for both, prefer downgrading to omitting.
+- A learning is advisory. It can justify omitting a `minor` or `nit`
+  finding, or downgrading a `major` one, whose category, path and pattern
+  match the entry. Stage refuses omitting a `major` finding. A single-count
+  entry is weak evidence; prefer downgrading to omitting.
 - Never suppress or downgrade a `blocking` finding, and never let a learning
   move a seriously-problematic verdict. Stage refuses a blocking suppression.
 - A rewritten entry says the wording missed; reword in the user's direction

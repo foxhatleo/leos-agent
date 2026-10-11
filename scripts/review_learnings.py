@@ -15,7 +15,8 @@ atomic locked writes): action, severity, category, a path glob, the pattern
 and a count. Submitted text is untrusted and only ever classified; nothing
 from it is stored. Nothing here is loaded unless a reviewer lists it, and a
 learning is advisory: it may justify omitting or downgrading a non-blocking
-finding, never a blocking one (stage refuses that).
+finding, never a blocking one, and a major one only by downgrading it (stage
+refuses the rest).
 """
 import contextlib
 import fcntl
@@ -260,7 +261,8 @@ def check_suppressed(value, repo):
 
     Each entry names a finding the reviewer omitted or downgraded because of a
     learning: path, severity, action, the learning id and a reason. A blocking
-    finding is never suppressed, and the learning must exist for this repo.
+    finding is never suppressed, a major one is only downgraded, and the
+    learning must exist for this repo.
     """
     if value is None:
         return []
@@ -277,6 +279,8 @@ def check_suppressed(value, repo):
             raise ValueError("suppressed severity must be one of nit, minor, major")
         if item.get("action") not in SUPPRESSIONS:
             raise ValueError("suppressed action must be omitted or downgraded")
+        if item["severity"] == "major" and item["action"] == "omitted":
+            raise ValueError("a major finding may be downgraded by a learning, never omitted; stage it")
         path, reason, learning = item.get("path"), item.get("reason"), item.get("learning")
         if not (isinstance(path, str) and path.strip()):
             raise ValueError("suppressed entry needs the finding's path")

@@ -22,7 +22,10 @@ yourself (§3).
 - If no lens can run (no `leo-lens`, the guard refuses it, or nesting is
   unavailable), re-read each cited line yourself as a fresh pass and say in
   the report that the validation was not independent.
-- Report each blocking finding's validation result and its evidence line.
+- Record each result in the stage input's optional `validation` list, which
+  stage keeps with the verdict, and report it with its evidence line:
+  `{"path": "src/a.ts", "line": 42, "result": "CONFIRMED", "independent": true,
+  "evidence": "…"}`. `independent` is false when you checked it yourself.
 
 A large review with many non-blocking candidates may still hand them to one
 validator lens per batch (cheap tier for factual checks, standard otherwise),

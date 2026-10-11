@@ -319,14 +319,17 @@ these contracts when changing it or `scripts/ghreview.py`:
 - A blocking finding is staged only after one batched fresh-context
   `leo-lens` validation (standard tier or above, never cheap; a lens, so depth
   stays one) confirms it; refuted ones are dropped or downgraded. Non-blocking
-  findings are not sent to it. The procedure text lives in
-  `reference/validation.md`, not `procedure.md`.
+  findings are not sent to it. Stage accepts an optional `validation` list
+  (result, independent or self-checked) and records it with the verdict; it
+  never requires one. The procedure text lives in `reference/validation.md`,
+  not `procedure.md`.
 - Review learnings (`review_learnings.py`) come only from reviews this tool
   staged and the user since submitted: one read-only GET per such review,
   harvested by `pending`. Entries are data only (action, severity, category,
   path glob, normalized staged pattern); submitted text is classified, never
-  stored. They load on demand, are advisory, and `stage` refuses a
-  suppression of a blocking finding or one naming no recorded learning.
+  stored. They load on demand and are advisory: `stage` refuses suppressing a
+  blocking finding, omitting (rather than downgrading) a major one, or a
+  suppression naming no recorded learning.
 - The cross-model lens (`review_peer.py`) runs only when the user enabled it,
   discloses that the diff goes to a second provider, never counts as coverage,
   and raises confidence only when `independence_verified` is true.

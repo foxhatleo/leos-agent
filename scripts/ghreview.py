@@ -41,6 +41,8 @@ stage --input file: {"verdict": "ready-to-merge"|"neutral"|"seriously-problemati
                                    "severity"?, "category"?}, ...],
                      "suppressed": [{"path", "line"?, "severity", "action",
                                      "learning", "reason"}, ...]?,
+                     "validation": [{"path", "line"?, "result", "independent",
+                                     "evidence"?}, ...]?,
                      "notes": ["review-level reservation", ...]?,
                      "verdict_override": "why a standing ready-to-merge no longer holds"?}
 line = absolute line number in the new file for side RIGHT (old file for LEFT).
@@ -60,7 +62,10 @@ any past GitHub's 3000-file listing as `unlisted` (never complete coverage).
 A comment's optional `severity` and `category` are kept in the receipt for
 review learning, never sent to GitHub. `suppressed` lists findings omitted or
 downgraded because of a recorded learning; a blocking one, or a learning id
-this repository does not have, is refused, and the list is echoed in the report.
+this repository does not have, is refused, as is omitting a major one (it may
+only be downgraded); the list is echoed in the report. `validation` records how
+each blocking finding was checked (CONFIRMED, REFUTED or UNCERTAIN; independent
+lens or self-checked) in the report and the verdict record; it is optional.
 
 Verdict rules are enforced before anything is mutated: neutral and
 seriously-problematic need at least one pending comment or note; ready-to-merge
@@ -1311,6 +1316,46 @@ def standing_ready(prior, diff):
     return bool(prior) and prior.get("verdict") == READY and bool(diff) and prior.get("diff") == diff
 
 
+VALIDATION_VERDICTS = ("CONFIRMED", "REFUTED", "UNCERTAIN")
+MAX_EVIDENCE_CHARS = 300
+
+
+def validation_request(value):
+    """The stage input's optional `validation` list, checked and cleaned.
+
+    One entry per blocking finding sent to the fresh-context check: path, line,
+    the CONFIRMED/REFUTED/UNCERTAIN result, whether an independent lens gave it
+    (false: the reviewer re-read the code itself), and a short evidence line.
+    Recorded with the verdict; never required.
+    """
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("validation must be a list")
+    out = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError("each validation entry must be an object")
+        if item.get("result") not in VALIDATION_VERDICTS:
+            raise ValueError("validation result must be one of %s" % ", ".join(VALIDATION_VERDICTS))
+        if not isinstance(item.get("independent"), bool):
+            raise ValueError("validation independent must be true (a separate lens) or false (self-checked)")
+        path = item.get("path")
+        if not (isinstance(path, str) and path.strip()):
+            raise ValueError("validation entry needs the finding's path")
+        row = {"path": review_learnings.clean(path, 300), "result": item["result"],
+               "independent": item["independent"]}
+        if isinstance(item.get("line"), int) and not isinstance(item.get("line"), bool):
+            row["line"] = item["line"]
+        evidence = item.get("evidence")
+        if evidence is not None:
+            if not isinstance(evidence, str):
+                raise ValueError("validation evidence must be text")
+            row["evidence"] = review_learnings.clean(evidence, MAX_EVIDENCE_CHARS)
+        out.append(row)
+    return out
+
+
 def stage_request(data):
     """(comments, notes, reviewed, verdict, override) from a stage input file."""
     if isinstance(data, list):
@@ -1821,6 +1866,7 @@ def cmd_stage(a):
     comments, filtered = confidence_filter(comments)
     suppressed = review_learnings.check_suppressed(data.get("suppressed") if isinstance(data, dict) else None,
                                                    a.repo)
+    validation = validation_request(data.get("validation") if isinstance(data, dict) else None)
     since = getattr(a, "since", None)
 
     files = pinned_files(a.repo, a.pr, a.commit)
@@ -1850,7 +1896,8 @@ def cmd_stage(a):
     report = {"repo": a.repo, "pr": a.pr, "commit": a.commit, "complete": False, "review_created": False,
               "staged": len(staged), "carried": len(carried), "notes": len(notes), "omitted": omitted,
               "snapped": snapped, "dropped": dropped, "narrowed": narrowed, "filtered": filtered,
-              "suppressed": suppressed, "verdict": verdict, "diff_fingerprint": diff, "coverage": coverage,
+              "suppressed": suppressed, "validation": validation, "verdict": verdict,
+              "diff_fingerprint": diff, "coverage": coverage,
               "patches": covered_patches(files, coverage, reviewed)}
     if standing_ready(prior, diff) and verdict != READY:
         report.update(verdict_override=override.strip(), prior_verdict=prior)
@@ -1920,6 +1967,9 @@ def verdict_record(verdict, head, diff, report):
     record = {"verdict": verdict, "head": head, "diff": diff, "at": int(time.time())}
     if report.get("verdict_override"):
         record["override"] = report["verdict_override"]
+    # How each blocking finding was validated, when the reviewer said.
+    if isinstance(report.get("validation"), list) and report["validation"]:
+        record["validation"] = report["validation"]
     # Per-file coverage at this head, which a later `--since` pass carries for
     # every file whose patch is unchanged. watch_review records through here
     # too, so a watcher-recorded head carries the same evidence.
