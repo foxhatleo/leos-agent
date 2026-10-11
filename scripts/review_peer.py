@@ -17,8 +17,9 @@ disclosed.
 
 Routes (each only when the CLI is installed and its own status command says it
 is logged in; the status commands are local and make no model call):
-  claude host -> `codex exec`, read-only sandbox, ephemeral, user config and
-                 rules ignored, run in an empty directory
+  claude host -> `codex exec` with no shell, file, web or delegation tool,
+                 read-only sandbox, ephemeral, user config and rules ignored,
+                 run in an empty directory
   codex host  -> `claude -p`, no tools, safe mode (no plugins, hooks, MCP or
                  CLAUDE.md), no session persistence, a spending cap
 
@@ -194,12 +195,25 @@ def build_prompt(repo, pr, commit, diff, context):
     return PROMPT.format(fence=fence, repo=repo, pr=pr, commit=commit, context=note, diff=diff)
 
 
+# Codex features that hand the model a tool able to read local files, run
+# commands, reach the network or delegate. The read-only sandbox blocks writes
+# but still lets a command read any file on the machine, so a prompt injected
+# into the diff could have read secrets and sent them with the reply. With
+# these off, codex-cli 0.162.1 offers the model no tool but request_user_input
+# (checked against the request it builds). An unknown name is an error there,
+# so a Codex that renames one fails the run instead of running with the tool.
+CODEX_DISABLED_FEATURES = ("shell_tool", "unified_exec", "view_image", "multi_agent", "goals",
+                           "apps", "plugins")
+
+
 def command(target, binary, settings, workdir, last_message):
     model, effort = settings.get("model"), settings.get("effort")
     if target == "codex":
         argv = [binary, "exec", "--sandbox", "read-only", "--ephemeral", "--ignore-user-config",
-                "--ignore-rules", "--skip-git-repo-check", "--color", "never",
-                "-C", workdir, "-o", last_message]
+                "--ignore-rules", "--skip-git-repo-check", "--color", "never"]
+        for feature in CODEX_DISABLED_FEATURES:
+            argv += ["--disable", feature]
+        argv += ["-c", 'web_search="disabled"', "-C", workdir, "-o", last_message]
         if model:
             argv += ["-m", model]
         if effort:

@@ -41,10 +41,16 @@ python3 "<plugin-root>/scripts/review_peer.py" run -R OWNER/REPO -n N --commit S
 
 It re-checks the head, sends only the non-generated patches that fit its input
 cap (the rest are listed under `not_sent`), in a fenced untrusted block, to a
-read-only peer in an empty directory: `codex exec` with a read-only sandbox and
-the user's config and rules ignored, or `claude -p` with no tools, safe mode
-and a spending cap. It applies a time limit, never retries, and never switches
-route. The artifact's `status` is `done`, `skipped` or `failed`, with a
+peer in an empty directory: `codex exec` with its shell, image, web-search,
+delegation and connector tools switched off, a read-only sandbox, and the
+user's config and rules ignored; or `claude -p` with no tools, safe mode and a
+spending cap. Either way the peer has no tool that reads local files, so text
+injected into the diff cannot make it send them along. What it does receive,
+the diff and any `--context`, goes to that provider. The Codex sandbox alone
+would not be enough: read-only still reads the whole disk, which is why the
+tools are off. A Codex release that renames one of those features fails the
+run rather than running with it. It applies a time limit, never retries, and
+never switches route. The artifact's `status` is `done`, `skipped` or `failed`, with a
 `reason`; a failure is reported, not retried.
 
 ## Fold in
