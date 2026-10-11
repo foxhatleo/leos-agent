@@ -357,7 +357,7 @@ require investigation of actual execution.
 |---|---|
 | install | Configure this harness's native artifacts; preview/check/uninstall/rollback. |
 | doctor | Check installation, pricing, model references, and runtime evidence without paid calls. |
-| tune-routing | Configure tiers and diagnose actual native model selection; opt into Claude Code's advisor. |
+| tune-routing | Configure tiers and diagnose actual native model selection; opt into Claude Code's advisor or `opusplan`. |
 | review-usage | Mechanical usage scan with reference-cost estimates and explicit gaps. |
 | review-pr | Review a pinned GitHub PR; stage comments/replies as pending. |
 | handoff / handon | Save concise context pointers and resume after checking drift. |
@@ -368,6 +368,12 @@ Only small routing instructions and necessary metadata are always present.
 Detailed review procedures remain in deferred reference files. Duplicate
 slash-command wrappers are removed; native skills provide invocation. Explicit
 invocation controls do not universally imply hidden metadata—measure both.
+
+On Codex, a PreCompact hook shows a one-line UI warning before each
+top-level compaction pointing to `$leos-agent:handoff`; the model never
+sees it, and compaction always proceeds. Like every changed hook definition,
+it needs trust in `/hooks` after the upgrade that adds it. Claude Code
+discards a PreCompact hook's message, so it has no equivalent.
 
 ```sh
 python3 scripts/doctor.py --harness claude --json

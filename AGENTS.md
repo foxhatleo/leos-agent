@@ -181,7 +181,9 @@ The policy in `rules/preferences.md` applies to work on this repo too.
   subagents. `check.py` lints for the placeholder.
 - Skills are either user-invoked (`disable-model-invocation: true`) or
   model-invoked, never ambiguous. `check.py` fails a skill missing the flag
-  unless it is in the explicit model-invocable set.
+  unless it is in the explicit model-invocable set. A model-invoked skill's
+  description carries a "Use when" trigger within 300 bytes; a user-invoked
+  one carries none.
 - Skill frontmatter stays within the portable subset all six harnesses accept.
   Claude-only extras (`allowed-tools`, `model`) live only under
   `skills-claude/`. `check.py` fails any key under `skills/` outside its
@@ -209,6 +211,8 @@ The policy in `rules/preferences.md` applies to work on this repo too.
   with `scaffold_script` and runs need `--scaffold`.
 - **Codex** uses native `/hooks` trust for changed hook definitions; do not
   bypass it or assume enabling a plugin approves hooks. Batch related releases.
+  The PreCompact handoff reminder is Codex only: Codex shows a PreCompact
+  `systemMessage` in its UI, while Claude Code discards it.
   `spawn_agent` selects the model by `model` and `reasoning_effort`; `agent_type`,
   offered once roles exist, layers its role config after them. A role cannot
   set `sandbox_mode`: a child keeps its parent's sandbox (codex-rs

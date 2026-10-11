@@ -35,6 +35,30 @@ lives only in Claude's own `advisorModel` setting, never in routing.json.
 - It fits long multi-step work where most turns are routine. On short tasks,
   or where every turn needs the stronger model, switch the main model instead.
 
+## When a child would cost the parent's price: `opusplan`
+
+Delegation saves nothing when the tier a task needs runs on the parent's own
+model, for example a premium Opus child under an Opus parent, or standard and
+premium both mapped to Opus (doctor's `tier_ladder` names tiers sharing one
+model). Lowering the parent's own rate is then the lever, and Claude Code's
+`opusplan` model setting does that: Opus while in plan mode, Sonnet for
+execution, switching automatically at the plan boundary. Offer it beside the
+advisor; they combine, since an Opus advisor still ranks above a Sonnet main
+model during execution.
+
+- It is a main-model choice, not a tier: set it with `/model opusplan`,
+  `--model opusplan`, or a `model` setting. `claude_advisor.py` edits only
+  `advisorModel`; show the user the command and let them run it.
+- The guard reads the parent's model from its latest turn, so outside plan
+  mode it caps children at Sonnet: a premium Opus dispatch is corrected down.
+  Work that needs Opus throughout belongs in plan mode, under `/model opus`,
+  or in a handoff.
+- An `availableModels` list that excludes the newest Opus makes plan mode use
+  the newest permitted Opus on the Anthropic API and Claude Platform on AWS;
+  on other providers plan mode then stays on the session's model.
+- It fits work with a distinct planning phase. Where every turn needs Opus,
+  keep Opus; where none does, Sonnet alone is cheaper.
+
 ## Guard and hooks
 
 The advisor is a server tool with no name a hook matcher can reference, so

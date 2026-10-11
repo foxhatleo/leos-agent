@@ -340,6 +340,45 @@ class OutputCompression(DoctorCase):
             self.assertFalse(settings_probe.output_compressors("pi")["configured"])
 
 
+class TierLadder(DoctorCase):
+    CATALOG = {"schema": 1, "source": "test", "fetched_at": None, "models": [
+        {"id": "x/small", "pricing": {"prompt": "0.000001", "completion": "0.000005"}},
+        {"id": "x/mid", "pricing": {"prompt": "0.000003", "completion": "0.000015"}},
+        {"id": "x/big", "pricing": {"prompt": "0.000005", "completion": "0.000025"}},
+    ]}
+
+    def ladder(self, cheap, standard, premium):
+        config = {"pi": {"cheap": {"model": cheap}, "standard": {"model": standard}, "premium": {"model": premium}}}
+        return doctor.tier_ladder("pi", config, self.CATALOG)
+
+    def test_an_ordered_ladder_has_no_notes(self):
+        result = self.ladder("x/small", "x/mid", "x/big")
+        self.assertEqual([step["status"] for step in result["order"]], ["ordered", "ordered"])
+        self.assertEqual((result["notes"], result["same_model"], result["unknown_price"]), ([], [], []))
+
+    def test_two_tiers_on_one_model_make_escalation_label_only(self):
+        result = self.ladder("x/small", "x/big", "x/big")
+        self.assertEqual(result["same_model"], [["standard", "premium"]])
+        self.assertEqual(len(result["notes"]), 1)
+
+    def test_an_inverted_pair_and_an_unpriced_model_are_named(self):
+        result = self.ladder("x/mid", "x/small", "nobody/unpriced-9")
+        self.assertEqual(result["order"][0], {"lower": "cheap", "higher": "standard", "status": "inverted"})
+        self.assertEqual(result["order"][1]["status"], "unknown")
+        self.assertEqual(result["unknown_price"], ["premium"])
+
+    def test_the_ladder_is_a_diagnostic_not_an_issue(self):
+        self.local.mkdir()
+        (self.local / "routing.json").write_text('{"claude":{"standard":{"model":"opus"},"premium":{"model":"opus"}}}')
+        result = doctor.diagnose("claude")
+        self.assertEqual(result["tier_ladder"]["same_model"], [["standard", "premium"]])
+        self.assertEqual(result["issues"], [])
+
+    def test_hermes_has_no_ladder(self):
+        with patch.dict(os.environ, {"HERMES_HOME": str(self.root / "hermes")}):
+            self.assertNotIn("tier_ladder", doctor.diagnose("hermes"))
+
+
 class PriceFreshness(unittest.TestCase):
     def test_fetched_at_is_used_only_when_it_is_a_real_past_time(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"LEOS_AGENT_LOCAL_PATH": tmp}):

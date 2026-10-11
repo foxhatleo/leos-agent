@@ -19,7 +19,10 @@ python3 "<plugin-root>/scripts/doctor.py" --harness <harness> --json
 The helper checks installed artifacts, routing.json as the guard loads it
 (invalid sections are reported ignored), the effective dispatch-guard mode,
 policy rendering, tier references, and price freshness of the catalog actually
-in use, with any hand amendments. It reads settings key-scoped to report forced
+in use, with any hand amendments. Its `tier_ladder` notes, which are not
+issues, name a tier with no reference price, adjacent tiers on one model
+(escalating between them changes only the label), and a lower tier priced
+above the next. It reads settings key-scoped to report forced
 subagent models and the advisor on Claude, Bash-rewriting output compressors
 such as rtk on every harness, with how they interact with dispatch, and the
 cross-model review lens: whether it is enabled, its peer CLI, and whether that
