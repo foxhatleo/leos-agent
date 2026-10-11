@@ -477,6 +477,8 @@ no judge model is called.
 | `worker-contract` | The worker's reply carries `Result:` and `Verified:` lines; correct answer |
 | `escalation-after-failed-check` | A staged cheap result fails its check; re-dispatch to standard with an `Escalation from cheap:` brief, no cheap retry; correct answer |
 | `quality-guard` | Correctness only |
+| `bulk-triage` | Correct answer. Thirty-six prose tickets with an index count as the check, so the policy allows a cheap worker to do the read. Its cheap-delegation indicator reports whether one did |
+| `separable-audit` | Correct answer. Two independent scans, each with its own index count, that could go to separate cheap workers. Same indicator |
 
 ```sh
 claude plugin eval . --scaffold --no-publish --max-cost-usd 8
@@ -484,9 +486,10 @@ claude plugin eval . --scaffold --case local-small-task --runs 1 --ablation none
 ```
 
 Every run is a real model call billed to your plan or API account. A full run
-is 5 cases × 3 runs × 2 arms = 30 agent runs; `--max-cost-usd` caps the
-spend. Each case pins its parent in `model:`: Opus for `cheap-retrieval`
-and `escalation-after-failed-check`, whose routing needs tiers below the parent
+is 7 cases × 3 runs × 2 arms = 42 agent runs; `--max-cost-usd` caps the
+spend. Each case pins its parent in `model:`: Opus for `cheap-retrieval`,
+`escalation-after-failed-check`, `bulk-triage`, and `separable-audit`, whose
+routing needs tiers below the parent
 (under Sonnet, one tier up from cheap is the parent's own price, which the
 policy keeps local), and Sonnet for the rest. `--model` overrides every case's
 pin, so pass it only to compare parents. Runs inherit most `CLAUDE_CODE_*`
@@ -502,9 +505,56 @@ with-arm indicators, because the baseline has no `leo-*` agents;
 `--ablation none` scores them, so use it to gate on behaviour (`cheap-retrieval`'s
 indicator is expected off). At the default threshold of 1.0, one failed scored
 grader fails the case. `COST` is the CLI's list-price estimate for both arms of
-a case together. It is not a bill, the summary does not split it by arm, and
-the suite does not measure tokens. Results show how the policy behaves on these
-five tasks with the pinned model; they do not establish savings in general.
+a case together. It is not a bill, and the summary does not split it by arm.
+Results show how the policy behaves on these seven tasks with the pinned model;
+they do not establish savings in general.
+
+`scripts/bench.py` turns the suite into a paired cost benchmark. `run` calls
+`claude plugin eval` with both arms, `--scaffold`, and `--keep-temp`, reads
+each run's own usage record (list-price cost, turns, and per-model new-input,
+cache-read, and output tokens, children included), then deletes the kept run
+directories. It pairs run *i* of the with-plugin arm with run *i* of the
+baseline in the same case and tests the paired differences with an exact
+Wilcoxon signed-rank test, reporting the Hodges-Lehmann estimate with its
+confidence interval and the rank-biserial effect size. Correctness is compared
+with an exact sign test on the discordant pairs. A run with an error drops its
+pair from the metric tests. Every directional statement in the report states
+its p and n. Below six nonzero pairs no difference can reach p < 0.05, so the
+report makes no cost claim there. `report` re-reads earlier output for free and
+pools several runs.
+
+```sh
+python3 scripts/bench.py run --runs 3 --max-cost-usd 8 --ledger ~/bench-ledger.txt --budget-usd 15
+python3 scripts/bench.py report evals/results/bench-<time> [more ...]
+```
+
+`--max-cost-usd` is the CLI's own ceiling, checked before each agent run
+starts, so a run can overshoot it by the runs already in flight. With
+`--ledger` and `--budget-usd`, `run` refuses to start when the ledger's total
+plus the ceiling plus an allowance for in-flight runs would pass the budget,
+and appends the run's cost to the ledger. Output goes under `evals/results/`,
+which git ignores.
+
+`evals-write/` is a separate suite for cases that change files, kept apart so
+the suite above stays read-only and needs no grant. Its one case,
+`separable-change`, pins Opus and asks for two independent changes to a small
+Python package: a mechanical rename across six modules and a new function with
+a unit test of its own. A read-only acceptance test defines the result. The
+graders need the acceptance tests and the run's own test passing in a real
+`python3 -m unittest` run in the trace, the run's test file, and the
+acceptance file left intact. All are scored in both arms. Runs need the
+`--eval-dir` and the narrowest grant the case passes with; `bench.py run
+--eval-dir evals-write` passes both:
+
+```sh
+claude plugin eval . --eval-dir evals-write --scaffold --no-publish --max-cost-usd 3 \
+  --allow-tools Edit Write "Bash(python3 -m unittest:*)"
+```
+
+Every other shell command, `sed` included, is refused, so a run makes its
+edits with Edit and Write. Results go under `evals-write/results/`, which git
+ignores. `tests/test_evals_write.py` is its offline gate: it stages the case,
+applies a reference change, runs the case's check, and grades that output.
 
 ## Development and releases
 

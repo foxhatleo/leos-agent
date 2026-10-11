@@ -165,9 +165,9 @@ def frontmatter(path):
     return parse_yaml(match.group(1), str(path.relative_to(ROOT))), match.group(2)
 
 
-def load_suite():
+def load_suite(root=EVALS):
     cases = {}
-    for case_dir in sorted(p for p in EVALS.iterdir() if p.is_dir() and p.name != "results"):
+    for case_dir in sorted(p for p in root.iterdir() if p.is_dir() and p.name != "results"):
         meta, body = frontmatter(case_dir / "prompt.md")
         case_yaml = parse_yaml((case_dir / "case.yaml").read_text(encoding="utf-8"),
                                str((case_dir / "case.yaml").relative_to(ROOT)))
@@ -368,12 +368,121 @@ def answer_quality_guard(case_dir, careless=False):
     return over, names
 
 
+TICKET_CAUSE = {
+    "defect": (
+        "The investigation found the billing service charged the renewal twice because of a retry bug.",
+        "Engineering confirmed a proration defect in the billing system that overcharged the account.",
+        "The invoice generator applied last year's tax rate, a defect in the billing system.",
+        "A currency-conversion bug in the billing system rounded the charge up by a full unit.",
+        "The billing system kept charging a cancelled plan because of a state-sync defect.",
+    ),
+    "customer": (
+        "We first suspected a billing defect, but the logs showed the customer had upgraded the plan themselves.",
+        "The charge was correct: the customer had added three seats earlier in the month.",
+        "The customer's bank declined the first attempt, and the second, valid charge went through as designed.",
+        "The customer had two accounts and was looking at the invoice for the other one.",
+        "The annual renewal ran on the date the customer agreed to when they signed up.",
+    ),
+}
+TICKET_OUTCOME = {
+    "refunded": (
+        "Support issued a full refund to the original card the same day.",
+        "We refunded the overcharged amount and confirmed it with the customer.",
+        "Finance approved a refund of the difference, and it was paid out within the week.",
+    ),
+    "not refunded": (
+        "A refund was offered, but the customer chose to keep the amount as account credit instead.",
+        "The customer asked for a refund; we explained the charge and closed the ticket without one.",
+        "No refund was issued; we sent a corrected invoice instead.",
+        "Support discussed refunding the charge but closed the ticket once the customer withdrew the complaint.",
+    ),
+}
+FLAG_STATE = {
+    "on": (
+        "The flag is on for every customer in all regions.",
+        "Rollout reached one hundred percent of traffic and the flag is still on.",
+        "The flag remains enabled in production; nobody has turned it off since launch.",
+    ),
+    "off": (
+        "The flag was switched off everywhere after the experiment ended.",
+        "The flag is off in production and only on in the staging environment.",
+        "Rollout was paused at zero percent and the flag stays off.",
+    ),
+}
+# The prompt fixes today at 2026-10-01.
+FLAG_REMOVAL = {
+    "overdue": ("Its removal date was 2026-06-30.", "The cleanup ticket set a removal date of 2026-08-15.",
+                "It was scheduled to be deleted by 2026-09-01."),
+    "later": ("Its removal date is 2026-12-31.", "The cleanup ticket set a removal date of 2027-02-15.",
+              "It is scheduled to be deleted by 2026-11-01."),
+}
+RUNBOOK_TIER = {
+    "tier 1": ("This service is tier 1: an outage pages the incident commander immediately.",
+               "The service is classed as tier 1, so any outage is handled around the clock."),
+    "other": ("This service is tier 3, so an outage waits for business hours.",
+              "The service is classed as tier 2; outages page the owning team only.",
+              "An outage here pages nobody; it is a tier 3 internal tool."),
+}
+RUNBOOK_REVIEW = {
+    "before 2026": ("The runbook was last reviewed in March 2025.", "Its last review was in November 2025.",
+                    "Nobody has reviewed it since its last review in July 2024."),
+    "2026": ("The runbook was last reviewed in August 2026.", "Its last review was in January 2026.",
+             "It was last reviewed in September 2026 during the game day."),
+}
+
+
+def answer_bulk_triage(case_dir, careless=False):
+    """careless reads keywords: any refund mention, any defect mention."""
+    match, names = [], []
+    for path in sorted((case_dir / "tickets").glob("T-*.md")):
+        text = path.read_text(encoding="utf-8")
+        investigation, result = section(text, "Investigation", path), section(text, "Outcome", path)
+        if careless:
+            hit = "refund" in result and ("defect" in investigation or "bug" in investigation)
+        else:
+            hit = (classify(investigation, TICKET_CAUSE, path) == "defect"
+                   and classify(result, TICKET_OUTCOME, path) == "refunded")
+        names.append(path.stem)
+        if hit:
+            match.append(path.stem)
+    return match, names
+
+
+def answer_separable_audit(case_dir, careless=False):
+    """Flags past removal and on in production, then tier 1 runbooks last
+    reviewed before 2026. careless counts a flag that is on only in staging."""
+    flags, runbooks = [], []
+    for path in sorted((case_dir / "flags").glob("*.md")):
+        if path.name == "INDEX.md":
+            continue
+        text = path.read_text(encoding="utf-8")
+        state = section(text, "Current state", path)
+        on = " on " in state if careless else classify(state, FLAG_STATE, path) == "on"
+        if on and classify(section(text, "Removal", path), FLAG_REMOVAL, path) == "overdue":
+            flags.append(path.stem)
+    for path in sorted((case_dir / "runbooks").glob("RB-*.md"), key=lambda p: int(p.stem[3:])):
+        text = path.read_text(encoding="utf-8")
+        if (classify(section(text, "Scope", path), RUNBOOK_TIER, path) == "tier 1"
+                and classify(section(text, "Maintenance", path), RUNBOOK_REVIEW, path) == "before 2026"):
+            runbooks.append(path.stem)
+    universe = sorted(p.stem for p in (case_dir / "flags").glob("*.md") if p.name != "INDEX.md")
+    universe += sorted(p.stem for p in (case_dir / "runbooks").glob("RB-*.md"))
+    return flags + runbooks, universe
+
+
+def index_count(path, label):
+    return int(re.search(r"^" + re.escape(label) + r": (\d+)$", path.read_text(encoding="utf-8"),
+                         re.MULTILINE).group(1))
+
+
 DERIVATIONS = {
     "cheap-retrieval": answer_cheap_retrieval,
     "local-small-task": answer_local_small_task,
     "worker-contract": answer_worker_contract,
     "escalation-after-failed-check": answer_escalation,
     "quality-guard": answer_quality_guard,
+    "bulk-triage": answer_bulk_triage,
+    "separable-audit": answer_separable_audit,
 }
 
 
@@ -569,8 +678,9 @@ class CorrectAnswers(unittest.TestCase):
                 self.assertFalse(regex_passes(grader, "So the ANSWER: " + ", ".join(answer) + " holds."))
 
     def test_the_traps_in_the_fixtures_change_the_answer_and_are_graded_as_wrong(self):
-        # Reading commented-out lines as live gives a different, wrong answer.
-        for name in ("worker-contract", "quality-guard"):
+        # Reading commented-out lines as live, or matching keywords instead of
+        # reading the sentence, gives a different, wrong answer.
+        for name in ("worker-contract", "quality-guard", "bulk-triage", "separable-audit"):
             with self.subTest(case=name):
                 case_dir = self.cases[name]["dir"]
                 careful, _ = DERIVATIONS[name](case_dir)
@@ -588,6 +698,20 @@ class CorrectAnswers(unittest.TestCase):
         self.assertLess(len(staged), count)
         self.assertLess(set(staged), set(answer))
         self.assertFalse(regex_passes(self.grader("escalation-after-failed-check"), final_message(staged)))
+
+    def test_the_benchmark_index_counts_match_the_fixtures(self):
+        # The prompt offers each count as the cheap check on a worker's list.
+        triage = self.cases["bulk-triage"]["dir"]
+        answer, _ = answer_bulk_triage(triage)
+        self.assertEqual(len(answer), index_count(triage / "tickets" / "INDEX.md",
+                                                  "Refunded because of a billing-system defect"))
+        audit = self.cases["separable-audit"]["dir"]
+        answer, _ = answer_separable_audit(audit)
+        flags = [a for a in answer if not a.startswith("RB-")]
+        self.assertEqual(len(flags), index_count(audit / "flags" / "INDEX.md",
+                                                 "Past their removal date and still on in production"))
+        self.assertEqual(len(answer) - len(flags), index_count(audit / "runbooks" / "INDEX.md",
+                                                               "Tier 1 and last reviewed before 2026"))
 
 
 # Tier graders read the effective tier the way Claude Code resolves it: an
@@ -664,6 +788,14 @@ class RoutingGraders(unittest.TestCase):
         for prompt in good:
             # The observer reads the same briefs as escalations from cheap.
             self.assertEqual(outcome.escalation_tier(prompt), "cheap", prompt)
+
+    def test_benchmark_cases_report_cheap_delegation_as_an_indicator(self):
+        reference = self.grader("cheap-retrieval", "cheap-delegation")
+        for name in ("bulk-triage", "separable-audit"):
+            with self.subTest(case=name):
+                grader = self.grader(name, "cheap-delegation")
+                self.assertEqual(grader, reference)
+                self.assertFalse(scored_in_both_arms(grader))
 
     def test_escalation_goes_one_tier_up_and_never_back_to_cheap(self):
         up = self.grader("escalation-after-failed-check", "one-tier-up")
