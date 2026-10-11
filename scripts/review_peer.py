@@ -147,7 +147,7 @@ def diff_payload(files, rules, max_bytes):
     parts, sent, held, size = [], [], [], 0
     for f in files:
         path = f.get("filename")
-        if ghreview.is_generated(path, rules):
+        if ghreview.exempt(f, rules):
             continue
         if not f.get("patch"):
             held.append({"path": path, "reason": "GitHub sent no patch"})

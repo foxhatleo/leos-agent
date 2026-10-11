@@ -48,7 +48,8 @@ The body is private until the review is submitted, which is why it is the
 right carrier and a public PR comment is not. Only input with nothing
 renderable in it (a non-object, or no path or no text) is `omitted`.
 `complete` means every finding reached the author: staged inline or carried.
-`coverage` lists changed files the input did not declare reviewed.
+`coverage` lists changed files the input did not declare reviewed, and counts
+any past GitHub's 3000-file listing as `unlisted` (never complete coverage).
 
 Verdict rules are enforced before anything is mutated: neutral and
 seriously-problematic need at least one pending comment or note; ready-to-merge
@@ -61,12 +62,16 @@ recorded verdict keeps coverage_complete (nothing unreviewed) and file counts;
 watch_review.py treats a head recorded with complete coverage as reviewed,
 whatever the verdict.
 
-Generated files are lockfiles and known generated suffixes, plus whatever the
-base branch's root .gitattributes marks linguist-generated (=false un-marks).
-The base, not the head, is read so a PR cannot exempt its own files.
+Generated files are whatever the base branch's root .gitattributes marks
+linguist-generated (=false un-marks), plus lockfiles and known generated
+suffixes that the PR modifies or removes. The base, not the head, is read, and
+a name alone never exempts a file the PR adds, renames or copies, so a PR
+cannot exempt its own files. A lockfile edit whose added lines name a package
+origin (scheme and host, scp-style host, or local path) that its base side
+does not is read too.
 
-Read-only GETs are retried once on a transient failure (5xx, 429, timeout,
-connection reset). Mutations are never retried.
+Read-only GETs are retried once on a transient failure (5xx, 429, a secondary
+rate limit, timeout, connection reset). Mutations are never retried.
 
 Exit codes: 0 success; 1 API failure; 2 usage/input error;
 3 refused — a pending review being cleared (clear-pending, or stage
@@ -93,15 +98,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # patched vendored libraries) that exempting them from coverage would let real
 # changes go unread; a repository that does generate into them says so with
 # linguist-generated in .gitattributes, which is honoured below.
-GENERATED_PATTERNS = [
+LOCKFILE_PATTERNS = [
     r"(^|/)package-lock\.json$", r"(^|/)npm-shrinkwrap\.json$", r"(^|/)yarn\.lock$",
     r"(^|/)pnpm-lock\.yaml$", r"(^|/)bun\.lockb?$", r"(^|/)Cargo\.lock$",
     r"(^|/)Gemfile\.lock$", r"(^|/)poetry\.lock$", r"(^|/)Pipfile\.lock$",
     r"(^|/)uv\.lock$", r"(^|/)go\.sum$", r"(^|/)composer\.lock$", r"(^|/)flake\.lock$",
     r"(^|/)Podfile\.lock$", r"(^|/)pubspec\.lock$", r"(^|/)mix\.lock$",
+]
+GENERATED_PATTERNS = LOCKFILE_PATTERNS + [
     r"\.min\.(js|css)$", r"\.(js|mjs|cjs|css)\.map$",
     r"\.pb\.(go|cc|h)$", r"_pb2(_grpc)?\.pyi?$", r"\.generated\.",
 ]
+# A name is chosen by whoever writes the PR, so by itself it exempts only a
+# file the PR changes in place. One the PR adds, renames or copies under a
+# generated-looking name is read like any other file.
+NAME_EXEMPT_STATUSES = ("modified", "changed", "removed")
+# Where a lockfile fetches packages from: scheme://host, scp-style hosts
+# (user@host:path), and local or patch protocols.
+ORIGIN_RE = re.compile(r"\b([a-z][a-z0-9+.-]*)://(?:[^/\s\"'@]*@)?([^/\s\"'<>,;)\]}?#]+)"
+                       r"|\b[a-z0-9_.-]+@([a-z0-9.-]+\.[a-z]{2,}):(?!//)"
+                       r"|\b(file|link|portal|patch):(?!//)", re.IGNORECASE)
 HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
 GH_TIMEOUT = 30
@@ -109,9 +125,12 @@ GH_TIMEOUT = 30
 # pages at per_page=100, which does not fit the single-request timeout.
 GH_PAGINATED_TIMEOUT = 180
 RETRY_DELAY = 2.0
+# GitHub answers its secondary (abuse) rate limit with HTTP 403, not 429; the
+# message is the only thing that tells it apart from a permission denial.
 TRANSIENT_ERROR = re.compile(
     r"HTTP (5\d\d|429)|timed? ?out|connection (reset|refused)|unexpected EOF|TLS handshake"
-    r"|temporarily unavailable|bad gateway|service unavailable",
+    r"|temporarily unavailable|bad gateway|service unavailable|secondary rate limit"
+    r"|API rate limit exceeded",
     re.IGNORECASE)
 
 # The lens confidence the procedure asks for; a staged comment that declares a
@@ -192,12 +211,84 @@ def fetch_files(repo, pr):
     return ndjson(out)
 
 
+# GitHub lists at most this many files for a pull request, however many
+# pages are read; the rest of a larger PR is simply absent from the listing.
+LISTING_CAP = 3000
+
+
+def unlisted_count(repo, pr, files):
+    """How many changed files the listing left out: 0 below the cap, else
+    pulls/N's changed_files minus what was listed. Only a capped listing pays
+    for the extra call."""
+    if len(files) < LISTING_CAP:
+        return 0
+    total = gh(["api", f"repos/{repo}/pulls/{pr}", "--jq", ".changed_files"]).strip()
+    if not total.isdigit():
+        raise ValueError("GitHub returned no changed_files count for a %d-file listing" % len(files))
+    return max(0, int(total) - len(files))
+
+
+def unlisted_entry(count):
+    """The unreviewed-list stand-in for files nobody can name, let alone read."""
+    return "(%d changed file(s) beyond GitHub's %d-file listing)" % (count, LISTING_CAP)
+
+
 def is_generated(path, rules=None):
-    """Generated by the repository's own attributes first, then by name."""
+    """Generated by the repository's own attributes first, then by name.
+
+    A name alone is not enough to leave a changed file unread; see exempt()."""
     marked = linguist_generated(path, rules or [])
     if marked is not None:
         return marked
     return any(re.search(p, path) for p in GENERATED_PATTERNS)
+
+
+def origins(line):
+    """The package origins one lockfile line names, lowercased."""
+    found = set()
+    for scheme, host, scp, local in ORIGIN_RE.findall(line):
+        if host:
+            found.add("%s://%s" % (scheme.lower(), host.lower()))
+        elif scp:
+            found.add("ssh://%s" % scp.lower())
+        elif local:
+            found.add(local.lower() + ":")
+    return found
+
+
+def new_origins(patch):
+    """Origins the patch's added lines name that neither its removed nor its
+    context lines (both from the base file) do. A version bump from the same
+    registry names none; a new host, a scp-style or tarball source, or a local
+    path does, and so does a dependency whose hunk shows no origin beside it."""
+    added, base = set(), set()
+    for line in patch_lines(patch or ""):
+        if HUNK_RE.match(line) or line.startswith("\\"):
+            continue
+        (added if line.startswith("+") else base).update(origins(line[1:]))
+    return sorted(added - base)
+
+
+def exempt(f, rules=None):
+    """Whether a changed file is left out of review coverage as generated.
+
+    The base branch's .gitattributes decides first, either way. Otherwise a
+    generated-looking name exempts only a file the PR modifies or removes, and
+    a lockfile edit only while no added line names a new origin. A lockfile
+    GitHub sends no patch for (binary, or too large) has no changed line to
+    judge and keeps its exemption.
+    """
+    path = f.get("filename") or ""
+    marked = linguist_generated(path, rules or [])
+    if marked is not None:
+        return marked
+    if not any(re.search(p, path) for p in GENERATED_PATTERNS):
+        return False
+    if f.get("status") not in NAME_EXEMPT_STATUSES:
+        return False
+    if f.get("status") != "removed" and any(re.search(p, path) for p in LOCKFILE_PATTERNS):
+        return not new_origins(f.get("patch"))
+    return True
 
 
 def _glob_regex(pattern):
@@ -476,6 +567,25 @@ def graphql(query, variables, retry=False):
     return json.loads(gh(args, retry=retry))
 
 
+def field(data, *keys):
+    """data[k1][k2]..., or ValueError naming what GitHub left out.
+
+    GraphQL answers a missing pull request or thread with a null node, often
+    beside an `errors` list; indexing into that raised a bare TypeError and a
+    traceback instead of a message.
+    """
+    node = data
+    for key in keys:
+        if not isinstance(node, dict) or node.get(key) is None:
+            errors = data.get("errors") if isinstance(data, dict) else None
+            detail = "; ".join(str(e.get("message", e)) if isinstance(e, dict) else str(e)
+                               for e in errors or [])[:300]
+            raise ValueError("GitHub returned no %s%s" % (".".join(keys[:keys.index(key) + 1]),
+                                                       " (%s)" % detail if detail else ""))
+        node = node[key]
+    return node
+
+
 REPO_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 # canonical full_name -> the spelling this invocation was given, so a receipt
 # written under that spelling by an older release is still found.
@@ -597,12 +707,43 @@ def comment_identity(comment):
             "in_reply_to_id": comment.get("in_reply_to_id")}
 
 
+def identity_hash(comment):
+    return hashlib.sha256(json.dumps(comment_identity(comment), sort_keys=True).encode()).hexdigest()
+
+
 def receipt_rows(comments):
     """Per-comment path plus content hash, sorted: what the receipt stores."""
-    rows = [{"path": comment_identity(c)["path"],
-             "sha256": hashlib.sha256(json.dumps(comment_identity(c), sort_keys=True).encode()).hexdigest()}
-            for c in comments]
+    rows = [{"path": comment_identity(c)["path"], "sha256": identity_hash(c)} for c in comments]
     return sorted(rows, key=lambda row: (row["path"], row["sha256"]))
+
+
+ANCHOR_KEYS = ("line", "side", "start_line", "start_side")
+
+
+def staged_anchors(comments):
+    """{identity hash: anchor} for comments that carry a line.
+
+    GitHub re-reads a pending comment with no line and no range, only a
+    position, so a multi-line comment restored from that alone came back on
+    one line. The anchors staged are kept beside the receipt for recovery.
+    They are not part of ownership: the fingerprint never reads them.
+    """
+    anchors = {}
+    for c in comments or []:
+        if isinstance(c, dict) and isinstance(c.get("line"), int) and not isinstance(c.get("line"), bool):
+            anchors[identity_hash(c)] = {k: c[k] for k in ANCHOR_KEYS if c.get(k) is not None}
+    return anchors
+
+
+def with_anchors(comments, anchors):
+    """Comments re-read from GitHub, given back the anchors they were staged with."""
+    if not isinstance(anchors, dict):
+        return comments
+    out = []
+    for c in comments:
+        anchor = anchors.get(identity_hash(c)) if c.get("line") is None else None
+        out.append(dict(c, **anchor) if isinstance(anchor, dict) else c)
+    return out
 
 
 def review_fingerprint(body, comments):
@@ -614,7 +755,9 @@ def restore_anchor(comment):
     """A backed-up draft comment as a create-review payload entry.
 
     A pending comment re-read from GitHub has no line, only a position, so a
-    payload built from line alone would 422 and lose the restoration.
+    payload built from line alone would 422 and lose the restoration. The
+    staged line, side and range are used when the receipt kept them
+    (with_anchors), so a multi-line comment comes back multi-line.
     """
     entry = {"path": comment.get("path"), "body": comment.get("body")}
     if comment.get("line") is not None:
@@ -625,12 +768,19 @@ def restore_anchor(comment):
     return entry
 
 
-def remember_review(repo, pr, review, comments, body=""):
+def remember_review(repo, pr, review, comments, body="", anchors=None):
+    """Write the ownership receipt. Anchors already recorded for comments still
+    in the draft are kept, so a refresh after a reply does not lose them."""
     from state import atomic_write
     path = receipt_path(repo, pr, review["id"])
+    current = {identity_hash(c) for c in comments}
+    kept = read_receipt(repo, pr, review["id"]).get("anchors")
+    kept = {k: v for k, v in kept.items() if k in current} if isinstance(kept, dict) else {}
+    kept.update({k: v for k, v in staged_anchors(comments).items() if k in current})
+    kept.update({k: v for k, v in (anchors or {}).items() if k in current})
     atomic_write(str(path), {"scheme": RECEIPT_SCHEME, "review_id": review["id"],
                              "fingerprint": review_fingerprint(body, comments),
-                             "comments": receipt_rows(comments)})
+                             "comments": receipt_rows(comments), "anchors": kept})
     prune_receipts(keep=path)
 
 
@@ -645,7 +795,7 @@ def remember_posted(repo, pr, review, fallback, body):
         comments = review_comments(repo, pr, review["id"])
     except (OSError, ValueError, subprocess.SubprocessError):
         comments = fallback
-    remember_review(repo, pr, review, comments, body)
+    remember_review(repo, pr, review, comments, body, staged_anchors(fallback))
 
 
 def owns(review, comments, receipt):
@@ -706,6 +856,8 @@ def pending_snapshot(repo, pr, force=False):
     recoverable = targets is not None
     if not force and (not owned or not recoverable):
         return None, ownership_refusal(review, comments, receipt, owned, recoverable)
+    # The backup restores from these: give each its staged anchor back.
+    comments = with_anchors(comments, receipt.get("anchors"))
     return {"review": review, "comments": comments, "replies": targets or [], "forced": not owned}, None
 
 
@@ -968,7 +1120,8 @@ def fetch_threads(repo, pr):
         variables = {"owner": owner, "name": name, "number": int(pr)}
         if cursor:
             variables["cursor"] = cursor
-        conn = graphql(THREADS_QUERY, variables, retry=True)["data"]["repository"]["pullRequest"]["reviewThreads"]
+        conn = field(graphql(THREADS_QUERY, variables, retry=True), "data", "repository", "pullRequest",
+                     "reviewThreads")
         for thread in conn["nodes"]:
             comments = thread["comments"]
             seen = set()
@@ -977,7 +1130,8 @@ def fetch_threads(repo, pr):
                 if not after or after in seen:
                     raise ValueError("thread comment pagination did not advance")
                 seen.add(after)
-                page = graphql(THREAD_COMMENTS_QUERY, {"thread": thread["id"], "cursor": after}, retry=True)["data"]["node"]["comments"]
+                page = field(graphql(THREAD_COMMENTS_QUERY, {"thread": thread["id"], "cursor": after}, retry=True),
+                             "data", "node", "comments")
                 comments["nodes"].extend(page["nodes"])
                 comments["pageInfo"] = page["pageInfo"]
             nodes.append(thread)
@@ -1056,24 +1210,30 @@ def carried_paths(files, prior, since):
     return {f["filename"] for f in files if patches.get(f["filename"]) == patch_identity(f)}
 
 
-def review_coverage(files, reviewed, rules=None, carried=None, since=None):
+def review_coverage(files, reviewed, rules=None, carried=None, since=None, unlisted=0):
     """Which changed files the reviewer declared read, and which it did not.
 
     `carried` files were read at an earlier head whose patch for them is
     identical; they count as covered and are listed, so the record shows which
-    files this pass actually read and which it relied on.
+    files this pass actually read and which it relied on. `unlisted` files are
+    past GitHub's listing cap: unnamed, so unreviewable, and coverage is never
+    complete while there are any.
     """
     declared = {path for path in reviewed if isinstance(path, str)}
     carried = set(carried or ())
     changed = [f["filename"] for f in files]
-    generated = {path for path in changed if is_generated(path, rules)}
+    generated = {f["filename"] for f in files if exempt(f, rules)}
     unreviewed = [path for path in changed if path not in declared and path not in generated
                   and path not in carried]
-    coverage = {"files_changed": len(changed),
+    if unlisted:
+        unreviewed.append(unlisted_entry(unlisted))
+    coverage = {"files_changed": len(changed) + unlisted,
                 "files_reviewed": sum(path in declared for path in changed),
                 "files_skipped_generated": [path for path in changed if path not in declared and path in generated],
                 "unreviewed": unreviewed,
                 "complete": not unreviewed}
+    if unlisted:
+        coverage["unlisted"] = unlisted
     if since:
         coverage["carried_from"] = since
         coverage["carried"] = [path for path in changed if path not in declared and path in carried
@@ -1218,7 +1378,7 @@ def cmd_map(a):
             "status": f["status"],
             "additions": f["additions"],
             "deletions": f["deletions"],
-            "generated": is_generated(f["filename"], rules),
+            "generated": exempt(f, rules),
             "has_patch": diffmap is not None,
             "right_ranges": ranges(diffmap["right"]) if diffmap else [],
             "left_ranges": ranges(diffmap["left"]) if diffmap else [],
@@ -1227,6 +1387,8 @@ def cmd_map(a):
     print(json.dumps({
         "commit": a.commit,
         "files": report,
+        # Past GitHub's listing cap: these cannot be named, so coverage cannot complete.
+        "unlisted": unlisted_count(a.repo, a.pr, files),
         "reviewable_files": len(reviewable),
         "reviewable_lines": sum(f["additions"] + f["deletions"] for f in reviewable),
         # Still part of coverage: GitHub sent no patch (binary or too large),
@@ -1237,21 +1399,31 @@ def cmd_map(a):
 
 
 def cmd_extract(a):
+    """Patches as `show` prints files: invisible and control characters made
+    visible, so a filename or a patch line cannot forge another file's header
+    or rewrite the reader's terminal. Line breaks are kept, so hunk line
+    numbers still count as GitHub counts them."""
     wanted = set(a.paths)
     seen = set()
     for f in pinned_files(a.repo, a.pr, a.commit, cached=True):
         if wanted and f["filename"] not in wanted:
             continue
         seen.add(f["filename"])
-        header = f"--- {f['filename']} ({f['status']}, +{f['additions']} -{f['deletions']}"
+        header = "--- %s (%s, +%s -%s" % (visible_name(f["filename"]), visible_name(str(f.get("status"))),
+                                          f.get("additions"), f.get("deletions"))
         if f.get("patch"):
-            print(header + ")")
-            print(f["patch"])
+            lines = patch_lines(f["patch"])
+            body = [line for line in lines if not HUNK_RE.match(line) and not line.startswith("\\")]
+            crlf = bool(body) and all(line.endswith("\r") for line in body)
+            if crlf:
+                lines = [line[:-1] if line.endswith("\r") else line for line in lines]
+            print(header + (", CRLF)" if crlf else ")"))
+            print("\n".join(visible(line) for line in lines))
         else:
             print(header + "; GitHub sent no patch: read the file with `show`)")
         print()
     for path in sorted(wanted - seen):
-        print(f"--- {path} (not changed in this PR)\n")
+        print(f"--- {visible_name(path)} (not changed in this PR)\n")
 
 
 SHOW_MAX_BYTES = 200_000          # printed whole; larger files need --lines
@@ -1265,6 +1437,11 @@ INVISIBLE = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f­​-‏‪-‮"
 
 def visible(text):
     return INVISIBLE.sub(lambda m: ("\\u%04x" if ord(m.group()) > 0xff else "\\x%02x") % ord(m.group()), text)
+
+
+def visible_name(text):
+    """visible(), and a newline shown too: a name is one line, never two."""
+    return visible(text).replace("\n", "\\x0a")
 
 
 def line_range(spec, total):
@@ -1306,12 +1483,12 @@ def cmd_show(a):
         print("--- %s/ @ %s (%d entries)" % (a.path.strip("/") or ".", a.commit[:12], len(rows)))
         for entry in rows:
             suffix = "/" if entry.get("type") == "dir" else ""
-            print("%s%s\t%s" % (visible(entry.get("name") or ""), suffix,
+            print("%s%s\t%s" % (visible_name(entry.get("name") or ""), suffix,
                                 entry.get("size") if entry.get("type") == "file" else entry.get("type")))
         return
     kind = meta.get("type")
     if kind == "symlink":
-        print(f"--- {a.path} @ {a.commit[:12]}: symlink to {visible(str(meta.get('target')))}")
+        print(f"--- {a.path} @ {a.commit[:12]}: symlink to {visible_name(str(meta.get('target')))}")
         return
     if kind == "submodule":
         print(f"--- {a.path} @ {a.commit[:12]}: submodule at {meta.get('sha')} ({meta.get('submodule_git_url')})")
@@ -1321,9 +1498,14 @@ def cmd_show(a):
     size = meta.get("size") or 0
     limit = SHOW_RANGE_MAX_BYTES if a.lines else SHOW_MAX_BYTES
     if size > limit:
+        # Past the range limit the file cannot be read through this helper at
+        # all, so coverage cannot complete. Retrying cannot change that; it is
+        # the user's call (a watcher parks the head with `block`).
         raise ValueError(f"{a.path} is {size} bytes at {a.commit[:12]}; "
                          + ("pass --lines START:END to read part of it" if not a.lines
-                            else f"too large to read here (limit {limit})"))
+                            else f"too large to read here (limit {limit}); it stays unreviewed, which "
+                                 "only the user can accept: report it (a watcher blocks the head, never "
+                                 "releases it)"))
     sys.stdout.write(render_file(a.path, a.commit, file_bytes(a.repo, a.commit, a.path, meta), a.lines))
 
 
@@ -1345,10 +1527,11 @@ def cmd_delta(a):
         print(json.dumps(report, indent=1))
         return
     changed = [f["filename"] for f in files]
+    generated = {f["filename"] for f in files if exempt(f, rules)}
     report.update(incremental=True,
-                  carry=[p for p in changed if p in carried and not is_generated(p, rules)],
-                  review=[p for p in changed if p not in carried and not is_generated(p, rules)],
-                  generated=[p for p in changed if is_generated(p, rules)])
+                  carry=[p for p in changed if p in carried and p not in generated],
+                  review=[p for p in changed if p not in carried and p not in generated],
+                  generated=[p for p in changed if p in generated])
     print(json.dumps(report, indent=1))
 
 
@@ -1445,7 +1628,7 @@ def cmd_resolve_thread(a):
         return
     require_head(a.repo, a.pr, a.commit)
     result = graphql(RESOLVE_MUTATION, {"thread": a.thread_id})
-    print(json.dumps({"resolved": result["data"]["resolveReviewThread"]["thread"], "commit": a.commit}))
+    print(json.dumps({"resolved": field(result, "data", "resolveReviewThread", "thread"), "commit": a.commit}))
 
 
 def cmd_reply(a):
@@ -1471,6 +1654,10 @@ def cmd_reply(a):
         ))
         review = {"id": created["id"], "node_id": created["node_id"], "body": created.get("body") or ""}
         owned = True
+        # Receipt first: if the head check below or the reply fails, the empty
+        # shell is still recognisably ours, so clear-pending and a later stage
+        # can remove it instead of refusing it as a hand-made draft.
+        remember_review(a.repo, a.pr, review, [], review["body"])
     else:
         owned = owns(review, review_comments(a.repo, a.pr, review["id"]),
                      read_receipt(a.repo, a.pr, review["id"]))
@@ -1487,7 +1674,7 @@ def cmd_reply(a):
         except (OSError, ValueError, subprocess.SubprocessError):
             print("reply staged; ownership receipt not refreshed", file=sys.stderr)
     print(json.dumps({
-        "staged_reply": result["data"]["addPullRequestReviewThreadReply"]["comment"]["id"],
+        "staged_reply": field(result, "data", "addPullRequestReviewThreadReply", "comment", "id"),
         "thread": a.thread_id,
         "pending_review": review["id"],
     }))
@@ -1564,7 +1751,8 @@ def cmd_stage(a):
         blocker = incremental_blocker(a.repo, a.pr)
         if blocker:
             raise ValueError(blocker)
-    coverage = review_coverage(files, reviewed, rules, carried_files, since)
+    coverage = review_coverage(files, reviewed, rules, carried_files, since,
+                               unlisted_count(a.repo, a.pr, files))
     narrowed = []
     staged, snapped, dropped = validate_comments(comments, build_maps(files), narrowed)
     # A finding that failed to anchor is carried in the review body; only input

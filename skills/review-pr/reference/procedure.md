@@ -108,13 +108,20 @@ stop mutations and re-review the new changes. Do not reinterpret old findings
 against a new head. `show` prints a file numbered as GitHub counts its lines,
 with invisible and control characters made visible, or lists a directory; use
 it for the surrounding code a finding depends on and for every file `map`
-lists under `read_with_show` (no patch from GitHub).
+lists under `read_with_show` (no patch from GitHub). A file nobody can read
+here (`show` says it is too large to read, or `map` counts `unlisted` files
+past GitHub's 3000-file listing) keeps coverage incomplete; retrying will not
+change that. Name it in the report as the user's decision; a watcher run
+returns `Result: blocked` so the parent parks the head instead of retrying.
 
 Read every changed non-generated file before staging, tests included: you or a
 lens must have read its patch and the surrounding code it depends on. `map`
-marks `generated` lockfiles, known generated suffixes, and what the base
-branch's `.gitattributes` marks `linguist-generated`; summarize those, but
-review their generation inputs and any consequential generated change. List
+marks `generated` what the base branch's `.gitattributes` marks
+`linguist-generated`, plus lockfiles and known generated suffixes the PR
+modifies or removes; summarize those, but review their generation inputs and
+any consequential generated change. A generated-looking file the PR adds,
+renames or copies, and a lockfile edit that adds a package origin (host, git
+or local source) its base side lacks, are not marked: read them. List
 the paths actually read in the stage input's `reviewed`; stage reports any
 other non-generated, non-carried file as `unreviewed`, refuses ready-to-merge,
 and the watcher will not record the head. A lens's `covered_paths` count only

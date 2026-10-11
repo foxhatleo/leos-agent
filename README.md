@@ -428,7 +428,9 @@ findings against a new head. Replacing a pending review requires
 an unchanged ownership receipt and saves recovery data. New comments/replies
 remain pending. Only verified addressed threads rooted by the authenticated
 user can be auto-resolved; resolution is public and requires SHA-bound evidence.
-Every changed non-generated file is read before staging; after a complete
+Every changed non-generated file is read before staging. A name alone exempts
+only a file the PR modifies, never one it adds, and a lockfile edit that adds a
+package origin is read too. After a complete
 review whose draft is no longer pending, a new head re-reads only the files
 whose patch changed. Each finding is
 re-checked at the SHA before staging, and the repository's own CLAUDE.md,
