@@ -211,6 +211,8 @@ The policy in `rules/preferences.md` applies to work on this repo too.
   with `scaffold_script` and runs need `--scaffold`.
 - **Codex** uses native `/hooks` trust for changed hook definitions; do not
   bypass it or assume enabling a plugin approves hooks. Batch related releases.
+  The PreCompact handoff reminder is Codex only: Codex shows a PreCompact
+  `systemMessage` in its UI, while Claude Code discards it.
   `spawn_agent` selects the model by `model` and `reasoning_effort`; `agent_type`,
   offered once roles exist, layers its role config after them. A role cannot
   set `sandbox_mode`: a child keeps its parent's sandbox (codex-rs

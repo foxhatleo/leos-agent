@@ -34,6 +34,18 @@
           }
         ]
       }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "LEOS_AGENT_HARNESS=codex python3 \"${PLUGIN_ROOT}/scripts/compact_nudge.py\"",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

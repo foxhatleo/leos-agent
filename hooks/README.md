@@ -11,6 +11,13 @@ Claude/Codex commands set LEOS_AGENT_HARNESS explicitly. Their SessionStart
 hooks emit the compact deterministic policy; both also cover fork starts.
 Cursor loads its native rule directly, so its lifecycle hook emits no policy.
 
+Codex PreCompact (`scripts/compact_nudge.py`) answers a top-level compaction
+with only a `systemMessage`, which Codex shows as a UI warning naming
+`$leos-agent:handoff`; plain stdout would be ignored. It never sets
+`continue: false`, writes nothing, and stays silent for a subagent's
+compaction or unreadable input. Claude Code discards a PreCompact
+`systemMessage`, so Claude has no such hook.
+
 Claude PreToolUse can supply updatedInput without granting tool permission;
 the guard corrects a child's model that way. A fresh session's first dispatch
 can precede the parent transcript and takes the unknown-parent path (see

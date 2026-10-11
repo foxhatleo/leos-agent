@@ -109,6 +109,18 @@ class CodexHookNames(Sandboxed):
                                       config={}, catalog=self.catalog)
                 self.assertNotEqual(result["reason"], "not-a-dispatch")
 
+    def test_pre_compact_fires_for_both_triggers_and_only_on_codex(self):
+        # pre-compact.command.input.schema.json: trigger is manual|auto
+        (entry,) = self.manifest()["PreCompact"]
+        for trigger in ("manual", "auto"):
+            with self.subTest(trigger=trigger):
+                self.assertTrue(codex_matches(entry["matcher"], trigger))
+        (hook,) = entry["hooks"]
+        self.assertIn("scripts/compact_nudge.py", hook["command"])
+        # Claude Code discards a PreCompact systemMessage; Leo chose no Claude hook.
+        claude = json.loads((ROOT / "hooks" / "hooks.json").read_text())["hooks"]
+        self.assertNotIn("PreCompact", claude)
+
     def test_session_start_covers_every_source_codex_sends(self):
         # session-start.command.input.schema.json: startup|resume|clear|compact|fork
         (entry,) = self.manifest()["SessionStart"]

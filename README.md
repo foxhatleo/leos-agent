@@ -369,6 +369,12 @@ Detailed review procedures remain in deferred reference files. Duplicate
 slash-command wrappers are removed; native skills provide invocation. Explicit
 invocation controls do not universally imply hidden metadata—measure both.
 
+On Codex, a PreCompact hook shows a one-line UI warning before each
+top-level compaction pointing to `$leos-agent:handoff`; the model never
+sees it, and compaction always proceeds. Like every changed hook definition,
+it needs trust in `/hooks` after the upgrade that adds it. Claude Code
+discards a PreCompact hook's message, so it has no equivalent.
+
 ```sh
 python3 scripts/doctor.py --harness claude --json
 python3 scripts/usage_scan.py --since 7d --harness claude --json

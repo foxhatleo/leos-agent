@@ -341,7 +341,7 @@ def main():
 	# The guard's own modules must import cleanly: a hook that cannot even load
 	# fails open on every dispatch, silently, which is the one failure mode that
 	# looks exactly like everything working.
-	for name in ("dispatch_guard", "dispatch_log", "outcome", "observe_agent", "handback_contract", "accounting", "usage_scan", "payload", "emit_payload"):
+	for name in ("dispatch_guard", "dispatch_log", "outcome", "observe_agent", "handback_contract", "accounting", "usage_scan", "payload", "emit_payload", "compact_nudge"):
 		path = ROOT / "scripts" / f"{name}.py"
 		check(path.is_file(), f"scripts/{name}.py is missing")
 		if path.is_file():
