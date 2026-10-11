@@ -68,3 +68,15 @@ class HandoffSafety(unittest.TestCase):
         (self.root / "state/handoffs").symlink_to(self.root / "external", target_is_directory=True)
         self.assertNotEqual(self.run_cli("new", "outside").returncode, 0)
         self.assertEqual(list((self.root / "external").iterdir()), [])
+
+    def test_rm_deletes_only_an_exactly_named_handoff(self):
+        """`path` resolves a unique prefix for reading; `rm f` must not delete
+        flaky-auth-retry just because it is the only name starting with f."""
+        created = Path(self.run_cli("new", "flaky-auth-retry").stdout.splitlines()[1])
+        self.assertEqual(self.run_cli("path", "flaky").stdout.strip(), str(created))
+        for prefix in ("f", "flaky", "flaky-auth-retr"):
+            self.assertNotEqual(self.run_cli("rm", prefix).returncode, 0)
+            self.assertTrue(created.exists())
+        removed = self.run_cli("rm", "flaky-auth-retry")
+        self.assertEqual(removed.returncode, 0, removed.stderr)
+        self.assertFalse(created.exists())

@@ -14,7 +14,7 @@ it. Files land at <root>/handoffs/<name>.md.
   handoff.py new  <slug>              print the de-collided name and its path
   handoff.py path <name>              resolve a name (exact, else unique prefix)
   handoff.py list [--all] [--limit N] recent handoffs, newest first
-  handoff.py rm   <name>              delete one
+  handoff.py rm   <name>              delete one (exact name only, never a prefix)
 
 Nothing is ever pruned automatically; `rm` is the only way a handoff goes away.
 `list` shows only handoffs written in or under the current directory unless
@@ -212,11 +212,17 @@ def cmd_list(argv):
 
 
 def cmd_rm(argv):
+    # Exact names only. A prefix is fine for reading (`path`), but a deletion
+    # resolved from one -- `rm f` removing flaky-auth-retry because it was the
+    # only match -- destroys a handoff nobody named.
     if len(argv) != 1:
         sys.exit("handoff: usage: handoff.py rm <name>")
-    name, path = resolve(argv[0])
+    path = file_for(argv[0])
+    if not os.path.isfile(path):
+        sys.exit(f"handoff: no handoff named exactly {argv[0]!r}; `rm` takes the full name. "
+                 "`handoff.py list --all` shows what exists.")
     os.unlink(path)
-    print(f"removed {name}")
+    print(f"removed {argv[0]}")
 
 
 def main(argv):
