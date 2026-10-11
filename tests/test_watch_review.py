@@ -861,9 +861,22 @@ class TestVerdicts(WatcherStateCase):
     def test_an_unreviewed_file_is_not_recorded(self):
         coverage = {"files_changed": 2, "files_reviewed": 1, "files_skipped_generated": [],
                     "unreviewed": ["tests/test_a.py"], "complete": False}
-        with self.assertRaisesRegex(ValueError, "tests/test_a.py"):
-            self.record(coverage=coverage, verdict="seriously-problematic")
+        for verdict in ("neutral", "ready-to-merge"):
+            with self.assertRaisesRegex(ValueError, "tests/test_a.py"):
+                self.record(coverage=coverage, verdict=verdict)
         self.assertEqual(self.w.reviewed_heads("o/r"), {})
+
+    def test_a_verified_blocking_verdict_records_despite_partial_coverage(self):
+        """Partial coverage blocks readiness, not a verified blocking verdict."""
+        coverage = {"files_changed": 2, "files_reviewed": 1, "files_skipped_generated": [],
+                    "unreviewed": ["tests/test_a.py"], "complete": False}
+        state = self.record(coverage=coverage, verdict="seriously-problematic")
+        self.assertEqual(state["heads"], {"1": self.HEAD})
+        self.assertEqual(state["verdicts"]["1"]["verdict"], "seriously-problematic")
+        self.assertIs(state["verdicts"]["1"]["coverage_complete"], False)
+        # Still a verdict the author must see: nothing pending is refused as before.
+        with self.assertRaisesRegex(ValueError, "seriously-problematic needs"):
+            self.record(coverage=coverage, verdict="seriously-problematic", staged=0, carried=0, notes=0)
 
     def test_a_standing_ready_verdict_needs_an_override_to_downgrade(self):
         self.ready()
@@ -905,6 +918,23 @@ class TestVerdicts(WatcherStateCase):
             out = self.run_ticks([[pr(1, head=self.NEW)]])
         self.assertEqual(out, [])
         self.assertEqual(self.w.load_entry("o/r").get("claims") or {}, {})
+
+    def test_one_pr_whose_files_cannot_be_read_does_not_starve_the_others(self):
+        """A carry check that raised failed the whole tick, before any later PR
+        was looked at, and did so again every tick."""
+        self.ready()
+        broken = self.w.GhError("HTTP 502: Bad Gateway")
+
+        def files(repo, number, head, cwd):
+            raise broken
+
+        with mock.patch.object(self.w, "pr_files", side_effect=files):
+            out = self.run_ticks([[pr(1, head=self.NEW), pr(2, head="c" * 40)]] * self.w.UNSTABLE_TRIES,
+                                 settle=0)
+        self.assertFalse(any("tick failed" in line for line in out), out)
+        self.assertTrue(any(line.startswith("review-requested o/r#2 ") for line in out), out)
+        # #1 is retried, then reviewed in full rather than dropped.
+        self.assertEqual(sum("o/r#1 " in line and "claim=" in line for line in out), 1, out)
 
     def test_a_listing_that_never_settles_is_reviewed_rather_than_dropped(self):
         self.ready()
@@ -1096,6 +1126,19 @@ class TestClaimArguments(HostCase):
                     self.cli(*command, "--claim", bad)
                 self.assertEqual(raised.exception.code, 2)
         self.assertEqual(json.loads(self.cli("start", "1", "--head", H1, "--claim", token))["state"], "started")
+
+    def test_a_superseded_renew_is_refused_and_changes_nothing(self):
+        self.github.add(1, H1)
+        old = self.w.claim_review("o/r", 1, H1, 0)
+        self.cli("start", "1", "--head", H1, "--claim", old)
+        self.w.release_claim("o/r", 1, old, 10)
+        new = self.w.claim_review("o/r", 1, H1, 20)
+        self.cli("start", "1", "--head", H1, "--claim", new)
+        before = self.w.load_entry("o/r")
+        with self.assertRaisesRegex(ValueError, "stop work on this head"):
+            self.cli("renew", "1", "--claim", old)
+        self.assertEqual(self.w.load_entry("o/r"), before)
+        self.assertEqual(json.loads(self.cli("renew", "1", "--claim", new))["state"], "started")
 
 
 class TestRepositorySpelling(HostCase):

@@ -659,6 +659,10 @@ class FakeGitHub:
         self.listing_refs = []
         self.failures = []  # [(predicate(args), stderr)], each consumed once
         self.calls = []
+        # pulls/N's changed_files; None means as many as are listed. GitHub's
+        # listing stops at 3000 files, so a larger PR reports more than it lists.
+        self.changed_files = None
+        self.posted = []  # create-review payloads, as sent
 
     def head(self):
         return self.heads.pop(0) if len(self.heads) > 1 else self.heads[0]
@@ -733,6 +737,8 @@ class FakeGitHub:
             assert jq == ".full_name"
             return self.full_name + "\n"
         if re.fullmatch(r"/pulls/\d+", sub):
+            if jq == ".changed_files":
+                return "%d\n" % (self.changed_files if self.changed_files is not None else len(self.files))
             return (self.head() if jq == ".head.sha" else self.base) + "\n"
         if re.fullmatch(r"/pulls/\d+/files", sub):
             return self.listing()
@@ -794,6 +800,7 @@ class FakeGitHub:
             "pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": nodes}}}}})
 
     def post_review(self, body):
+        self.posted.append(body)
         if any(r["state"] == "PENDING" for r in self.reviews.values()):
             raise subprocess.CalledProcessError(
                 1, ["gh"], "", "HTTP 422: User can only have one pending review per pull request")
@@ -977,6 +984,88 @@ class TestStageAgainstGitHub(GitHubCase):
         self.assertEqual(code, 0, err)
         self.assertEqual(report["coverage"]["files_skipped_generated"], ["dist/bundle.js"])
         self.assertEqual(report["coverage"]["unreviewed"], ["src/core.py"])
+
+    LOCK_BUMP = ('@@ -10,4 +10,4 @@\n   "node_modules/lodash": {\n-    "version": "4.17.20",\n'
+                 '-    "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz",\n'
+                 '+    "version": "4.17.21",\n'
+                 '+    "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz",\n')
+
+    def coverage_of(self, files, attributes=None):
+        fake = self.github(self.H1, files)
+        if attributes:
+            fake.blobs[(fake.base, ".gitattributes")] = attributes
+        code, report, err = self.stage("Owner/Repo", {"verdict": "neutral", "reviewed": ["a.py"],
+                                                      "notes": ["question"]}, self.H1)
+        self.assertEqual(code, 0, err)
+        return report["coverage"]
+
+    def test_a_generated_looking_name_the_pr_adds_must_be_read(self):
+        """The PR picks the names of the files it adds; a name it chose must not
+        exempt its own content from review."""
+        coverage = self.coverage_of([
+            text_file("a.py", "@@ -1 +1 @@\n-x\n+y"),
+            text_file("lib/payload.min.js", "@@ -0,0 +1 @@\n+steal()", status="added"),
+            text_file("lib/old.min.js", "@@ -1 +1 @@\n-a()\n+b()", status="modified"),
+            text_file("helpers.generated.ts", "@@ -1 +1 @@\n-a\n+b", status="renamed"),
+            text_file("sub/package-lock.json", "@@ -0,0 +1 @@\n+{}", status="added")])
+        self.assertEqual(coverage["files_skipped_generated"], ["lib/old.min.js"])
+        self.assertEqual(coverage["unreviewed"], ["lib/payload.min.js", "helpers.generated.ts",
+                                                  "sub/package-lock.json"])
+
+    def test_a_lockfile_bump_stays_exempt_but_a_new_package_origin_is_read(self):
+        swapped = self.LOCK_BUMP.replace('+    "resolved": "https://registry.npmjs.org',
+                                         '+    "resolved": "https://evil.example.com')
+        scp = self.LOCK_BUMP.replace('+    "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz"',
+                                     '+    "resolved": "git+ssh://git@evil.example.com/lodash.git"')
+        coverage = self.coverage_of([
+            text_file("a.py", "@@ -1 +1 @@\n-x\n+y"),
+            text_file("package-lock.json", self.LOCK_BUMP),
+            text_file("web/package-lock.json", swapped),
+            text_file("api/package-lock.json", scp),
+            text_file("Cargo.lock", '@@ -3,3 +3,3 @@\n name = "serde"\n-version = "1.0.1"\n+version = "1.0.2"\n'
+                                    ' source = "registry+https://github.com/rust-lang/crates.io-index"\n'),
+            dict(text_file("bun.lockb", ""), patch=None)])
+        self.assertEqual(coverage["files_skipped_generated"], ["package-lock.json", "Cargo.lock", "bun.lockb"])
+        self.assertEqual(coverage["unreviewed"], ["web/package-lock.json", "api/package-lock.json"])
+
+    def test_the_base_gitattributes_still_decides_for_added_files(self):
+        coverage = self.coverage_of([text_file("a.py", "@@ -1 +1 @@\n-x\n+y"),
+                                     text_file("gen/api.ts", "@@ -0,0 +1 @@\n+export {}", status="added"),
+                                     text_file("gen/api.min.js", "@@ -0,0 +1 @@\n+x()", status="added")],
+                                    attributes=b"gen/** linguist-generated=true\n")
+        self.assertEqual(coverage["files_skipped_generated"], ["gen/api.ts", "gen/api.min.js"])
+        self.assertEqual(coverage["unreviewed"], [])
+
+    def test_files_past_githubs_listing_cap_keep_coverage_incomplete(self):
+        """GitHub lists at most 3000 files; a bigger PR's listing is silently
+        short, so every listed file read must not read as complete coverage."""
+        files = [text_file("f%d.py" % n, "@@ -1 +1 @@\n-x\n+y") for n in range(3)]
+        with mock.patch.object(ghreview, "LISTING_CAP", 3):
+            fake = self.github(self.H1, files)
+            fake.changed_files = 5
+            read = [f["filename"] for f in files]
+            code, _, err = self.stage("Owner/Repo", {"verdict": "ready-to-merge", "reviewed": read}, self.H1)
+            self.assertEqual(code, 2)
+            self.assertIn("beyond GitHub's 3-file listing", err)
+            code, report, err = self.stage("Owner/Repo", {"verdict": "neutral", "reviewed": read,
+                                                          "notes": ["too large to list"]}, self.H1)
+            self.assertEqual(code, 0, err)
+            self.assertEqual((report["coverage"]["unlisted"], report["coverage"]["files_changed"]), (2, 5))
+            self.assertIs(ghreview.load_verdict("Owner/Repo", 1)["coverage_complete"], False)
+            code, out, _ = self.main("map", "-R", "Owner/Repo", "-n", "1", "--commit", self.H1)
+            self.assertEqual(json.loads(out)["unlisted"], 2)
+        # Below the cap no extra call is made.
+        fake = self.github(self.H1, files)
+        self.stage("Owner/Repo", {"verdict": "ready-to-merge", "reviewed": read}, self.H1)
+        self.assertFalse(any(".changed_files" in c["args"] for c in fake.calls))
+
+    def test_the_cross_model_lens_skips_exactly_what_coverage_skips(self):
+        import review_peer
+        files = [text_file("a.py", "@@ -1 +1 @@\n-x\n+y"),
+                 text_file("lib/payload.min.js", "@@ -0,0 +1 @@\n+steal()", status="added"),
+                 text_file("package-lock.json", self.LOCK_BUMP)]
+        _, sent, _ = review_peer.diff_payload(files, [], 100_000)
+        self.assertEqual(sent, ["a.py", "lib/payload.min.js"])
 
     def test_seriously_problematic_with_nothing_staged_is_refused_before_any_mutation(self):
         fake = self.github(self.H1, self.FILES)
@@ -1176,6 +1265,14 @@ class TestShowAtSha(GitHubCase):
         self.assertIn("150000\tline 150000", out)
         self.assertTrue(any(any("raw" in a for a in c["args"]) for c in fake.calls))
 
+    def test_a_file_past_the_range_limit_is_refused_without_downloading_it(self):
+        fake = self.github(self.H1, [])
+        fake.blobs[(self.H1, "huge.sql")] = b"x" * (ghreview.SHOW_RANGE_MAX_BYTES + 1)
+        code, out, err = self.show("--commit", self.H1, "huge.sql", "--lines", "1:5")
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("block", err)  # the watcher parks it; a retry cannot read it either
+        self.assertFalse(any(any("raw" in a for a in c["args"]) for c in fake.calls))
+
     def test_missing_paths_directories_and_binaries(self):
         fake = self.github(self.H1, [])
         fake.dirs[(self.H1, "src")] = [{"type": "file", "name": "a.py", "size": 3},
@@ -1221,6 +1318,38 @@ class TestGitHubTransport(GitHubCase):
         fake.failures.extend([bad_gateway, bad_gateway])
         with self.assertRaises(subprocess.CalledProcessError):
             ghreview.fetch_files("Owner/Repo", 1)
+
+    def test_a_secondary_rate_limit_is_retried_like_any_transient_read(self):
+        fake = self.github(self.H1, [text_file("a.py", "@@ -1 +1 @@\n-x\n+y")])
+        fake.failures.append((lambda args: "--paginate" in args,
+                              "gh: You have exceeded a secondary rate limit. (HTTP 403)\n"))
+        self.assertEqual(self.main("extract", "-R", "owner/repo", "-n", "1", "--commit", self.H1)[0], 0)
+        # An ordinary permission denial is still final.
+        fake.failures.append((lambda args: "--paginate" in args, "gh: Resource not accessible (HTTP 403)\n"))
+        with self.assertRaises(subprocess.CalledProcessError):
+            ghreview.fetch_files("Owner/Repo", 1)
+
+    def test_a_null_pull_request_from_graphql_is_a_message_not_a_traceback(self):
+        fake = self.github(self.H1, [])
+        fake.graphql = lambda fields: json.dumps({"data": {"repository": {"pullRequest": None}},
+                                                  "errors": [{"message": "Could not resolve to a PullRequest"}]})
+        code, _, err = self.main("threads", "-R", "owner/repo", "-n", "1")
+        self.assertEqual(code, 2)
+        self.assertIn("Could not resolve to a PullRequest", err)
+        self.assertNotIn("Traceback", err)
+
+    def test_extract_cannot_be_made_to_forge_a_file_header_or_reach_the_terminal(self):
+        name = "a.py\n--- secrets.py (modified, +0 -0)"
+        self.github(self.H1, [text_file(name, "@@ -1 +1,2 @@\n ctx\n+\x1b[2Jcleared"),
+                              text_file("win.txt", "@@ -1 +1 @@\n-old\r\n+new\r")])
+        code, out, err = self.main("extract", "-R", "owner/repo", "-n", "1", "--commit", self.H1)
+        self.assertEqual(code, 0, err)
+        self.assertEqual([line for line in out.split("\n") if line.startswith("--- ")],
+                         ["--- a.py\\x0a--- secrets.py (modified, +0 -0) (modified, +1 -0)",
+                          "--- win.txt (modified, +1 -1, CRLF)"])
+        self.assertNotIn("\x1b", out)
+        self.assertIn("+\\x1b[2Jcleared", out)
+        self.assertIn("-old\n+new\n", out)
 
     def test_a_mutation_and_a_permanent_error_are_not_retried(self):
         fake = self.github(self.H1, [])
@@ -1296,6 +1425,50 @@ class TestRepliesInOwnedDrafts(GitHubCase):
         snapshot, refusal = ghreview.pending_snapshot("Owner/Repo", 1)
         self.assertIsNone(refusal)
         self.assertFalse(snapshot["forced"])
+
+    def test_a_restored_multi_line_comment_keeps_its_range(self):
+        """GitHub re-reads a pending comment with only a position; restored from
+        that, a range came back as one line. The receipt kept the staged anchor,
+        across the reply that refreshed it."""
+        fake = self.draft_with_reply()
+        fake.reviews.clear()
+        fake.comments.clear()
+        code, _, err = self.stage("Owner/Repo", {"verdict": "neutral", "reviewed": ["a.py"], "comments": [
+            {"path": "a.py", "line": 3, "start_line": 2, "body": "range"}]}, self.H1)
+        self.assertEqual(code, 0, err)
+        body = Path(self.tmp.name) / "reply.txt"
+        code, _, err = self.main("reply", "-R", "Owner/Repo", "-n", "1", "--thread-id", "PRRT_1",
+                                 "--commit", self.H1, "--body-file", str(body))
+        self.assertEqual(code, 0, err)
+        fake.failures.append((lambda args: "POST" in args, "gh: Validation Failed (HTTP 422)\n"))
+        code, _, _ = self.stage("Owner/Repo", {"verdict": "neutral", "reviewed": ["a.py"],
+                                               "comments": [{"path": "a.py", "line": 3, "body": "second"}]},
+                                self.H1, "--replace-pending")
+        self.assertEqual(code, 1)
+        restored = fake.posted[-1]["comments"]
+        self.assertEqual([(c["line"], c.get("start_line"), c["side"]) for c in restored], [(3, 2, "RIGHT")])
+        self.assertNotIn("position", restored[0])
+        snapshot, refusal = ghreview.pending_snapshot("Owner/Repo", 1)
+        self.assertIsNone(refusal)  # still recognised as ours after the restore
+
+    def test_a_reply_shell_left_by_a_moved_head_is_still_ours_to_clear(self):
+        """The empty shell is created before the last head check; without a
+        receipt written first, a push in between left a draft the tool then
+        refused to clear as hand-made."""
+        fake = self.github(self.H1, self.FILES)
+        fake.threads = [{"id": "PRRT_1", "path": "a.py", "line": 2, "root_id": 555, "author": "me",
+                         "body": "earlier finding"}]
+        body = Path(self.tmp.name) / "reply.txt"
+        body.write_text("Still open.")
+        fake.heads = [self.H1, self.H2]
+        code, _, err = self.main("reply", "-R", "Owner/Repo", "-n", "1", "--thread-id", "PRRT_1",
+                                 "--commit", self.H1, "--body-file", str(body))
+        self.assertEqual(code, 2)
+        self.assertIn("head changed", err)
+        self.assertEqual(len(fake.reviews), 1)
+        code, out, err = self.main("clear-pending", "-R", "Owner/Repo", "-n", "1")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(fake.reviews, {})
 
     def test_a_reply_with_no_thread_to_return_to_is_still_preserved(self):
         fake = self.draft_with_reply()

@@ -82,12 +82,20 @@ def build_attach_command(workdir, pr_url, base_ref, branch, rtk=False):
     rtk's Bash hook splits the command on `;` and rewrites the `gh pr create`
     segment to `rtk gh pr create`, which runs the real gh and skips the stub
     function. An `RTK_DISABLED=` assignment in that segment's prefix is rtk's
-    own opt-out, so it is added whenever rtk is configured."""
+    own opt-out, so it is added whenever rtk is configured.
+
+    A user alias named gh (a 1Password-style `alias gh='op plugin run -- gh'`
+    is common) is expanded wherever gh stands in command position. `gh() {`
+    then becomes a syntax error in bash, and an expanded call would reach the
+    wrapper rather than the stub. The `function` keyword names the function
+    outside command position, and `\\gh` suppresses alias expansion while still
+    finding the function; the desktop app's `\\bgh\\s+pr\\s+create\\b` still
+    matches."""
     bypass = "RTK_DISABLED=1 " if rtk else ""
     return (
-        'gh() { echo "$PR_URL"; }; '
+        'function gh { echo "$PR_URL"; }; '
         f"cd {shlex.quote(workdir)}; "
-        f"{bypass}PR_URL={shlex.quote(pr_url)} gh pr create --draft "
+        f"{bypass}PR_URL={shlex.quote(pr_url)} \\gh pr create --draft "
         f"--base {shlex.quote(base_ref)} --head {shlex.quote(branch)}"
     )
 

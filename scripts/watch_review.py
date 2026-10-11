@@ -41,7 +41,9 @@ explicit `forget`. A head that waits on the user's decision is parked with
 Emission is not completion. A head is recorded only when every changed
 non-generated file was reviewed and every finding is covered -- anchored in
 the diff, carried in the review body, or dismissed with a stated reason via
---acknowledge-omitted, which is never automatic. A verdict a manual review-pr
+--acknowledge-omitted, which is never automatic. A seriously-problematic
+verdict with its blocking finding staged also records with files unread:
+partial coverage blocks readiness, not a verified blocking verdict. A verdict a manual review-pr
 pass staged with complete coverage (every changed non-generated file read, or
 carried by an incremental pass) marks its head reviewed too, whatever the
 verdict. Only ready-to-merge goes further: it stands until the PR diff
@@ -108,14 +110,23 @@ class GhError(RuntimeError):
 	which needs the message itself rather than an exit code to show the reader."""
 
 
+GH_TIMEOUT = 30
+# A paginated call is one gh process for every page; a large PR's file list
+# does not fit the single-request timeout.
+GH_PAGINATED_TIMEOUT = 180
+
+
 def gh(args, cwd):
 	"""Run a read-only gh command and return stdout, or raise GhError with why."""
+	timeout = GH_PAGINATED_TIMEOUT if "--paginate" in args else GH_TIMEOUT
 	try:
 		proc = subprocess.run(
-			["gh"] + args, cwd=cwd, capture_output=True, text=True, check=False, timeout=30
+			["gh"] + args, cwd=cwd, capture_output=True, text=True, check=False, timeout=timeout
 		)
 	except FileNotFoundError:
 		raise GhError("gh is not installed or not on PATH")
+	except subprocess.TimeoutExpired:
+		raise GhError(f"gh {args[0]} timed out after {timeout}s")
 	if proc.returncode != 0:
 		raise GhError((proc.stderr or proc.stdout).strip() or f"gh {args[0]} failed")
 	return proc.stdout
@@ -370,7 +381,9 @@ def completion_refusal(result, repo, number, head, acknowledgement=None):
 	"""Why this stage report may not mark `head` reviewed, or None when it may.
 
 	Coverage, not staging success. Every changed non-generated file must have
-	been reviewed, and a finding counts as covered when it is anchored inline,
+	been reviewed, unless the verdict is seriously-problematic: unread files
+	cannot rescue a PR with a verified blocking finding, so that verdict records
+	with coverage_complete false. A finding counts as covered when it is anchored inline,
 	carried in the review body, or dismissed by a person who said why. The
 	verdict must obey the rules stage enforces, so a hand-edited report cannot
 	smuggle in what stage would have refused.
@@ -386,12 +399,15 @@ def completion_refusal(result, repo, number, head, acknowledgement=None):
 	coverage = result.get("coverage")
 	if not isinstance(coverage, dict) or not isinstance(coverage.get("unreviewed"), list):
 		return "completion report has no coverage block; restage with this release's ghreview.py"
-	if coverage["unreviewed"]:
-		return ("review did not read %d changed non-generated file(s): %s; review them and restage"
-			% (len(coverage["unreviewed"]), ", ".join(map(str, coverage["unreviewed"]))))
 	verdict = result.get("verdict")
 	if verdict not in ghreview.VERDICTS:
 		return "completion report has no verdict; restage with this release's ghreview.py"
+	# Partial coverage blocks readiness, not a verified blocking verdict: reading
+	# the rest cannot unblock a PR that already fails, and the author should get
+	# the blocking finding now. The record keeps coverage_complete false.
+	if coverage["unreviewed"] and verdict != SERIOUS:
+		return ("review did not read %d changed non-generated file(s): %s; review them and restage"
+			% (len(coverage["unreviewed"]), ", ".join(map(str, coverage["unreviewed"]))))
 	pending = sum(result.get(key) or 0 for key in ("staged", "carried", "notes")
 		if isinstance(result.get(key), int))
 	# As stage enforces: a reservation or a blocking issue the author never sees is not a verdict.
@@ -736,7 +752,7 @@ def pr_files(repo, number, head, cwd):
 	while the pull request already reports the new one; that listing names the
 	previous commit.
 	"""
-	out = gh(["api", f"repos/{repo}/pulls/{number}/files", "--paginate", "--jq", ".[]"], cwd)
+	out = gh(["api", f"repos/{repo}/pulls/{number}/files?per_page=100", "--paginate", "--jq", ".[]"], cwd)
 	# One object per "\n". jq leaves U+2028 and U+0085 unescaped inside strings,
 	# and str.splitlines() would cut an object in two at either.
 	files = [json.loads(line) for line in out.split("\n") if line.strip()]
@@ -765,7 +781,15 @@ def carry_ready(repo, number, head, cwd):
 			or prior.get("rewatch") or not ghreview.full_coverage(prior)
 			or head in (prior.get("head"), prior.get("carried_to"))):
 		return None
-	files = pr_files(repo, number, head, cwd)
+	try:
+		files = pr_files(repo, number, head, cwd)
+	except (GhError, ValueError, TypeError, KeyError) as exc:
+		# One PR whose files cannot be read must not fail the tick: that starved
+		# every later PR, forever. It counts toward UNSTABLE_TRIES like a stale
+		# listing, after which the head is emitted for a full review.
+		print(f"watch-review: {repo}#{number} files unreadable at {head} ({exc}); retrying next tick",
+			file=sys.stderr, flush=True)
+		return UNSTABLE
 	if files is None:
 		return UNSTABLE
 	if not ghreview.standing_ready(prior, ghreview.diff_fingerprint(files)):
@@ -960,6 +984,14 @@ def main(argv):
 	if args.mode in ("start", "renew", "release"):
 		if args.mode == "release":
 			claim = release_claim(repo, args.number, args.claim, time.time())
+		elif args.mode == "renew":
+			try:
+				claim = start_claim(repo, args.number, args.claim, time.time(), args.head)
+			except ValueError as exc:
+				# Another worker or a newer emission owns this head now; anything
+				# more this reviewer stages there would race it.
+				raise ValueError("%s; stop work on this head: make no further mutation, do not record "
+					"or release, and report the refused renew (Result: blocked)" % exc) from None
 		else:
 			claim = start_claim(repo, args.number, args.claim, time.time(), args.head)
 		print(json.dumps(claim_view(repo, args.number, claim)))

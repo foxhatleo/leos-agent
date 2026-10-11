@@ -41,7 +41,10 @@ That path is fixed and needs no plugin root.
    If the helper is unavailable, report the missing root/script. Do not use a
    check-then-create fallback that can overwrite another session's handoff.
 
-2. **Gather the frontmatter facts** in one batch:
+2. **Gather the frontmatter facts** in one batch, and in the same batch read
+   the reserved file at the path from step 1: step 3 replaces it, and a file
+   tool that refuses to overwrite an unread file (Claude Code's Write does)
+   would otherwise cost a retry.
 
    ```bash
    git rev-parse --abbrev-ref HEAD; git rev-parse --short HEAD; pwd
@@ -52,7 +55,7 @@ That path is fixed and needs no plugin root.
    `harness` is the one you are running in: `claude`, `codex`, `cursor`,
    `hermes`, `pi`, or `opencode`.
 
-3. **Write the file** at the path from step 1:
+3. **Write the file** at the path from step 1, replacing the reservation:
 
    ```
    ---

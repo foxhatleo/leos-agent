@@ -189,6 +189,11 @@ class TestCodexRoute(PeerCase):
         for flag in ("--ephemeral", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check"):
             self.assertIn(flag, args)
         self.assertEqual(args[args.index("--sandbox") + 1], "read-only")
+        # A read-only sandbox still lets a command read any local file, so the
+        # tools that could are switched off; web search too.
+        disabled = {args[i + 1] for i, a in enumerate(args) if a == "--disable"}
+        self.assertTrue({"shell_tool", "unified_exec", "view_image", "multi_agent"} <= disabled, disabled)
+        self.assertIn('web_search="disabled"', [args[i + 1] for i, a in enumerate(args) if a == "-c"])
         self.assertEqual(args[-1], "-")
         self.assertEqual(call["cwd_entries"], [])
         self.assertFalse(os.path.exists(call["cwd"]))  # removed after the run
