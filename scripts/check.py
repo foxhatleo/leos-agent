@@ -88,6 +88,13 @@ def non_portable_keys(text):
 	return [key for key in frontmatter_keys(text) if key not in PORTABLE_SKILL_KEYS]
 
 
+def slash_skill_names(frontmatter, skills):
+	"""Skill names a frontmatter description spells as `/name` commands."""
+	match = re.search(r"(?m)^description:(.*)$", frontmatter)
+	names = {skill.parent.name for skill in skills}
+	return sorted(name for name in names if match and re.search(r"(?<![\w/])/" + re.escape(name) + r"\b", match.group(1)))
+
+
 def plugin_root_violations(text):
 	"""Ways a skill, command, or agent body reaches a plugin file non-portably.
 
@@ -189,6 +196,11 @@ def main():
 			extra = non_portable_keys(text)
 			check(not extra, f"{skill.relative_to(ROOT)}: non-portable frontmatter {extra}; Claude-only keys "
 				"belong under skills-claude/, and a new portable key goes in PORTABLE_SKILL_KEYS on purpose")
+			# A description is discovery text on all six harnesses, and only some
+			# spell skill invocation `/name`. Name the skill, not the Claude command.
+			slashed = slash_skill_names(fm, skills)
+			check(not slashed, f"{skill.relative_to(ROOT)}: description names {slashed} as slash commands; "
+				"say 'the <name> skill' so it reads on every harness")
 	commands = sorted((ROOT / "commands").glob("*.md"))
 	check(not commands, "commands/: duplicate native skill wrappers must not be reintroduced")
 

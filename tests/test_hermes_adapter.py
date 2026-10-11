@@ -122,6 +122,12 @@ class HermesAdapter(unittest.TestCase):
             self.assertIsInstance(call.args[0], str)
             self.assertTrue(call.args[1].is_file())
         ctx.register_system_prompt_section.assert_called_once()
+        # Hermes lists a plugin skill to the model with the registered
+        # description, so it must be the skill's own, not a placeholder.
+        for call in ctx.register_skill.call_args_list:
+            with self.subTest(skill=call.args[0]):
+                text = call.args[1].read_text(encoding="utf-8")
+                self.assertIn("description: " + call.kwargs["description"] + "\n", text)
         text = self.adapter._payload_section({})
         self.assertIn("Cheap:", text)
         self.assertLess(len(text), 4000)

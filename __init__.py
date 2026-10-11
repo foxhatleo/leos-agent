@@ -161,9 +161,27 @@ def _on_subagent_stop(parent_session_id=None, child_session_id=None, child_summa
     return None
 
 
+def _skill_description(skill):
+    """The SKILL.md frontmatter description, which Hermes shows the model in place
+    of the file's own when register_skill is given one."""
+    try:
+        text = skill.read_text(encoding="utf-8")
+    except OSError:
+        text = ""
+    frontmatter = text.split("---", 2)[1] if text.startswith("---\n") and text.count("---") >= 2 else ""
+    for line in frontmatter.splitlines():
+        if line.startswith("description:"):
+            value = line[len("description:"):].strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+            if value:
+                return value
+    return "Leo's " + skill.parent.name + " workflow"
+
+
 def register(ctx):
     for skill in sorted((PLUGIN_ROOT / "skills").glob("*/SKILL.md")):
-        ctx.register_skill("leo-" + skill.parent.name, skill, description="Leo's " + skill.parent.name + " workflow")
+        ctx.register_skill("leo-" + skill.parent.name, skill, description=_skill_description(skill))
     ctx.register_hook("pre_tool_call", _on_pre_tool_call)
     # Completion observers. Older Hermes builds do not know these names, and one
     # of them (#12922) skipped built-in tools entirely; either way the report

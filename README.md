@@ -17,6 +17,20 @@ There is no claim of universal token reduction or measured savings without a
 comparable task baseline. Optimizing dollars can mean spending more tokens on
 a cheaper model while preserving quality.
 
+## Quickstart
+
+Install only the harness you use; [Install and upgrade](#install-and-upgrade)
+covers upgrades, prerequisites, and per-harness limits.
+
+| Harness | Install | Then |
+|---|---|---|
+| Claude Code | `claude plugin marketplace add foxhatleo/leos-agent`<br>`claude plugin install leos-agent@leos-agent --scope user` | Start a new session |
+| Codex | `codex plugin marketplace add foxhatleo/leos-agent`<br>`codex plugin add leos-agent@leos-agent` | Run `$leos-agent:install`, then review hooks in `/hooks` |
+| Cursor | `git clone https://github.com/foxhatleo/leos-agent ~/.cursor/plugins/local/leos-agent`<br>`python3 ~/.cursor/plugins/local/leos-agent/scripts/leo-install.py cursor` | Reload the plugin |
+| OpenCode | `git clone https://github.com/foxhatleo/leos-agent ~/.local/share/leos-agent`<br>`python3 ~/.local/share/leos-agent/scripts/leo-install.py opencode` | Restart OpenCode |
+| Hermes | `hermes plugins install foxhatleo/leos-agent --enable` | Start a new session |
+| Pi | `pi install git:github.com/foxhatleo/leos-agent` | Start a new session; delegation needs a subagent extension |
+
 ## Routing and cost
 
 | Tier | Appropriate work | Claude default | Codex default |
@@ -38,7 +52,8 @@ Claude Code removes its Edit, Write and Agent tools, and the reviewer sets its
 cheap or standard tier with the dispatch's `model`. OpenCode denies it `edit`
 and `task` and Cursor marks it `readonly`; there and on Codex it is a
 standard-tier profile, and a cheap lens uses `leo-cheap`. A Codex lens runs in
-the session's own sandbox. The price guard never moves a lens to another
+the session's own sandbox, since a Codex role cannot narrow it, so it stays
+read-only there by instruction. The price guard never moves a lens to another
 profile: where it cannot hold a lens within the reviewer's price, it refuses
 the lens and the reviewer reviews that area itself. Bash stays available for
 reading the PR. Ordinary
@@ -242,10 +257,12 @@ hermes plugins install foxhatleo/leos-agent --enable
 This installs into `$HERMES_HOME/plugins/leos-agent` (default
 `~/.hermes/plugins/leos-agent`). For a local checkout instead, clone it there and
 run `hermes plugins enable leos-agent`. Start a new session. The native plugin
-registers portable skills, one frozen policy section, dispatch diagnostics, and
-the `/leo-install` command; that command only removes a block an older release
-left in `SOUL.md`. Hermes supports the policy for deciding whether to delegate,
-but not per-task model tiers. The installer preserves its native
+registers portable skills (as `/leos-agent:leo-<name>`), one frozen policy
+section, dispatch diagnostics, and the `/leo-install` command; that command
+only removes a block an older release left in `SOUL.md`. Hermes has no
+user-only skill flag, so it lists the user-invoked skills to the model too.
+Hermes supports the policy for deciding whether to delegate, but not per-task
+model tiers. The installer preserves its native
 delegation-model setting; saved cheap/standard/premium mappings are not applied.
 The guard can still check known child/parent prices when both models are
 observable.
@@ -436,8 +453,8 @@ claude plugin eval . --scaffold --case local-small-task --runs 1 --ablation none
 ```
 
 Every run is a real model call billed to your plan or API account. A full run
-is 5 cases × 3 runs × 2 arms = 30 agent runs: about $3 at list prices on
-2026-10-10. Each case pins its parent in `model:`: Opus for `cheap-retrieval`
+is 5 cases × 3 runs × 2 arms = 30 agent runs; `--max-cost-usd` caps the
+spend. Each case pins its parent in `model:`: Opus for `cheap-retrieval`
 and `escalation-after-failed-check`, whose routing needs tiers below the parent
 (under Sonnet, one tier up from cheap is the parent's own price, which the
 policy keeps local), and Sonnet for the rest. `--model` overrides every case's
@@ -476,11 +493,10 @@ Native live smoke tests are separate, explicitly authorized, and budgeted.
 Static/adapter tests establish contracts, not complete end-to-end parity on
 all six installed harnesses.
 
-Local Claude smoke tests on 2026-09-08 verified actual Haiku/Sonnet children
-from an Opus parent and a Sonnet-to-Haiku correction when the Haiku parent was
-observable. Total CLI-reported reference cost, including diagnostic runs, was
-about $0.223. A fresh session's first dispatch can precede parent transcript
-persistence, so that case remains an explicit unknown-parent allowance.
+On Claude Code the guard reads the parent's model from its transcript, falling
+back to the model recorded at session start. A fresh session's first dispatch
+can precede both; the guard then treats the parent as unknown and allows the
+dispatch without a price check.
 
 Commits run validation only; releasing is the workflow's job. Every push to
 `main` starts the release workflow, which bumps the version, validates the
