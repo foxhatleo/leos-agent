@@ -375,6 +375,14 @@ these contracts when changing it or `scripts/ghreview.py`:
   claim carried. Follow-ups are never recorded or parked, and wait while
   another claim on the PR is live. One automatic rebuttal per thread, even in
   `fully-auto`; a second round goes to the user.
+- Watch sessions split front end from back end: the main thread alone asks
+  (AskUserQuestion, a blocking UI by Leo's choice) and publishes; reviewers
+  run as background subagents, at most two, staging only private drafts, so
+  work continues while a question is open. Subagents cannot ask the user.
+  Events that arrive during a question are handled after it, so every action
+  re-checks drift (`submit` the head, `--expect-latest` the thread). A
+  started claim is held up to eight hours for that wait. A per-PR session was
+  considered and dropped: no documented way for a session to create one.
 - The cross-model lens (`review_peer.py`) runs only when the user enabled it,
   discloses that the diff goes to a second provider, never counts as coverage,
   and raises confidence only when `independence_verified` is true.

@@ -74,14 +74,15 @@ that work needs `forget` before it is emitted again. A head parked with
    ```
 
    If it refuses, skip the line. `start` spends one of three attempts and
-   begins a lease the running monitor keeps alive for up to two hours; `renew`
+   begins a lease the running monitor keeps alive for up to eight hours; `renew`
    with the same arguments extends it. A refused renew means another worker
    owns the head: stop, make no further mutation, do not record or release,
    and report it. `start` lists the `threads` awaiting the user's reply.
 2. Run `review-pr` for that PR with the observed SHA, claim and OWNER/REPO;
    on a re-review, the `prev=` SHA as the previous reviewed head; the
    awaiting threads; the mode's `actions:`; and a short summary of any linked
-   ticket you can read. Never pass `--force` on the watcher's behalf.
+   ticket you can read. Dispatch its reviewer in the background (see below).
+   Never pass `--force` on the watcher's behalf.
 3. Once coverage is complete and every staging action succeeded, record the
    reviewer's stage report:
 
@@ -93,8 +94,8 @@ that work needs `forget` before it is emitted again. A head parked with
    It refuses a report without `complete: true` at the same full SHA, with
    files unreviewed (except a seriously-problematic verdict whose blocking
    finding is staged), or whose verdict breaks the review rules. Use the SHA
-   actually reviewed, and never record failed replies or staging. `complete: false` means a finding reached neither the
-   diff nor the body: restage, or pass `--acknowledge-omitted "<reason>"`
+   actually reviewed, and never record failed replies or staging.
+   `complete: false` means a finding reached neither the diff nor the body: restage, or pass `--acknowledge-omitted "<reason>"`
    after reading the report. A recorded ready-to-merge is carried silently to
    a later head with the same PR diff (a merge from the base).
 4. Then show the review and ask, per `submit.md`, unless `fully-auto`.
@@ -111,6 +112,22 @@ that work needs `forget` before it is emitted again. A head parked with
    with fresh attempts. On any other failure, do not record; `release -C
    <repo> N --claim TOKEN` and report it. After three attempts the watcher
    reports exhaustion once and waits for `forget`.
+
+## Front end and back end
+
+You are the front end: the only one who asks the user anything, and the only
+one who submits, replies or resolves. Reviewers are the back end: they only
+read and stage private drafts, so they may run while a question is open.
+
+- Run reviewers in the background (`run_in_background: true` where the Agent
+  tool offers it), at most two at once. `start` a claim only when you dispatch
+  its reviewer; a line waiting its turn keeps its claim while the monitor runs.
+- Before every question, first record what finished and dispatch what waits,
+  up to two, so the back end keeps working while the user decides. Put every
+  PR ready to ask about into one AskUserQuestion call (up to four).
+- Notifications and completions that arrive during the question are handled
+  after it. Answers can therefore be stale: act through `submit.md`'s drift
+  checks, never on the old plan alone.
 
 ## On a follow-up notification
 

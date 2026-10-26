@@ -40,8 +40,8 @@ changes later must settle first. Cross-process claims prevent duplicate
 workers. An emitted claim is queued: the running monitor holds it however
 long the reader's backlog is, so it never expires before work starts. `start`
 checks the claim and begins a 30-minute lease; the monitor keeps a started
-lease alive for up to two hours, because the reader is blocked on a
-foreground reviewer and cannot renew, and `renew` extends it. When the monitor
+lease alive for up to eight hours, because the reader may be waiting on the
+user's answer and cannot renew, and `renew` extends it. When the monitor
 stops, its claims lapse within a few intervals and another watcher may take
 them; a lapsed claim that never started spends no attempt. A head gets three
 attempts in total (two retries): each start, or a release before one, spends
@@ -101,7 +101,10 @@ STATE_NAME = "review-watcher"
 SHA_RE = r"[0-9a-f]{40}"
 TOKEN_RE = r"[0-9a-f]{32}"  # uuid4().hex, as claim_review mints it
 LEASE = 1800  # seconds a started review holds its claim after `start` or `renew`
-MAX_HELD = 4 * LEASE  # how long a running monitor keeps a started lease alive
+# How long a running monitor keeps a started lease alive. A review finishes in
+# the background while the reader may sit on a question for the user, unable
+# to record or renew; a working day is the wait it must survive.
+MAX_HELD = 16 * LEASE
 ATTEMPTS = 3  # started (or released) claims per head: the first try and two retries
 CLOSED_RETENTION = 30 * 86400
 PRUNE_EVERY = 6 * 3600
