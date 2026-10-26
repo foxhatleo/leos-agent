@@ -248,8 +248,9 @@ file outside the repository:
  "notes": ["Could not read LIN-123; its acceptance criteria are unchecked."]}
 ```
 
-`comments` may be empty. `notes` are review-level reservations with no line to
-anchor to; they go in the pending review body. Add `verdict_override` only as
+`comments` may be empty. `notes` are rare: a reservation no line fits, written
+as one plain sentence to the author. Never a summary or a list of findings;
+those go on lines. Add `verdict_override` only as
 §1 describes. Then:
 
 ```

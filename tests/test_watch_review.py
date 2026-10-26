@@ -48,15 +48,15 @@ def tearDownModule():
 
 H1, H2, H3 = "a" * 40, "b" * 40, "c" * 40
 LINE = re.compile(r"(review-requested|re-review|follow-up) (\S+)#(\d+) head=([0-9a-f]{40})"
-                  r"(?: prev=([0-9a-f]{40}))?(?: threads=(\d+))? claim=([0-9a-f]{32}) (\S+) — (.*)$")
+                  r"(?: prev=([0-9a-f]{40}))?(?: threads=(\d+))?(?: by=(\S+))? claim=([0-9a-f]{32}) (\S+) — (.*)$")
 
 
 def parse(line):
     """A watch line as the documented reader reads it: fields before the title."""
     m = LINE.match(line)
     return m and {"verb": m.group(1), "repo": m.group(2), "pr": int(m.group(3)), "head": m.group(4),
-                  "prev": m.group(5), "threads": int(m.group(6) or 0), "claim": m.group(7), "url": m.group(8),
-                  "title": m.group(9)}
+                  "prev": m.group(5), "threads": int(m.group(6) or 0), "by": m.group(7), "claim": m.group(8),
+                  "url": m.group(9), "title": m.group(10)}
 
 
 PATCH = "@@ -1,1 +1,2 @@\n ctx\n+new"
@@ -111,7 +111,7 @@ class FakeGitHub:
                    for t in pr["threads"]]
         return {"id": f"PR_{number}", "number": number, "title": pr["title"], "isDraft": pr["draft"],
                 "state": state, "url": f"https://github.com/{self.full_name}/pull/{number}",
-                "headRefOid": pr["head"], "latestReviews": {"nodes": reviews},
+                "headRefOid": pr["head"], "author": {"login": "alice"}, "latestReviews": {"nodes": reviews},
                 "reviewThreads": {"nodes": threads, "pageInfo": {"hasNextPage": False, "endCursor": None}}}
 
     def submit(self, number):
@@ -156,6 +156,7 @@ class FakeGitHub:
         requester = {"__typename": "Team"} if pr["team_only"] else {"__typename": "User", "login": self.login}
         return {"id": f"PR_{number}", "number": number, "title": pr["title"], "isDraft": pr["draft"],
                 "url": f"https://github.com/{self.full_name}/pull/{number}", "headRefOid": pr["head"],
+                "author": {"login": "alice"},
                 "reviewRequests": {"nodes": [{"requestedReviewer": requester}],
                                    "pageInfo": {"hasNextPage": False, "endCursor": None}},
                 "latestReviews": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}}
@@ -1525,3 +1526,36 @@ class TestFollowing(HostCase):
         follow_queries = [c for c in self.github.graphql_calls() if any("pullRequest(number:" in a for a in c)]
         # #1 is learned closed on the first tick and never asked about again.
         self.assertTrue(all("p1: pullRequest" not in " ".join(c) for c in follow_queries[1:]), follow_queries)
+
+
+class TestRounds(HostCase):
+    """The front end heads each PR with its author and round."""
+
+    def test_the_line_names_the_author_and_rounds_count_reviews_and_follow_ups(self):
+        self.github.add(1, H1)
+        event = parse(self.drive(1)[0][0])
+        self.assertEqual(event["by"], "alice")
+        started = json.loads(self.cli("start", "1", "--head", H1, "--claim", event["claim"]))
+        self.assertEqual(started["round"], 1)
+        self.cli("record", "1", "--head", H1, "--claim", event["claim"], "--result", self.report(1, H1))
+        # The user submits; GitHub drops the request.
+        self.github.prs[1]["reviews"][1] = {"id": 1, "state": "COMMENTED"}
+        self.github.prs[1]["requested"] = False
+        self.github.thread(1, "PRRT_1")
+        follow = next(parse(line) for line in self.drive(1, start=600)[0] if parse(line))
+        self.assertEqual((follow["verb"], follow["by"]), ("follow-up", "alice"))
+        started = json.loads(self.cli("start", "1", "--head", H1, "--claim", follow["claim"]))
+        self.assertEqual(started["round"], 2)
+
+    def test_a_retry_is_the_same_round(self):
+        self.github.add(1, H1)
+        event = parse(self.drive(1)[0][0])
+        self.assertEqual(json.loads(self.cli("start", "1", "--head", H1, "--claim", event["claim"]))["round"], 1)
+        self.cli("release", "1", "--claim", event["claim"])
+        retry = next(parse(line) for line in self.drive(1, start=600)[0] if parse(line))
+        self.assertEqual(json.loads(self.cli("start", "1", "--head", H1, "--claim", retry["claim"]))["round"], 1)
+
+    def test_an_author_login_cannot_smuggle_fields(self):
+        line = self.w.event_line("review-requested", "o/r", dict(pr(1), author={"login": "eve claim=x\nfoo"}), "", "t" * 32)
+        self.assertIn(" by=eveclaimxfoo claim=", line)
+        self.assertEqual(len(line.splitlines()), 1)

@@ -21,13 +21,14 @@ still following.
 Each event is one line, machine fields first and the attacker-written title
 last:
 
-  review-requested OWNER/REPO#N head=SHA claim=TOKEN URL — TITLE
-  re-review OWNER/REPO#N head=SHA prev=SHA [threads=K] claim=TOKEN URL — TITLE
-  follow-up OWNER/REPO#N head=SHA threads=K claim=TOKEN URL — TITLE
+  review-requested OWNER/REPO#N head=SHA [by=AUTHOR] claim=TOKEN URL — TITLE
+  re-review OWNER/REPO#N head=SHA prev=SHA [threads=K] [by=AUTHOR] claim=TOKEN URL — TITLE
+  follow-up OWNER/REPO#N head=SHA threads=K [by=AUTHOR] claim=TOKEN URL — TITLE
 
 `prev` is the full head reviewed last, absent when it is unknown. `threads`
 counts the user's own review threads someone answered since the user last
-spoke there; `start` lists them. A followed pull request is an open, non-draft
+spoke there; `start` lists them, and the round: one per review or follow-up
+started on the pull request, retries not counted. A followed pull request is an open, non-draft
 one this tool has a record for and on which the user has submitted a review:
 it stays watched until merged or closed, whether or not it still requests a
 review. A new head there is re-reviewed like a requested one; a reply on one
@@ -179,7 +180,7 @@ def eligible(listing, login):
 REQUEST_FIELDS = "requestedReviewer { __typename ... on User { login } }"
 REVIEW_FIELDS = "state author { login }"
 PAGE_FIELDS = "pageInfo { hasNextPage endCursor }"
-PR_FIELDS = """id number title isDraft url headRefOid
+PR_FIELDS = """id number title isDraft url headRefOid author { login }
  reviewRequests(first:100) { nodes { %s } %s }
  latestReviews(first:100) { nodes { %s } %s }""" % (REQUEST_FIELDS, PAGE_FIELDS, REVIEW_FIELDS, PAGE_FIELDS)
 # Fifty results with two nested connections each keep a page at one GraphQL point.
@@ -190,7 +191,7 @@ SEARCH_QUERY = """query($q:String!,$cursor:String) {
 THREAD_FIELDS = """id isResolved
  root: comments(first:1) { nodes { author { login } pullRequestReview { state } } }
  latest: comments(last:1) { nodes { databaseId author { __typename login } } }"""
-FOLLOW_FIELDS = """id number title isDraft state url headRefOid
+FOLLOW_FIELDS = """id number title isDraft state url headRefOid author { login }
  latestReviews(first:100) { nodes { %s } }
  reviewThreads(first:100) { nodes { %s } %s }""" % (REVIEW_FIELDS, THREAD_FIELDS, PAGE_FIELDS)
 MORE_THREADS_QUERY = """query($id:ID!,$cursor:String) { node(id:$id) { ... on PullRequest {
@@ -374,7 +375,7 @@ def followed(repo, login, cwd):
 			threads = list(connection_nodes(node["reviewThreads"], more))
 			out.append({"number": number, "title": node.get("title") or "", "url": node.get("url") or "",
 				"isDraft": False, "headRefOid": node.get("headRefOid") or "", "followed": True,
-				"awaiting": awaiting_reply(threads, login)})
+				"author": node.get("author"), "awaiting": awaiting_reply(threads, login)})
 	return out
 
 
@@ -664,7 +665,7 @@ def clean_title(text):
 		elif category != "Cf":
 			out.append(ch)
 	title = re.sub(r"\s+", " ", "".join(out)).strip()
-	return re.sub(r"(?i)\b(claim|head|prev|threads)=", r"\1:", title)
+	return re.sub(r"(?i)\b(claim|head|prev|threads|by)=", r"\1:", title)
 
 
 def event_line(verb, repo, pr, previous, token="", threads=None):
@@ -678,6 +679,11 @@ def event_line(verb, repo, pr, previous, token="", threads=None):
 		fields.append("prev=" + previous)
 	if threads:
 		fields.append("threads=%d" % len(threads))
+	# GitHub logins are letters, digits and hyphens (bots add [bot]); anything
+	# else is dropped so the field stays one token.
+	author = re.sub(r"[^A-Za-z0-9\[\]-]", "", str((pr.get("author") or {}).get("login") or ""))[:64]
+	if author:
+		fields.append("by=" + author)
 	if token:
 		fields.append("claim=" + token)
 	fields.append(pr["url"])
@@ -738,6 +744,8 @@ def claim_review(repo, number, head, now, monitor="", hold=LEASE, kind=REVIEW, t
 		claims[str(number)] = {"head": head, "token": token, "attempts": attempts, "state": "queued",
 			"monitor": monitor, "expires": now + hold, "superseded": superseded, "kind": kind,
 			"threads": threads}
+		if same and old.get("round"):
+			claims[str(number)]["round"] = old["round"]  # a retry is the same round
 		state_mod.atomic_write(path, data)
 		return token
 
@@ -768,12 +776,17 @@ def start_claim(repo, number, token, now, head=None, lease=LEASE):
 	path = state_mod.state_file(STATE_NAME)
 	with state_mod._locked(path):
 		data = state_mod.load(path)
-		claim = current_claim(data.get(repo) or {}, number, token, head)
+		entry = data.get(repo) or {}
+		claim = current_claim(entry, number, token, head)
 		state = claim.get("state", "started")
 		if state == "released":
 			raise ValueError("review claim was released; wait for the head to be emitted again")
 		if state == "queued":
 			claim["attempts"] = claim.get("attempts", 0) + 1
+		if not claim.get("round"):
+			# One round per review or follow-up the user will see; retries reuse it.
+			rounds = entry.setdefault("rounds", {})
+			rounds[str(number)] = claim["round"] = int(rounds.get(str(number)) or 0) + 1
 		claim.update(state="started", touched=now, expires=now + lease)
 		state_mod.atomic_write(path, data)
 		return dict(claim)
@@ -882,7 +895,9 @@ def drop_numbers(repo, numbers, verdicts=False):
 		drop = {str(n) for n in numbers}
 		# Drop from both shapes: a legacy entry has not necessarily been
 		# rewritten into heads yet, and leaving it there would re-suppress.
-		for key in ("claims", "blocked", "heads", "seen") + (("verdicts",) if verdicts else ()):
+		# Rounds survive a forget (the user asked again; it is the next round)
+		# and go with the verdicts once a closed pull request is pruned.
+		for key in ("claims", "blocked", "heads", "seen") + (("verdicts", "rounds") if verdicts else ()):
 			entry[key] = {n: value for n, value in (entry.get(key) or {}).items() if n not in drop}
 		entry["reviewed"] = [n for n in (entry.get("reviewed") or []) if str(n) not in drop]
 		for number in drop:
@@ -893,7 +908,7 @@ def drop_numbers(repo, numbers, verdicts=False):
 
 def tracked_numbers(entry):
 	numbers = set()
-	for key in ("heads", "verdicts", "claims", "blocked", "seen"):
+	for key in ("heads", "verdicts", "claims", "blocked", "seen", "rounds"):
 		numbers.update(int(n) for n in (entry.get(key) or {}))
 	numbers.update(int(n) for n in entry.get("reviewed") or [])
 	return numbers
@@ -1138,7 +1153,7 @@ def full_sha(value):
 
 def claim_view(repo, number, claim):
 	return {"repo": repo, "pr": number, "head": claim.get("head"), "kind": claim.get("kind", REVIEW),
-		"threads": sorted(claim.get("threads") or {}), "state": claim.get("state"),
+		"threads": sorted(claim.get("threads") or {}), "round": claim.get("round"), "state": claim.get("state"),
 		"attempt": claim.get("attempts", 0), "of": ATTEMPTS, "expires": int(claim.get("expires", 0))}
 
 

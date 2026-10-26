@@ -6,30 +6,34 @@ watch the user started as `fully-auto`.
 
 ## Show it
 
-One block per PR, short enough to read at a glance:
+One block per PR, its `###` heading the divider so PRs never run together.
+In order: heading, who and which round, context, then the question.
 
 ```
 ### owner/repo#N — <title>
+@alice · round 2 · re-review (3 new commits)
 **Verdict:** neutral → COMMENT · CI: failing (informational)
 **Found:** `api/page.ts:48` major: the last page is dropped when total % size == 0.
-**Others:** Bugbot's null deref at `api/page.ts:12` can't happen (guarded at :9); not counted.
-**Plan:** submit COMMENT with 1 comment, summary "One pagination bug, details inline."; resolve PRRT_x (fixed at :30).
+**Others:** Bugbot's null deref at `api/page.ts:12` can't happen (guarded at :9).
+**Plan:** submit COMMENT with 1 comment; resolve your thread on :30 (fixed).
 ```
 
-Use a table when there are several findings. Write like a person: one to
-three short sentences per idea, casual, plain words, no em dashes or run-ons.
+The author is the watch line's `by=`; the round is what `start` printed
+(outside a watch: your submitted reviews on the PR plus one). Use a table for
+several findings. Write like a person: one to three short sentences per idea,
+casual, plain words, no em dashes or run-ons.
 
 The event follows the verdict: ready-to-merge APPROVE, neutral COMMENT,
-seriously-problematic REQUEST_CHANGES. If the user's latest review here is
-still an approval (`gh pr view N -R OWNER/REPO --json latestReviews`) and the
-verdict is still ready-to-merge, an approval stands: with nothing new staged,
-say so in one line and submit nothing; with new minor comments, plan COMMENT.
-If GitHub dismissed that approval, plan APPROVE again.
+seriously-problematic REQUEST_CHANGES. If the user's approval still stands
+(`gh pr view N -R OWNER/REPO --json latestReviews`) on a ready-to-merge
+verdict, submit nothing new, or COMMENT for new minor comments; if GitHub
+dismissed it, plan APPROVE again.
 
 ## Ask
 
-One question per PR (AskUserQuestion where the harness has it, up to four per
-call; otherwise ask in plain text and wait): "Submit as <EVENT>
+Show every ready block, then ask once: one question per PR, its header chip
+`#N` (AskUserQuestion where the harness has it, up to four per call;
+otherwise ask in plain text and wait): "Submit as <EVENT>
 (Recommended)", "Submit as COMMENT" when the event is not COMMENT, and "Leave
 pending". Anything else the user writes is an edit: restage or rewrite, show
 it again, and ask again. In a `fully-auto` watch, skip the question and carry

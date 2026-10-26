@@ -423,7 +423,11 @@ these contracts when changing it or `scripts/ghreview.py`:
   answer replies on the user's threads, and ask before anything goes public
   unless started `fully-auto` (Leo, 2026-10-26). Anything posted reads like a
   person wrote it: short, casual, one to three sentences per idea, tables when
-  they help, no em dashes or run-ons.
+  they help, no em dashes or run-ons. The review body has no headings or
+  boilerplate: notes are plain sentences, unanchored findings plain
+  `path:line` bullets. Each PR shown to the user opens with `### owner/repo#N
+  — title`, then author and round (one per review or follow-up started,
+  retries not counted), then context, then the question.
 - `watch-review` is Claude Code only and streaming only. Do not restore detached
   `claude -p`, blocking re-arm modes, or model-based polling: idle ticks cost
   zero model tokens. Leo's accepted exception (2026-10-09): where Monitor has
