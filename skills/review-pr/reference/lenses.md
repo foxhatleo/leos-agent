@@ -29,12 +29,14 @@ Do not flag:
 - pre-existing issues on lines this PR neither changes nor newly reaches;
 - what a compiler, type checker, linter or formatter catches, including style
   nits it enforces;
-- speculative issues with no concrete input or state that triggers them;
+- speculative issues with no concrete input or state that triggers them, or
+  a corner case needing contrived input reported above minor;
 - general quality wishes (more tests, comments, logging, abstraction) with no
   failure or stated requirement behind them;
 - behaviour the PR description or ticket says is intended, unless it breaks
   something else;
-- anything already raised in an open review thread.
+- anything already raised in an open review thread or in a comment your
+  brief passes on.
 
 A repository-rules lens reads `CLAUDE.md`, `AGENTS.md`, `REVIEW.md` and
 `CONTRIBUTING.md` at the base SHA instead, and reports a violation only when
@@ -53,8 +55,10 @@ for (`Result:` and `Verified:`), and nothing else:
 
 `covered_paths` lists only files whose patch and relevant surrounding code you
 actually read; the reviewer reports it as coverage. Use `needs-context` with
-explicit gaps if incomplete. Severity is blocking (stops the merge), major
-(must be addressed), minor (worth fixing, the author's call), or nit.
+explicit gaps if incomplete. Severity is blocking (data loss, a security
+hole, irreversible damage, or a crash on a realistic path), major (does not
+work as intended on a realistic path), minor (real but off the common path,
+the author's call), or nit (style).
 `category` is a short lowercase label for the kind of problem.
 `confidence` (0–100) is how sure you are the failure is real and in scope;
 the reviewer re-checks every finding and drops those under 80. No findings is

@@ -92,10 +92,18 @@ cannot be checked: ask the user to look at it, and pass `--force` once only if
 they approve.
 
 For each unresolved thread rooted by the authenticated user, examine current
-code: leave a still-valid comment; draft a pending reply when a subsequent
-response needs an answer; resolve only when verified addressed at SHA. An
-outdated line is not evidence of a fix. Never resolve another author's root
-thread. Hold all actions until adjudication is complete.
+code: leave a still-valid comment; draft a pending reply when a later response
+needs an answer (judge pushback as `reference/followup.md` says); resolve only
+when verified addressed at SHA. An outdated line is not evidence of a fix.
+Resolve yourself only with `actions: auto` in the brief; otherwise write the
+evidence file (§4) and list it as a proposed resolution. Never reply to or
+resolve a thread someone else started. Hold all actions until adjudication is
+complete.
+
+Read what everyone else said, bots included: `ghreview.py discussion -R
+OWNER/REPO -n N`. A claim there is a candidate for §3 like your own; a point
+already raised is not repeated; the author's answers are context. One you find
+wrong or overblown changes nothing and goes in your report, never on the PR.
 
 ## 2. Cover every changed file
 
@@ -185,8 +193,9 @@ enabled it, and checking costs no model call.
 Every candidate, yours or a lens's, gets an independent check before it is
 staged; a lens never validates its own finding.
 
-1. Re-read the implicated code at SHA (`show` around the line) and confirm the
-   failure path: the input or state that triggers it and what goes wrong.
+1. Re-read the implicated code at SHA (`show` around the line) and confirm a
+   realistic failure path: the input or state that triggers it and what goes
+   wrong.
 2. Confirm this PR introduced it: an added or changed line, or a change that
    newly reaches existing code. Pre-existing problems the PR does not touch or
    worsen are out of scope.
@@ -196,6 +205,17 @@ staged; a lens never validates its own finding.
 4. Score the confidence that it is real and in scope, 0–100. Keep only 80 or
    more. Pass the score as each comment's `confidence`; stage filters anything
    lower and lists it under `filtered`.
+5. Give it a `severity`; stage turns severity into the verdict's floor:
+   - **blocking**: merging causes data loss or corruption, a security hole,
+     irreversible damage, or a crash or outage on a realistic path.
+   - **major**: on a realistic path it does not do what it should (wrong
+     result, broken feature, unmet requirement), without crashing.
+   - **minor**: real but off the common path, or the author's call.
+   - **nit**: style or naming. At most three, only when plainly better.
+
+   A realistic path is one normal use or a plausible caller produces. A corner
+   case needing contrived input is minor at most; one with no concrete trigger
+   is dropped.
 
 You run these checks yourself, in sequence. Before staging a `blocking`
 finding or a seriously-problematic verdict, also follow
@@ -205,8 +225,9 @@ prints entries, apply them as `reference/learnings.md` says.
 Prefer problems a human author should act on. Cap new inline comments at 15;
 disclose any meaningful overflow.
 
-Each comment uses one or two direct sentences: what fails, under what
-conditions, and a fix when non-obvious. Genuine questions are fine. Prefix a
+Each comment uses one to three short sentences: what fails, under what
+conditions, and a fix when non-obvious. Write like a person: casual, plain
+words, no em dashes, no run-ons. Genuine questions are fine. Prefix a
 style-only comment with `nit:`. No praise, greetings, emoji, or filler. Anchor
 to the exact verified addressable line; never guess a nearby line. Use LEFT
 for old-file lines and RIGHT for new-file lines. A multi-line range must lie
@@ -241,12 +262,11 @@ if neutral or seriously-problematic has no comment or note, ready-to-merge has
 unreviewed files, or a standing ready-to-merge would be replaced without
 `verdict_override`. Fix the input; do not work around the rule.
 
-The script validates before replacement, backs up owned drafts, stages without
-submission, and retains recovery data if replacement fails. User edits,
-foreign drafts, and unowned empty reviews are preserved. Invalid anchors are
-reported, never silently moved. A changed head or uncertain API outcome is not
-blindly retried. An empty comment list with no notes creates no empty review,
-but may clear an unchanged owned draft when replacement was requested.
+The script backs up owned drafts and keeps recovery data, preserves user
+edits and foreign drafts, reports invalid anchors rather than moving them, and
+never blindly retries a changed head or uncertain outcome. An empty comment
+list with no notes creates no review, but may clear an unchanged owned draft
+when replacement was requested.
 
 A finding whose line is not addressable in the diff is **carried in the review
 body**, with its path, line and the reason it could not anchor. It is not
@@ -275,7 +295,10 @@ python3 "<plugin-root>/scripts/ghreview.py" reply -R OWNER/REPO -n N \
 Replies attach to a pending review, creating a pending shell if needed. A
 replaced draft takes its replies with it (a failed replacement restores them),
 so re-add here every reply that is still needed. Stop on any failure. Finally, for each verified addressed thread, write evidence JSON
-`{"thread_id":"PRRT_…","head_sha":"<full SHA>","explanation":"specific fix and inspected code"}`:
+`{"thread_id":"PRRT_…","head_sha":"<full SHA>","explanation":"specific fix and inspected code"}`
+to a scratch file. With `actions: auto` resolve it; otherwise report the
+command below as a proposed resolution for the parent to run once the user
+agrees:
 
 ```
 python3 "<plugin-root>/scripts/ghreview.py" resolve-thread -R OWNER/REPO -n N \
@@ -288,38 +311,25 @@ that the evidence is correct. A permission denial leaves the thread open.
 
 ## 5. Verdict
 
-- **ready-to-merge**: every changed non-generated file reviewed, no blocking
-  or major issue, no reservation. Minor findings and nits may be staged. If
-  there is nothing to say, this is the verdict.
-- **neutral**: a nonblocking concern or reservation. It always has at least one
-  pending comment or note stating it, so the author sees it. Neutral with
-  nothing staged is not a verdict.
-- **seriously-problematic**: a verified blocking issue, staged as a comment or
-  note. Partial coverage never downgrades it to neutral.
+- **ready-to-merge** (submits as APPROVE): every changed non-generated file
+  reviewed, nothing above minor. Minor findings and nits ride along. With
+  nothing to say, this is the verdict.
+- **neutral** (COMMENT): a major finding, or a reservation staged as a note.
+- **seriously-problematic** (REQUEST_CHANGES): a verified blocking finding.
+  Partial coverage never downgrades it to neutral.
 
-Severity sets the floor: a `blocking` finding makes the verdict
-seriously-problematic, a `major` one at least neutral; `minor` (worth fixing,
-the author's call) and `nit` leave ready-to-merge available.
+`stage` enforces the floors (§3) and refuses neutral whose findings are all
+minor or nits. CI never moves the verdict (§1).
 
-CI is never an input: green, pending and failing CI leave the verdict where the
-code puts it.
-
-Caps hold a verdict at **neutral** at most. These are the only caps; name the
-one applied in the report, and stage its reason as a comment (or a note when no
-line fits):
-
-- *Unverified behaviour*: correctness depends on behaviour the diff and code
-  cannot establish (UI rendering, a runtime or third-party contract). Stage a
-  comment on the relevant line saying what the author should confirm.
-- *Unread ticket*: the PR references a ticket nobody could read, so its
-  requirements are unchecked. Stage a note naming the ticket.
-
-Unreviewed files are not a cap: read them. No cap overrides a standing
-ready-to-merge (§1); only a newly verified defect does, via `verdict_override`.
+One cap holds a verdict at neutral: an *unread ticket*, when the PR references
+a ticket nobody could read. Stage a note naming it and name the cap in the
+report. Behaviour the code cannot establish (UI rendering, a third-party
+contract) is a minor question on the line, not a cap. No cap overrides a standing ready-to-merge (§1); only a
+newly verified defect does, via `verdict_override`.
 
 ## 6. Return a report
 
-One `## owner/repo#N — <title>` section per PR. When one report covers several
+One `### owner/repo#N — <title>` section per PR. When one report covers several
 PRs, re-reviews, or reviewers, each item gets its own section; never merge
 them into one list. Each section has:
 
@@ -328,9 +338,11 @@ them into one list. Each section has:
   overriding a standing ready-to-merge, an explicit statement that you are
   overriding the prior decision and why.
 - Staged comments (`path:line — exact comment`) and notes.
-- Existing threads: left, pending reply, or resolved; resolutions are already
-  public. For outdated lines use original_line; file-level only if both lines
-  are null. Mention replaced drafts and any recovery files.
+- Existing threads: left, pending reply, resolved (already public), or a
+  proposed resolution with its evidence file path. For outdated lines use
+  original_line; file-level only if both lines are null. Mention replaced
+  drafts and any recovery files.
+- What others raised that mattered, one line each, and whether you agreed.
 - Carried, omitted, filtered and suppressed findings, coverage (from the stage result,
   including any `carried_from` and carried files), excluded files, and ticket
   coverage. A carried finding is only visible to whoever opens the draft, so

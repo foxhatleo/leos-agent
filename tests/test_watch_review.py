@@ -47,15 +47,16 @@ def tearDownModule():
 
 
 H1, H2, H3 = "a" * 40, "b" * 40, "c" * 40
-LINE = re.compile(r"(review-requested|re-review) (\S+)#(\d+) head=([0-9a-f]{40})"
-                  r"(?: prev=([0-9a-f]{40}))? claim=([0-9a-f]{32}) (\S+) — (.*)$")
+LINE = re.compile(r"(review-requested|re-review|follow-up) (\S+)#(\d+) head=([0-9a-f]{40})"
+                  r"(?: prev=([0-9a-f]{40}))?(?: threads=(\d+))? claim=([0-9a-f]{32}) (\S+) — (.*)$")
 
 
 def parse(line):
     """A watch line as the documented reader reads it: fields before the title."""
     m = LINE.match(line)
     return m and {"verb": m.group(1), "repo": m.group(2), "pr": int(m.group(3)), "head": m.group(4),
-                  "prev": m.group(5), "claim": m.group(6), "url": m.group(7), "title": m.group(8)}
+                  "prev": m.group(5), "threads": int(m.group(6) or 0), "claim": m.group(7), "url": m.group(8),
+                  "title": m.group(9)}
 
 
 PATCH = "@@ -1,1 +1,2 @@\n ctx\n+new"
@@ -88,7 +89,30 @@ class FakeGitHub:
             draft=False, state="open", closed_at=None, patch=PATCH):
         self.prs[number] = {"head": head, "title": title, "requested": requested, "team_only": team_only,
                             "draft": draft, "state": state, "closed_at": closed_at, "patch": patch,
-                            "stale": 0, "old": None, "reviews": {}}
+                            "stale": 0, "old": None, "reviews": {}, "threads": []}
+
+    def thread(self, number, thread_id, root="leo", latest="alice", latest_id=1, resolved=False, bot=False):
+        """A submitted review thread whose root and latest comment are by these logins."""
+        threads = self.prs[number]["threads"]
+        threads[:] = [t for t in threads if t["id"] != thread_id]
+        threads.append({"id": thread_id, "root": root, "latest": latest, "latest_id": latest_id,
+                        "resolved": resolved, "bot": bot})
+
+    def follow_node(self, number, pr):
+        """A pull request as the watcher's batched follow query reads it."""
+        state = {"open": "OPEN", "closed": "CLOSED", "merged": "MERGED"}[pr["state"]]
+        reviews = [{"state": r["state"], "author": {"login": self.login}}
+                   for r in pr["reviews"].values() if r["state"] != "PENDING"]
+        threads = [{"id": t["id"], "isResolved": t["resolved"],
+                    "root": {"nodes": [{"author": {"login": t["root"]},
+                                        "pullRequestReview": {"state": "COMMENTED"}}]},
+                    "latest": {"nodes": [{"databaseId": t["latest_id"], "author": {
+                        "__typename": "Bot" if t["bot"] else "User", "login": t["latest"]}}]}}
+                   for t in pr["threads"]]
+        return {"id": f"PR_{number}", "number": number, "title": pr["title"], "isDraft": pr["draft"],
+                "state": state, "url": f"https://github.com/{self.full_name}/pull/{number}",
+                "headRefOid": pr["head"], "latestReviews": {"nodes": reviews},
+                "reviewThreads": {"nodes": threads, "pageInfo": {"hasNextPage": False, "endCursor": None}}}
 
     def submit(self, number):
         """The user submits their pending review, as they do after reading the draft."""
@@ -146,6 +170,11 @@ class FakeGitHub:
             return self.login + "\n"
         if args[:2] == ["api", "graphql"]:
             fields = dict(a.split("=", 1) for a in args[2:] if "=" in a)
+            if "pullRequest(number:" in fields["query"]:
+                assert (fields["owner"] + "/" + fields["name"]).lower() == self.full_name.lower(), fields
+                numbers = [int(n) for n in re.findall(r"\bp(\d+): pullRequest\(number:", fields["query"])]
+                return json.dumps({"data": {"repository": {
+                    f"p{n}": self.follow_node(n, self.prs[n]) if n in self.prs else None for n in numbers}}})
             if "search(" not in fields["query"]:
                 raise AssertionError("unexpected GraphQL %r" % fields["query"][:60])
             terms = fields["q"].split()
@@ -858,6 +887,12 @@ class TestVerdicts(WatcherStateCase):
             report = stage_report(verdict="seriously-problematic", **dict({"staged": 0}, **pending))
             self.assertIsNone(self.w.completion_refusal(report, "o/r", 1, self.HEAD), pending)
 
+    def test_a_neutral_report_of_nits_is_not_recorded(self):
+        with self.assertRaisesRegex(ValueError, "neutral needs a major finding"):
+            self.record(severities={"nit": 1, "minor": 0, "major": 0, "blocking": 0, "unspecified": 0})
+        state = self.record(severities={"nit": 1, "minor": 0, "major": 1, "blocking": 0, "unspecified": 0})
+        self.assertEqual(state["verdicts"]["1"]["verdict"], "neutral")
+
     def test_an_unreviewed_file_is_not_recorded(self):
         coverage = {"files_changed": 2, "files_reviewed": 1, "files_skipped_generated": [],
                     "unreviewed": ["tests/test_a.py"], "complete": False}
@@ -1403,3 +1438,90 @@ class TestPruning(HostCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestFollowing(HostCase):
+    """After the user submits, the watcher follows the pull request like a human
+    reviewer: new heads are re-reviewed, and a reply on one of the user's own
+    threads is a follow-up, until the pull request is merged or closed."""
+
+    def reviewed_and_submitted(self, number=1, verdict="neutral"):
+        self.github.add(number, H1)
+        self.manual_stage(number, H1, verdict)
+        self.github.submit(number)
+        self.github.prs[number]["requested"] = False  # GitHub drops the request on submission
+
+    def events(self, ticks=1, **kwargs):
+        out, _ = self.drive(ticks, **kwargs)
+        return [parse(line) for line in out if parse(line)], out
+
+    def test_an_answer_on_the_users_thread_is_a_follow_up(self):
+        self.reviewed_and_submitted()
+        self.github.thread(1, "PRRT_1", latest="alice", latest_id=41)
+        events, out = self.events()
+        self.assertEqual([(e["verb"], e["pr"], e["head"], e["threads"]) for e in events],
+                         [("follow-up", 1, H1, 1)], out)
+        started = json.loads(self.cli("start", "1", "--head", H1, "--claim", events[0]["claim"]))
+        self.assertEqual((started["kind"], started["threads"]), ("follow-up", ["PRRT_1"]))
+
+    def test_bots_other_peoples_threads_and_settled_threads_never_count(self):
+        self.reviewed_and_submitted()
+        self.github.thread(1, "PRRT_bot", latest="cursor[bot]", bot=True)
+        self.github.thread(1, "PRRT_theirs", root="bob", latest="alice")
+        self.github.thread(1, "PRRT_done", latest="alice", resolved=True)
+        self.github.thread(1, "PRRT_quiet", latest="leo")  # the user spoke last
+        self.assertEqual(self.events()[0], [])
+
+    def test_ack_closes_it_and_only_a_newer_reply_comes_back(self):
+        self.reviewed_and_submitted()
+        self.github.thread(1, "PRRT_1", latest_id=41)
+        claim = self.events()[0][0]["claim"]
+        self.cli("start", "1", "--head", H1, "--claim", claim)
+        self.cli("ack", "1", "--claim", claim)
+        self.assertEqual(self.events(start=600)[0], [])
+        self.github.thread(1, "PRRT_1", latest_id=57)  # the author answered again
+        events, out = self.events(ticks=4, start=1200)
+        self.assertEqual([(e["verb"], e["threads"]) for e in events], [("follow-up", 1)], out)
+
+    def test_a_follow_up_is_neither_recorded_nor_parked(self):
+        self.reviewed_and_submitted()
+        self.github.thread(1, "PRRT_1")
+        claim = self.events()[0][0]["claim"]
+        self.cli("start", "1", "--head", H1, "--claim", claim)
+        with self.assertRaisesRegex(ValueError, "follow-up is closed with ack"):
+            self.cli("record", "1", "--head", H1, "--claim", claim, "--result", self.report(1, H1))
+        with self.assertRaisesRegex(ValueError, "only a review is parked"):
+            self.cli("block", "1", "--head", H1, "--reason", "ask", "--claim", claim)
+
+    def test_a_new_push_is_re_reviewed_without_a_request_and_its_review_answers_the_threads(self):
+        self.reviewed_and_submitted()
+        self.github.push(1, H2, patch=PATCH + "\n+more")
+        self.github.thread(1, "PRRT_1", latest_id=41)
+        events, out = self.events()
+        self.assertEqual([(e["verb"], e["head"], e["prev"], e["threads"]) for e in events],
+                         [("re-review", H2, H1, 1)], out)
+        claim = events[0]["claim"]
+        self.cli("start", "1", "--head", H2, "--claim", claim)
+        self.cli("record", "1", "--head", H2, "--claim", claim, "--result", self.report(1, H2))
+        self.assertEqual(self.events(start=600)[0], [])
+
+    def test_a_reply_waits_for_the_review_a_new_head_is_due(self):
+        self.reviewed_and_submitted()
+        self.github.thread(1, "PRRT_1")
+        self.github.push(1, H2, patch=PATCH + "\n+more")
+        events, _ = self.events(ticks=1, start=0, settle=120)
+        self.assertEqual([e["verb"] for e in events], ["re-review"])
+
+    def test_merged_closed_or_never_submitted_pull_requests_are_not_followed(self):
+        self.reviewed_and_submitted(1)
+        self.github.thread(1, "PRRT_1")
+        self.github.prs[1]["state"] = "merged"
+        self.github.add(2, H1)
+        self.manual_stage(2, H1, "neutral")  # staged, but the user never submitted it
+        self.github.prs[2]["requested"] = False
+        self.github.thread(2, "PRRT_2")
+        out, _ = self.drive(3)
+        self.assertEqual(out, [])
+        follow_queries = [c for c in self.github.graphql_calls() if any("pullRequest(number:" in a for a in c)]
+        # #1 is learned closed on the first tick and never asked about again.
+        self.assertTrue(all("p1: pullRequest" not in " ".join(c) for c in follow_queries[1:]), follow_queries)

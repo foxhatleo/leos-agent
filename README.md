@@ -411,9 +411,9 @@ require investigation of actual execution.
 | doctor | Check installation, pricing, model references, and runtime evidence without paid calls. |
 | tune-routing | Configure tiers and diagnose actual native model selection; opt into Claude Code's advisor or `opusplan`. |
 | review-usage | Mechanical usage scan with reference-cost estimates and explicit gaps. |
-| review-pr | Review a pinned GitHub PR; stage comments/replies as pending. |
+| review-pr | Review a pinned GitHub PR, stage it as pending, and submit once you agree. |
 | handoff / handon | Save concise context pointers and resume after checking drift. |
-| watch-review | Claude Monitor watcher: code polls GitHub; models run only for eligible reviews. |
+| watch-review | Claude Monitor watcher that reviews, re-reviews and answers replies like a human reviewer; code polls GitHub, models run only when there is work. |
 | attach-pr | Claude-specific attachment of an existing PR to the desktop session. |
 
 Only small routing instructions and necessary metadata are always present.
@@ -454,9 +454,15 @@ observed child models. Missing/rotated logs do not prove a broken install.
 PR review pins the full head SHA and reads code only at it, from GitHub, never
 from a local checkout; it never silently moves line anchors or retries old
 findings against a new head. Replacing a pending review requires
-an unchanged ownership receipt and saves recovery data. New comments/replies
-remain pending. Only verified addressed threads rooted by the authenticated
-user can be auto-resolved; resolution is public and requires SHA-bound evidence.
+an unchanged ownership receipt and saves recovery data. Comments and replies
+are staged pending. After each review you see the verdict, the findings, what
+other reviewers and bots said, and the plan, and nothing is submitted,
+replied to or resolved until you answer. The event follows the verdict:
+ready-to-merge approves, neutral comments, seriously-problematic requests
+changes. A draft you edited is yours to submit. Only verified addressed
+threads you started can be resolved; resolution is public and requires
+SHA-bound evidence. Reviews read everyone's comments, bots included, as
+input to verify, and never reply to anyone else's thread.
 Every changed non-generated file is read before staging. A name alone exempts
 only a file the PR modifies, never one it adds, and a lockfile edit that adds a
 package origin is read too. After a complete
@@ -475,15 +481,22 @@ Reviews read them only when entries exist and report each suppression: a
 learning may omit a minor or nit finding or downgrade a major one, never
 omit a major one or touch a blocking one. `ghreview.py learnings -R OWNER/REPO list` shows them and
 `forget --id ID` or `forget --all` drops them. Review runs at the
-standard tier; a consequential PR or an escalation runs it at premium. Neutral
-and seriously-problematic always come with a pending comment; CI never affects
-the verdict. A ready-to-merge verdict stands until the PR diff changes, hunk
+standard tier; a consequential PR or an escalation runs it at premium.
+Severity decides the verdict: data loss, a security hole or a crash on a
+realistic path requests changes; something that does not work as intended is
+a comment; minor findings and nits ride along with an approval, and an
+unlikely corner case is minor at most. Neutral and seriously-problematic
+always come with a pending comment; CI never affects the verdict. A ready-to-merge verdict stands until the PR diff changes, hunk
 line numbers aside: a merge from the base keeps it unless the base touched
 lines within three of a PR hunk or a file GitHub sends no patch for. An
 optional cross-model lens, off unless the user enables it, sends the pinned
 diff to a second provider's CLI.
 Watchers use cross-process leases, bounded retries, and completion reports;
-emission alone never records a PR as reviewed. A head waiting on the user's
+emission alone never records a PR as reviewed. Once you submit a review, the
+watcher follows that PR until it is merged or closed: a new head is
+re-reviewed, and a reply on one of your threads is judged against the code
+and answered (conceded and resolved, or rebutted once) after you agree.
+`/watch-review fully-auto` skips the questions. A head waiting on the user's
 decision is parked without spending retries. A head already reviewed by hand
 with every changed non-generated file read, or carried from an earlier
 complete review, is not emitted again, whatever its verdict.
