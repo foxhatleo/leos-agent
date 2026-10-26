@@ -191,9 +191,12 @@ SEARCH_QUERY = """query($q:String!,$cursor:String) {
 THREAD_FIELDS = """id isResolved
  root: comments(first:1) { nodes { author { login } pullRequestReview { state } } }
  latest: comments(last:1) { nodes { databaseId author { __typename login } } }"""
+# Not latestReviews: GitHub leaves a reviewer out of it while a review request
+# for them is open, so an author re-requesting the user at the same head would
+# unfollow the pull request exactly when its replies need answering.
 FOLLOW_FIELDS = """id number title isDraft state url headRefOid author { login }
- latestReviews(first:100) { nodes { %s } }
- reviewThreads(first:100) { nodes { %s } %s }""" % (REVIEW_FIELDS, THREAD_FIELDS, PAGE_FIELDS)
+ reviewed: reviews(author:$login,states:[APPROVED,CHANGES_REQUESTED,COMMENTED,DISMISSED],first:1) { nodes { state } }
+ reviewThreads(first:100) { nodes { %s } %s }""" % (THREAD_FIELDS, PAGE_FIELDS)
 MORE_THREADS_QUERY = """query($id:ID!,$cursor:String) { node(id:$id) { ... on PullRequest {
  reviewThreads(first:100,after:$cursor) { nodes { %s } %s } } } }""" % (THREAD_FIELDS, PAGE_FIELDS)
 
@@ -333,17 +336,19 @@ def awaiting_reply(threads, login):
 	return out
 
 
-def follows(node, login):
+def follows(node):
 	"""Whether the user still follows this pull request: open, not a draft, and
-	reviewed by them on GitHub (a submitted review, whatever its state)."""
+	reviewed by them on GitHub (a submitted review, whatever its state). The
+	query filters `reviewed` to the user's submitted reviews; PENDING is
+	rechecked so a widened filter cannot follow an unsubmitted draft."""
 	return (node.get("state") == "OPEN" and not node.get("isDraft")
-		and any((review.get("author") or {}).get("login") == login and review.get("state") != "PENDING"
-			for review in (node.get("latestReviews") or {}).get("nodes") or []))
+		and any(isinstance(review, dict) and review.get("state") not in (None, "PENDING")
+			for review in (node.get("reviewed") or {}).get("nodes") or []))
 
 
 def follow_query(numbers):
 	aliases = " ".join("p%d: pullRequest(number:%d) { %s }" % (n, n, FOLLOW_FIELDS) for n in numbers)
-	return "query($owner:String!,$name:String!) { repository(owner:$owner,name:$name) { %s } }" % aliases
+	return "query($owner:String!,$name:String!,$login:String!) { repository(owner:$owner,name:$name) { %s } }" % aliases
 
 
 def followed(repo, login, cwd):
@@ -357,7 +362,7 @@ def followed(repo, login, cwd):
 	out = []
 	for start in range(0, len(numbers), FOLLOW_BATCH):
 		batch = numbers[start:start + FOLLOW_BATCH]
-		data = graphql(follow_query(batch), {"owner": owner, "name": name}, cwd, partial=True)
+		data = graphql(follow_query(batch), {"owner": owner, "name": name, "login": login}, cwd, partial=True)
 		nodes = data.get("repository") or {}
 		for number in batch:
 			node = nodes.get("p%d" % number)
@@ -366,7 +371,7 @@ def followed(repo, login, cwd):
 			if node.get("state") in ("CLOSED", "MERGED"):
 				closed.add(number)
 				continue
-			if not follows(node, login):
+			if not follows(node):
 				continue
 
 			def more(cursor, node_id=node["id"]):
