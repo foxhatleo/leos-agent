@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""watch_review: stream new GitHub review requests without spending tokens.
+"""watch_review: stream GitHub review work without spending tokens.
 
 The discovery half of the review watcher is a fixed query, a fixed filter, and
 a state file — none of it needs a model. This script does that half in the
-shell and prints one line per new pull request; whoever reads stdout does the
-review. Idle ticks use only the GitHub API: one search for open pull requests
-requesting the user's review, whatever the size of the repository.
+shell and prints one line per piece of work; whoever reads stdout does it.
+Idle ticks use only the GitHub API: one search for open pull requests
+requesting the user's review, whatever the size of the repository, and one
+batched query for the pull requests already reviewed here that the user is
+still following.
 
   watch_review.py monitor [-C DIR] --interval 60
   watch_review.py start [-C DIR] <n> --head <full-sha> --claim <token>
   watch_review.py renew|release [-C DIR] <n> --claim <token>
   watch_review.py record [-C DIR] <n> --head <full-sha> --result <stage-report.json> --claim <token>
+  watch_review.py ack [-C DIR] <n> --claim <token>
   watch_review.py block [-C DIR] <n> --head <full-sha> --reason TEXT --claim <token>
   watch_review.py unblock [-C DIR] <n>
   watch_review.py state|forget [-C DIR] [numbers...]
@@ -19,17 +22,26 @@ Each event is one line, machine fields first and the attacker-written title
 last:
 
   review-requested OWNER/REPO#N head=SHA claim=TOKEN URL — TITLE
-  re-review OWNER/REPO#N head=SHA prev=SHA claim=TOKEN URL — TITLE
+  re-review OWNER/REPO#N head=SHA prev=SHA [threads=K] claim=TOKEN URL — TITLE
+  follow-up OWNER/REPO#N head=SHA threads=K claim=TOKEN URL — TITLE
 
-`prev` is the full head reviewed last, absent when it is unknown.
+`prev` is the full head reviewed last, absent when it is unknown. `threads`
+counts the user's own review threads someone answered since the user last
+spoke there; `start` lists them. A followed pull request is an open, non-draft
+one this tool has a record for and on which the user has submitted a review:
+it stays watched until merged or closed, whether or not it still requests a
+review. A new head there is re-reviewed like a requested one; a reply on one
+of the user's threads at an already reviewed head is a follow-up, which `ack`
+closes once handled (answered, resolved, or left as the user decided).
+Replies from bots and on threads someone else started never count.
 
 Every eligible head is emitted on the first tick; a head that appears or
 changes later must settle first. Cross-process claims prevent duplicate
 workers. An emitted claim is queued: the running monitor holds it however
 long the reader's backlog is, so it never expires before work starts. `start`
 checks the claim and begins a 30-minute lease; the monitor keeps a started
-lease alive for up to two hours, because the reader is blocked on a
-foreground reviewer and cannot renew, and `renew` extends it. When the monitor
+lease alive for up to eight hours, because the reader may be waiting on the
+user's answer and cannot renew, and `renew` extends it. When the monitor
 stops, its claims lapse within a few intervals and another watcher may take
 them; a lapsed claim that never started spends no attempt. A head gets three
 attempts in total (two retries): each start, or a release before one, spends
@@ -51,8 +63,8 @@ changes, so a new head with the same diff (a merge from the base) is carried
 forward silently. Any other new push is eligible again. On a head the watcher
 has spent an attempt on, only `record` completes it, whatever stage recorded;
 forget and unblock hand a stored verdict back, so its head is emitted again.
-Drafts, team-only requests, and PRs already approved by another user are
-excluded.
+Drafts and team-only requests are excluded, and so is a requested PR another
+user already approved, unless the user follows it.
 
 Intended for Claude Code's Monitor tool, which turns each stdout line into a
 session notification. Any `read`-driven shell loop works the same way. Where
@@ -89,7 +101,10 @@ STATE_NAME = "review-watcher"
 SHA_RE = r"[0-9a-f]{40}"
 TOKEN_RE = r"[0-9a-f]{32}"  # uuid4().hex, as claim_review mints it
 LEASE = 1800  # seconds a started review holds its claim after `start` or `renew`
-MAX_HELD = 4 * LEASE  # how long a running monitor keeps a started lease alive
+# How long a running monitor keeps a started lease alive. A review finishes in
+# the background while the reader may sit on a question for the user, unable
+# to record or renew; a working day is the wait it must survive.
+MAX_HELD = 16 * LEASE
 ATTEMPTS = 3  # started (or released) claims per head: the first try and two retries
 CLOSED_RETENTION = 30 * 86400
 PRUNE_EVERY = 6 * 3600
@@ -98,6 +113,9 @@ PRUNE_BATCH = 50
 UNSTABLE_TRIES = 3
 CARRIED, UNSTABLE = "carried", "unstable"
 SERIOUS = "seriously-problematic"
+REVIEW, FOLLOW_UP = "review", "follow-up"
+# Followed pull requests per batched query: each brings its review threads.
+FOLLOW_BATCH = 25
 
 
 def fail(message):
@@ -133,7 +151,7 @@ def gh(args, cwd):
 
 
 def eligible(listing, login):
-	"""The pull requests in a discovery payload that are worth reviewing.
+	"""The requested pull requests in a discovery payload that are worth reviewing.
 
 	Split out from the `gh` call so the filter can be tested without a network.
 	"""
@@ -169,8 +187,20 @@ SEARCH_QUERY = """query($q:String!,$cursor:String) {
  search(type:ISSUE,query:$q,first:50,after:$cursor) {
  nodes { ... on PullRequest { %s } } %s } }""" % (PR_FIELDS, PAGE_FIELDS)
 
+THREAD_FIELDS = """id isResolved
+ root: comments(first:1) { nodes { author { login } pullRequestReview { state } } }
+ latest: comments(last:1) { nodes { databaseId author { __typename login } } }"""
+FOLLOW_FIELDS = """id number title isDraft state url headRefOid
+ latestReviews(first:100) { nodes { %s } }
+ reviewThreads(first:100) { nodes { %s } %s }""" % (REVIEW_FIELDS, THREAD_FIELDS, PAGE_FIELDS)
+MORE_THREADS_QUERY = """query($id:ID!,$cursor:String) { node(id:$id) { ... on PullRequest {
+ reviewThreads(first:100,after:$cursor) { nodes { %s } %s } } } }""" % (THREAD_FIELDS, PAGE_FIELDS)
+
 _IDENTITY = {}
 _CANONICAL = {}
+# Pull requests seen merged or closed, per repository: never queried again by
+# this process. prune_closed drops their state once retention passes.
+_CLOSED = {}
 
 
 def identity(cwd):
@@ -199,13 +229,15 @@ def canonical_repo(name, cwd):
 	return _CANONICAL[name]
 
 
-def graphql(query, variables, cwd):
+def graphql(query, variables, cwd, partial=False):
+	"""The query's data. `partial` accepts errors beside data: one aliased pull
+	request that no longer exists must not fail the others in its batch."""
 	args = ["api", "graphql", "-f", "query=" + query]
 	for key, value in variables.items():
 		if value is not None:
 			args.extend(["-f", key + "=" + str(value)])
 	data = json.loads(gh(args, cwd))
-	if data.get("errors"):
+	if data.get("errors") and not (partial and isinstance(data.get("data"), dict)):
 		raise ValueError("GitHub GraphQL failed: " + json.dumps(data["errors"]))
 	return data["data"]
 
@@ -258,7 +290,92 @@ def discover(cwd):
 			item[field] = list(connection_nodes(item[field], more))
 		item["reviewRequests"] = [r.get("requestedReviewer") or {} for r in item["reviewRequests"]]
 		listing.append(item)
-	return repo, login, eligible(listing, login)
+	return repo, login, candidates(eligible(listing, login), followed(repo, login, cwd))
+
+
+def candidates(requested, following):
+	"""One entry per pull request: requested ones first-hand, followed ones added.
+
+	A pull request both requested and followed keeps the requested entry and
+	gains the followed one's threads awaiting a reply.
+	"""
+	merged = {pr["number"]: dict(pr) for pr in requested}
+	for pr in following:
+		if pr["number"] in merged:
+			merged[pr["number"]]["awaiting"] = pr.get("awaiting") or {}
+		else:
+			merged[pr["number"]] = pr
+	return [merged[n] for n in sorted(merged)]
+
+
+def awaiting_reply(threads, login):
+	"""{thread id: latest comment id} for the user's open threads someone else answered last.
+
+	Only threads the user started, never one rooted in an unsubmitted draft,
+	and never a bot's answer: a person replying to the user is what a human
+	reviewer would come back for.
+	"""
+	out = {}
+	for thread in threads:
+		if not isinstance(thread, dict) or thread.get("isResolved"):
+			continue
+		root = ((thread.get("root") or {}).get("nodes") or [{}])[0] or {}
+		latest = ((thread.get("latest") or {}).get("nodes") or [{}])[0] or {}
+		author = latest.get("author") or {}
+		if ((root.get("author") or {}).get("login") != login
+				or (root.get("pullRequestReview") or {}).get("state") == "PENDING"
+				or author.get("login") in (None, login)
+				or author.get("__typename") == "Bot" or str(author.get("login")).endswith("[bot]")
+				or not isinstance(latest.get("databaseId"), int)):
+			continue
+		out[thread["id"]] = latest["databaseId"]
+	return out
+
+
+def follows(node, login):
+	"""Whether the user still follows this pull request: open, not a draft, and
+	reviewed by them on GitHub (a submitted review, whatever its state)."""
+	return (node.get("state") == "OPEN" and not node.get("isDraft")
+		and any((review.get("author") or {}).get("login") == login and review.get("state") != "PENDING"
+			for review in (node.get("latestReviews") or {}).get("nodes") or []))
+
+
+def follow_query(numbers):
+	aliases = " ".join("p%d: pullRequest(number:%d) { %s }" % (n, n, FOLLOW_FIELDS) for n in numbers)
+	return "query($owner:String!,$name:String!) { repository(owner:$owner,name:$name) { %s } }" % aliases
+
+
+def followed(repo, login, cwd):
+	"""The pull requests this tool reviewed that the user still follows, with
+	their threads awaiting the user's reply, in one query per FOLLOW_BATCH."""
+	owner, name = repo.split("/", 1)
+	closed = _CLOSED.setdefault(repo, set())
+	entry = load_entry(repo)
+	# Reviewed here: a recorded head or verdict. A claim alone is work in flight.
+	numbers = sorted(n for n in set(heads_of(entry)) | set(verdicts_of(entry)) if n not in closed)
+	out = []
+	for start in range(0, len(numbers), FOLLOW_BATCH):
+		batch = numbers[start:start + FOLLOW_BATCH]
+		data = graphql(follow_query(batch), {"owner": owner, "name": name}, cwd, partial=True)
+		nodes = data.get("repository") or {}
+		for number in batch:
+			node = nodes.get("p%d" % number)
+			if not isinstance(node, dict):
+				continue
+			if node.get("state") in ("CLOSED", "MERGED"):
+				closed.add(number)
+				continue
+			if not follows(node, login):
+				continue
+
+			def more(cursor, node_id=node["id"]):
+				return graphql(MORE_THREADS_QUERY, {"id": node_id, "cursor": cursor}, cwd)["node"]["reviewThreads"]
+
+			threads = list(connection_nodes(node["reviewThreads"], more))
+			out.append({"number": number, "title": node.get("title") or "", "url": node.get("url") or "",
+				"isDraft": False, "headRefOid": node.get("headRefOid") or "", "followed": True,
+				"awaiting": awaiting_reply(threads, login)})
+	return out
 
 
 def load_entry(repo):
@@ -313,6 +430,23 @@ def verdict_heads(entry):
 	return covered
 
 
+def seen_of(entry):
+	"""{number: {thread id: comment id}}: the latest reply on each of the user's
+	threads that a review or a follow-up already handled."""
+	return {int(n): v for n, v in (entry.get("seen") or {}).items() if isinstance(v, dict)}
+
+
+def unseen(awaiting, seen):
+	"""The awaiting threads whose latest reply has not been handled yet."""
+	seen = seen or {}
+	return {thread: comment for thread, comment in (awaiting or {}).items() if seen.get(thread) != comment}
+
+
+def mark_seen(entry, number, threads):
+	if threads:
+		entry.setdefault("seen", {}).setdefault(str(number), {}).update(threads)
+
+
 def known_heads(entry):
 	"""heads_of, plus the latest head a recorded verdict marks reviewed where the watcher recorded none."""
 	known = heads_of(entry)
@@ -328,11 +462,16 @@ def record(repo, number, head, claim_token=None, result=None):
 	with state_mod._locked(path):
 		data = state_mod.load(path)
 		entry = data.get(repo, {})
+		claim = {}
 		if claim_token:
 			try:
-				current_claim(entry, number, claim_token, head, finishing=True)
+				claim = current_claim(entry, number, claim_token, head, finishing=True)
 			except ValueError:
 				raise ValueError("review claim was superseded; refusing stale completion") from None
+			if claim.get("kind", REVIEW) != REVIEW:
+				raise ValueError("record completes a review; a follow-up is closed with ack")
+		# The review answered the threads it was handed, as the reviewer saw them.
+		mark_seen(entry, number, claim.get("threads") if claim.get("token") == claim_token else None)
 		patch = {"heads": {str(number): head}}
 		if result is not None:
 			prior = verdicts_of(entry).get(number)
@@ -415,6 +554,12 @@ def completion_refusal(result, repo, number, head, acknowledgement=None):
 		return "neutral needs at least one pending comment; stage the reservation or record ready-to-merge"
 	if verdict == SERIOUS and pending == 0:
 		return "seriously-problematic needs at least one pending comment or note stating the blocking issue"
+	severities = result.get("severities")
+	if isinstance(severities, dict):
+		notes = result.get("notes") if isinstance(result.get("notes"), int) else 0
+		refusal = ghreview.severity_refusal(verdict, severities, notes)
+		if refusal:
+			return refusal
 	if result.get("complete") is True and acknowledgement is None:
 		return None
 	omitted = result.get("omitted")
@@ -432,6 +577,23 @@ def completion_refusal(result, repo, number, head, acknowledgement=None):
 			for entry in omitted):
 		return "every omitted finding must carry a reason"
 	return None
+
+
+def ack(repo, number, token):
+	"""Close a follow-up: the threads it named count as handled at the replies it saw.
+
+	A later reply on the same thread is new and comes back as its own follow-up.
+	"""
+	path = state_mod.state_file(STATE_NAME)
+	with state_mod._locked(path):
+		data = state_mod.load(path)
+		entry = data.setdefault(repo, {})
+		claim = current_claim(entry, number, token, finishing=True)
+		if claim.get("kind", REVIEW) != FOLLOW_UP:
+			raise ValueError("ack closes a follow-up; a review completes with record")
+		mark_seen(entry, number, claim.get("threads"))
+		entry["claims"].pop(str(number))
+		state_mod.atomic_write(path, data)
 
 
 def due(matches, known, first_seen, emitted, now, settle, covered=None):
@@ -458,6 +620,33 @@ def due(matches, known, first_seen, emitted, now, settle, covered=None):
 	return out
 
 
+def follow_key(number, head, threads):
+	return (FOLLOW_UP, number, head, tuple(sorted(threads.items())))
+
+
+def follow_due(matches, known, seen, first_seen, now, settle, covered=None):
+	"""Which pull requests have replies for the user to answer, as (pr, threads).
+
+	Only at a head already reviewed: when a review is due or still settling,
+	that review answers the threads. New replies settle like a new head, so an
+	author answering several threads in a row costs one follow-up.
+	"""
+	covered = covered or {}
+	out = []
+	for pr in matches:
+		number, head = pr["number"], pr.get("headRefOid") or ""
+		if known.get(number) != head and head not in covered.get(number, ()):
+			continue
+		threads = unseen(pr.get("awaiting"), seen.get(number))
+		if not threads:
+			continue
+		stamp = first_seen.setdefault(follow_key(number, head, threads), now)
+		if now - stamp < settle:
+			continue
+		out.append((pr, threads))
+	return out
+
+
 def clean_title(text):
 	"""The title as one line of visible text.
 
@@ -475,10 +664,10 @@ def clean_title(text):
 		elif category != "Cf":
 			out.append(ch)
 	title = re.sub(r"\s+", " ", "".join(out)).strip()
-	return re.sub(r"(?i)\b(claim|head|prev)=", r"\1:", title)
+	return re.sub(r"(?i)\b(claim|head|prev|threads)=", r"\1:", title)
 
 
-def event_line(verb, repo, pr, previous, token=""):
+def event_line(verb, repo, pr, previous, token="", threads=None):
 	"""The printed line for one event — always exactly one printable line.
 
 	Every field a reader acts on comes before the title, so a title that
@@ -487,49 +676,68 @@ def event_line(verb, repo, pr, previous, token=""):
 	fields = [f"{verb} {repo}#{pr['number']}", "head=" + (pr.get("headRefOid") or "")]
 	if previous:
 		fields.append("prev=" + previous)
+	if threads:
+		fields.append("threads=%d" % len(threads))
 	if token:
 		fields.append("claim=" + token)
 	fields.append(pr["url"])
 	return " ".join(fields) + " — " + clean_title(pr.get("title") or "")
 
 
-def claim_review(repo, number, head, now, monitor="", hold=LEASE):
+def claim_review(repo, number, head, now, monitor="", hold=LEASE, kind=REVIEW, threads=None):
 	"""Queue a cross-process claim for one head: emission is not completion.
 
 	The claim is held for `hold` seconds, which the emitting monitor renews
 	every tick (hold_claims), so it waits out any backlog without starting its
 	lease. Attempts count started work, not emissions.
+
+	A review claim carries the threads awaiting the user's reply as it saw
+	them, which `record` then counts as handled. A follow-up claim is for
+	exactly those threads at an already reviewed head; it waits while another
+	claim on the pull request is live, and new replies make it a new piece of
+	work with fresh attempts.
 	"""
 	path = state_mod.state_file(STATE_NAME)
 	with state_mod._locked(path):
 		data = state_mod.load(path)
 		entry = data.setdefault(repo, {})
-		if heads_of(entry).get(number) == head or head in verdict_heads(entry).get(number, ()):
-			return None
 		blocked = entry.setdefault("blocked", {})
-		if (blocked.get(str(number)) or {}).get("head") == head:
-			return None  # parked on the user's decision: silent, no attempt spent
+		threads = unseen(threads, seen_of(entry).get(number))
+		if kind == REVIEW:
+			if heads_of(entry).get(number) == head or head in verdict_heads(entry).get(number, ()):
+				return None
+			if (blocked.get(str(number)) or {}).get("head") == head:
+				return None  # parked on the user's decision: silent, no attempt spent
+		elif not threads:
+			return None
 		claims = entry.setdefault("claims", {})
 		old = claims.get(str(number), {})
-		if old.get("head") == head and old.get("expires", 0) > now:
+		same = (old.get("head") == head and old.get("kind", REVIEW) == kind
+			and (kind == REVIEW or (old.get("threads") or {}) == threads))
+		live = old.get("expires", 0) > now and old.get("state") in ("queued", "started", None)
+		if same and old.get("expires", 0) > now:
 			return None
-		attempts = old.get("attempts", 0) if old.get("head") == head else 0
+		if kind == FOLLOW_UP and live and old:
+			return None  # one piece of work per pull request at a time
+		attempts = old.get("attempts", 0) if same else 0
 		if attempts >= ATTEMPTS:
 			if not old.get("exhausted_notified"):
 				old["exhausted_notified"] = True
 				state_mod.atomic_write(path, data)
 				# stdout: the reader must learn this head is stuck, not just the log.
-				print(f"watch-review: {repo}#{number} exhausted {ATTEMPTS} attempts at {head}; use forget to retry",
-					flush=True)
+				print(f"watch-review: {repo}#{number} exhausted {ATTEMPTS} attempts at {head}"
+					+ (" (follow-up)" if kind == FOLLOW_UP else "") + "; use forget to retry", flush=True)
 			return None
 		token = uuid.uuid4().hex
-		blocked.pop(str(number), None)  # a block names one head; a new push lifts it
-		# Earlier tokens for this head, so a review still running under one can
+		if kind == REVIEW:
+			blocked.pop(str(number), None)  # a block names one head; a new push lifts it
+		# Earlier tokens for this same work, so one still running under one can
 		# finish while this claim waits (current_claim).
 		superseded = ([old["token"]] + list(old.get("superseded") or []))[:3] \
-			if old.get("head") == head and old.get("token") else []
+			if same and old.get("token") else []
 		claims[str(number)] = {"head": head, "token": token, "attempts": attempts, "state": "queued",
-			"monitor": monitor, "expires": now + hold, "superseded": superseded}
+			"monitor": monitor, "expires": now + hold, "superseded": superseded, "kind": kind,
+			"threads": threads}
 		state_mod.atomic_write(path, data)
 		return token
 
@@ -626,7 +834,8 @@ def block_head(repo, number, head, reason, token, now):
 	with state_mod._locked(path):
 		data = state_mod.load(path)
 		entry = data.setdefault(repo, {})
-		current_claim(entry, number, token, head, finishing=True)
+		if current_claim(entry, number, token, head, finishing=True).get("kind", REVIEW) != REVIEW:
+			raise ValueError("only a review is parked; ask the user about a follow-up, then ack or release it")
 		entry["claims"].pop(str(number))
 		entry.setdefault("blocked", {})[str(number)] = {"head": head, "reason": reason.strip(), "at": int(now)}
 		state_mod.atomic_write(path, data)
@@ -673,7 +882,7 @@ def drop_numbers(repo, numbers, verdicts=False):
 		drop = {str(n) for n in numbers}
 		# Drop from both shapes: a legacy entry has not necessarily been
 		# rewritten into heads yet, and leaving it there would re-suppress.
-		for key in ("claims", "blocked", "heads") + (("verdicts",) if verdicts else ()):
+		for key in ("claims", "blocked", "heads", "seen") + (("verdicts",) if verdicts else ()):
 			entry[key] = {n: value for n, value in (entry.get(key) or {}).items() if n not in drop}
 		entry["reviewed"] = [n for n in (entry.get("reviewed") or []) if str(n) not in drop]
 		for number in drop:
@@ -684,7 +893,7 @@ def drop_numbers(repo, numbers, verdicts=False):
 
 def tracked_numbers(entry):
 	numbers = set()
-	for key in ("heads", "verdicts", "claims", "blocked"):
+	for key in ("heads", "verdicts", "claims", "blocked", "seen"):
 		numbers.update(int(n) for n in (entry.get(key) or {}))
 	numbers.update(int(n) for n in entry.get("reviewed") or [])
 	return numbers
@@ -841,7 +1050,8 @@ def log_only(action, *args):
 
 
 def monitor(args):
-	"""Claim each emitted review; only verified completion, or a complete manual pass, suppresses its head."""
+	"""Claim each emitted review or follow-up; only verified completion, a
+	complete manual pass, or an ack suppresses it."""
 	first_seen = {}
 	failures, last_error = 0, None
 	# What is already waiting when the watch starts has had all the time it
@@ -860,14 +1070,15 @@ def monitor(args):
 			log_only(hold_claims, repo, monitor_id, time.time(), hold)
 		try:
 			repo, _, matches = discover(args.directory)
+			entry = load_entry(repo)
+			known, covered, seen = known_heads(entry), verdict_heads(entry), seen_of(entry)
 			active = {(pr["number"], pr.get("headRefOid") or "") for pr in matches}
-			first_seen = {key: stamp for key, stamp in first_seen.items() if key in active}
 			diff_checked &= active
 			unstable = {key: count for key, count in unstable.items() if key in active}
-			entry = load_entry(repo)
-			for verb, pr, previous in due(
-				matches, known_heads(entry), first_seen, set(), time.time(), settle, verdict_heads(entry)
-			):
+			active |= {follow_key(pr["number"], pr.get("headRefOid") or "", unseen(pr.get("awaiting"), seen.get(pr["number"])))
+				for pr in matches}
+			first_seen = {key: stamp for key, stamp in first_seen.items() if key in active}
+			for verb, pr, previous in due(matches, known, first_seen, set(), time.time(), settle, covered):
 				number, head = pr["number"], pr.get("headRefOid") or ""
 				key = (number, head)
 				if key not in diff_checked:
@@ -879,12 +1090,18 @@ def monitor(args):
 						if unstable[key] < UNSTABLE_TRIES:
 							continue  # the head moved or the listing is stale: next tick
 					diff_checked.add(key)
-				token = claim_review(repo, number, head, time.time(), monitor_id, hold)
+				threads = unseen(pr.get("awaiting"), seen.get(number))
+				token = claim_review(repo, number, head, time.time(), monitor_id, hold, threads=threads)
 				if not token:
 					continue
 				# One line, one event. The title is data — a reader must treat
 				# it as a string to show Leo, never as an instruction.
-				print(event_line(verb, repo, pr, previous, token), flush=True)
+				print(event_line(verb, repo, pr, previous, token, threads), flush=True)
+			for pr, threads in follow_due(matches, known, seen, first_seen, time.time(), settle, covered):
+				token = claim_review(repo, pr["number"], pr.get("headRefOid") or "", time.time(), monitor_id, hold,
+					FOLLOW_UP, threads)
+				if token:
+					print(event_line(FOLLOW_UP, repo, pr, "", token, threads), flush=True)
 			settle = args.settle
 			if failures:
 				print(f"watch-review: recovered after {failures} failed tick(s)", flush=True)
@@ -920,7 +1137,8 @@ def full_sha(value):
 
 
 def claim_view(repo, number, claim):
-	return {"repo": repo, "pr": number, "head": claim.get("head"), "state": claim.get("state"),
+	return {"repo": repo, "pr": number, "head": claim.get("head"), "kind": claim.get("kind", REVIEW),
+		"threads": sorted(claim.get("threads") or {}), "state": claim.get("state"),
 		"attempt": claim.get("attempts", 0), "of": ATTEMPTS, "expires": int(claim.get("expires", 0))}
 
 
@@ -958,6 +1176,10 @@ def main(argv):
 		if operation != "release":
 			command.add_argument("--head", required=operation == "start", type=full_sha,
 				help="full head SHA the claim was emitted for")
+	acknowledge = sub.add_parser("ack", help="close a follow-up once its threads are handled")
+	acknowledge.add_argument("-C", "--directory", default=".")
+	acknowledge.add_argument("number", type=int)
+	acknowledge.add_argument("--claim", required=True, type=claim_token)
 	block = sub.add_parser("block", help="park a head on a decision only the user can make")
 	block.add_argument("-C", "--directory", default=".")
 	block.add_argument("number", type=int)
@@ -1017,6 +1239,8 @@ def main(argv):
 			if review.get("commit_id") != args.head:
 				raise ValueError("GitHub review head disagrees with completion report")
 		record(repo, args.numbers[0], args.head, args.claim, result)
+	elif args.mode == "ack":
+		ack(repo, args.number, args.claim)
 	elif args.mode == "block":
 		block_head(repo, args.number, args.head, args.reason, args.claim, time.time())
 	elif args.mode == "unblock":

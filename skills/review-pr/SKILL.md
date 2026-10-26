@@ -1,6 +1,6 @@
 ---
 name: review-pr
-description: Review a GitHub pull request and stage a pending review for the authenticated user. Use when asked to review a PR. Never submits a review; does not review the local working diff. Requires authenticated gh.
+description: Review a GitHub pull request, stage it as a pending review, and submit it once the user agrees. Use when asked to review a PR. Does not review the local working diff. Requires authenticated gh.
 argument-hint: "[pr-number]"
 ---
 
@@ -20,17 +20,18 @@ or after `Result: escalate`. Wait for its result. Do not preload the procedure
 or diff here.
 
 Brief: PR number, OWNER/REPO, repository directory, focus hints, absolute
-plugin root, `<plugin-root>/skills/review-pr/reference/procedure.md`, and any
-head SHA, previous reviewed head and claim token a watcher supplied. If you can
-read a linked ticket the reviewer lacks, add a short summary of its
-requirements, marked untrusted. Ask for the report and the absolute
-stage-result path. Lenses (`leo-lens`) may investigate, never delegate or mutate.
+plugin root, `<plugin-root>/skills/review-pr/reference/procedure.md`,
+`actions: propose` (`auto` only in a fully-auto watch), and any head SHA,
+previous reviewed head and claim token a watcher supplied. If you can read a
+linked ticket the reviewer lacks, add a short summary, marked untrusted. Ask
+for the report and the absolute stage-result path. Lenses (`leo-lens`) may
+investigate, never delegate or mutate.
 
 The cross-model lens is off unless the user enables it, for this review or
 with `review_peer.py config --enable`. When they ask for it here, tell them the
 PR diff goes to a second provider, then brief `cross-model: on`.
 
-Without delegation, follow the procedure locally; sequential review is valid.
-Disclose real coverage limits; never claim unenforced model control. Relay the
-report without changing its verdict or staged wording. When relaying several
-PRs or reviewers, give each its own `## owner/repo#N — <title>` section.
+Without delegation, follow the procedure locally. Disclose real coverage
+limits; never claim unenforced model control. Keep the report's verdict and
+staged wording, then follow `reference/submit.md`: show each PR and ask before
+anything is submitted, replied to or resolved.

@@ -663,6 +663,9 @@ class FakeGitHub:
         # listing stops at 3000 files, so a larger PR reports more than it lists.
         self.changed_files = None
         self.posted = []  # create-review payloads, as sent
+        self.conversation = []  # issue comments, as REST returns them
+        self.submitted = []  # (review id, payload) per submit-events call
+        self.replies = []  # (root comment id, body) per posted reply
 
     def head(self):
         return self.heads.pop(0) if len(self.heads) > 1 else self.heads[0]
@@ -749,6 +752,20 @@ class FakeGitHub:
         match = re.fullmatch(r"/pulls/\d+/reviews/(\d+)/comments", sub)
         if match:
             return self.lines(self.comments.get(int(match.group(1)), []))
+        match = re.fullmatch(r"/pulls/\d+/reviews/(\d+)/events", sub)
+        if match and method == "POST":
+            review, sent = self.reviews[int(match.group(1))], json.loads(payload)
+            assert review["state"] == "PENDING", review
+            self.submitted.append((review["id"], sent))
+            review.update(state=self.STATES[sent["event"]], body=sent.get("body", review["body"]))
+            return json.dumps(review)
+        match = re.fullmatch(r"/pulls/\d+/comments/(\d+)/replies", sub)
+        if match and method == "POST":
+            self.replies.append((int(match.group(1)), json.loads(payload)["body"]))
+            self.next_comment += 1
+            return json.dumps({"id": self.next_comment, "html_url": "https://github.com/x#%d" % self.next_comment})
+        if re.fullmatch(r"/issues/\d+/comments", sub):
+            return self.lines(self.conversation)
         match = re.fullmatch(r"/pulls/\d+/reviews/(\d+)", sub)
         if match and method == "DELETE":
             rid = int(match.group(1))
@@ -789,24 +806,29 @@ class FakeGitHub:
             return json.dumps({"data": {"addPullRequestReviewThreadReply": {
                 "comment": {"id": "PRRC_%d" % self.next_comment}}}})
         assert "reviewThreads" in query, query
-        nodes = [{"id": t["id"], "isResolved": False, "isOutdated": False, "path": t["path"],
+        nodes = [{"id": t["id"], "isResolved": t.get("resolved", False), "isOutdated": False, "path": t["path"],
                   "line": t["line"], "originalLine": t["line"],
                   "comments": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": [{
                       "id": "PRRC_root_%s" % t["id"], "databaseId": t["root_id"],
-                      "author": {"login": t["author"]}, "body": t["body"], "createdAt": "2026-01-01T00:00:00Z",
-                      "pullRequestReview": {"id": "PRR_submitted", "state": "COMMENTED"}}]}}
+                      "author": {"login": t["author"], "__typename": "Bot" if t.get("bot") else "User"},
+                      "body": t["body"], "createdAt": "2026-01-01T00:00:00Z",
+                      "pullRequestReview": {"id": "PRR_submitted", "state": t.get("review_state", "COMMENTED")}}]}}
                  for t in self.threads]
         return json.dumps({"data": {"repository": {"pullRequest": {"reviewThreads": {
             "pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": nodes}}}}})
+
+    STATES = {"APPROVE": "APPROVED", "COMMENT": "COMMENTED", "REQUEST_CHANGES": "CHANGES_REQUESTED"}
 
     def post_review(self, body):
         self.posted.append(body)
         if any(r["state"] == "PENDING" for r in self.reviews.values()):
             raise subprocess.CalledProcessError(
                 1, ["gh"], "", "HTTP 422: User can only have one pending review per pull request")
+        if body.get("event") in ("COMMENT", "REQUEST_CHANGES") and not body.get("body"):
+            raise subprocess.CalledProcessError(1, ["gh"], "", "HTTP 422: body is required for this event")
         rid = self.next_id
         self.next_id += 1
-        self.reviews[rid] = {"id": rid, "node_id": "R%d" % rid, "state": "PENDING",
+        self.reviews[rid] = {"id": rid, "node_id": "R%d" % rid, "state": self.STATES.get(body.get("event"), "PENDING"),
                              "user": {"login": self.login}, "body": body.get("body") or "",
                              "commit_id": body["commit_id"]}
         self.comments[rid] = [{"id": rid * 10 + n, "path": c["path"], "body": c["body"],
@@ -1539,3 +1561,200 @@ class TestVerdictRecordForWatcher(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSeverityRules(unittest.TestCase):
+    """Severity sets the verdict's floor and its justification, so a review of
+    nits is an approval with nits, not a neutral one."""
+
+    def refusal(self, verdict, comments, notes=0):
+        return ghreview.severity_refusal(verdict, ghreview.severity_counts(comments), notes)
+
+    def finding(self, severity=None, body="x"):
+        c = {"path": "a.py", "line": 1, "body": body}
+        if severity:
+            c["severity"] = severity
+        return c
+
+    def test_nits_and_minor_findings_ride_on_ready_to_merge(self):
+        comments = [self.finding("nit"), self.finding("minor")]
+        self.assertIsNone(self.refusal("ready-to-merge", comments))
+        self.assertRegex(self.refusal("neutral", comments), "neutral needs a major finding")
+
+    def test_a_label_in_the_text_counts_as_the_severity(self):
+        self.assertRegex(self.refusal("neutral", [self.finding(body="nit: rename this")]), "neutral needs")
+        self.assertEqual(ghreview.severity_counts([self.finding(body="nit: rename")])["nit"], 1)
+
+    def test_a_major_finding_is_at_least_neutral_and_a_blocking_one_is_serious(self):
+        self.assertRegex(self.refusal("ready-to-merge", [self.finding("major")]), "at least neutral")
+        self.assertIsNone(self.refusal("neutral", [self.finding("major")]))
+        self.assertRegex(self.refusal("neutral", [self.finding("blocking")]), "seriously-problematic")
+        self.assertIsNone(self.refusal("seriously-problematic", [self.finding("blocking")]))
+        self.assertRegex(self.refusal("seriously-problematic", [self.finding("major")]), "needs a blocking")
+
+    def test_a_note_stands_as_the_reservation(self):
+        self.assertIsNone(self.refusal("neutral", [self.finding("nit")], notes=1))
+        self.assertIsNone(self.refusal("seriously-problematic", [], notes=1))
+
+    def test_an_unspecified_severity_sets_no_floor(self):
+        self.assertIsNone(self.refusal("ready-to-merge", [self.finding()]))
+        self.assertIsNone(self.refusal("neutral", [self.finding()]))
+
+
+class TestSubmit(GitHubCase):
+    """Submission follows the user's answer and the verdict recorded at the head."""
+
+    FILES = [text_file("a.py", "@@ -1,1 +1,3 @@\n ctx\n+one\n+two")]
+
+    def staged(self, verdict="neutral", comments=None, notes=()):
+        fake = self.github(self.H1, self.FILES)
+        comments = [{"path": "a.py", "line": 2, "body": "drops the retry", "severity": "major"}] \
+            if comments is None else comments
+        code, _, err = self.stage("Owner/Repo", {"verdict": verdict, "reviewed": ["a.py"],
+                                                 "comments": comments, "notes": list(notes)}, self.H1)
+        self.assertEqual(code, 0, err)
+        return fake
+
+    def submit(self, event, *extra, body=None):
+        args = ["submit", "-R", "Owner/Repo", "-n", "1", "--commit", self.H1, "--event", event]
+        if body is not None:
+            path = Path(self.tmp.name) / "summary.txt"
+            path.write_text(body)
+            args += ["--body-file", str(path)]
+        return self.main(*args, *extra)
+
+    def test_the_staged_draft_is_submitted_with_the_verdicts_event(self):
+        fake = self.staged()
+        code, out, err = self.submit("COMMENT", body="One thing breaks the retry path.")
+        self.assertEqual(code, 0, err)
+        review_id, sent = fake.submitted[0]
+        self.assertEqual(sent["event"], "COMMENT")
+        self.assertTrue(sent["body"].startswith("One thing breaks the retry path."))
+        self.assertEqual(fake.reviews[review_id]["state"], "COMMENTED")
+        record = ghreview.load_verdict("Owner/Repo", 1)
+        self.assertEqual((record["submitted"]["event"], record["submitted"]["review_id"]), ("COMMENT", review_id))
+
+    def test_an_event_against_the_verdict_needs_the_users_decision(self):
+        fake = self.staged()
+        code, _, err = self.submit("APPROVE")
+        self.assertEqual(code, 2)
+        self.assertIn("--user-decision", err)
+        self.assertEqual(fake.submitted, [])
+        code, _, err = self.submit("APPROVE", "--user-decision", "todo")
+        self.assertEqual(code, 2)
+        code, _, err = self.submit("APPROVE", "--user-decision", "Leo: approve, the retry is fine for now")
+        self.assertEqual(code, 0, err)
+        self.assertIn("approve", ghreview.load_verdict("Owner/Repo", 1)["submitted"]["decision"])
+
+    def test_comment_and_request_changes_need_a_body(self):
+        fake = self.github(self.H1, self.FILES)
+        code, _, err = self.stage("Owner/Repo", {"verdict": "seriously-problematic", "reviewed": ["a.py"],
+                                                 "comments": [{"path": "a.py", "line": 2, "body": "deletes rows",
+                                                               "severity": "blocking"}]}, self.H1)
+        self.assertEqual(code, 0, err)
+        code, _, err = self.submit("REQUEST_CHANGES")
+        self.assertEqual(code, 2)
+        self.assertIn("needs a review body", err)
+        self.assertEqual(fake.submitted, [])
+
+    def test_a_draft_the_user_edited_is_theirs_to_submit(self):
+        fake = self.staged()
+        draft = next(iter(fake.comments.values()))
+        draft[0]["body"] = "my own wording"
+        code, out, _ = self.submit("COMMENT", body="summary")
+        self.assertEqual(code, 3)
+        self.assertTrue(json.loads(out)["refused"])
+        self.assertEqual(fake.submitted, [])
+
+    def test_with_no_draft_open_a_body_only_review_is_created_and_submitted(self):
+        fake = self.staged(verdict="ready-to-merge", comments=[])
+        self.assertEqual(fake.reviews, {})
+        code, out, err = self.submit("APPROVE")
+        self.assertEqual(code, 0, err)
+        self.assertEqual((fake.posted[-1]["event"], fake.posted[-1]["commit_id"]), ("APPROVE", self.H1))
+        self.assertEqual(json.loads(out)["state"], "APPROVED")
+
+    def test_nothing_is_submitted_without_a_verdict_at_this_head(self):
+        fake = self.github(self.H1, self.FILES)
+        code, _, err = self.submit("COMMENT", body="x")
+        self.assertEqual(code, 2)
+        self.assertIn("no verdict is recorded", err)
+        self.assertEqual(fake.posted, [])
+
+
+class TestPostedReplies(GitHubCase):
+    FILES = [text_file("a.py", "@@ -1,1 +1,3 @@\n ctx\n+one\n+two")]
+
+    def reply(self, thread, *extra):
+        body = Path(self.tmp.name) / "reply.txt"
+        body.write_text("Ah right, the caller checks that. Resolving.")
+        return self.main("reply", "-R", "Owner/Repo", "-n", "1", "--thread-id", thread, "--commit", self.H1,
+                         "--body-file", str(body), "--post", *extra)
+
+    def fake(self):
+        fake = self.github(self.H1, self.FILES)
+        fake.threads = [{"id": "PRRT_mine", "path": "a.py", "line": 2, "root_id": 555, "author": "me", "body": "x"},
+                        {"id": "PRRT_theirs", "path": "a.py", "line": 3, "root_id": 777, "author": "bob", "body": "y"}]
+        return fake
+
+    def test_a_reply_on_the_users_own_thread_is_posted_to_its_root(self):
+        fake = self.fake()
+        code, out, err = self.reply("PRRT_mine")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(fake.replies, [(555, "Ah right, the caller checks that. Resolving.")])
+        self.assertEqual(json.loads(out)["thread"], "PRRT_mine")
+
+    def test_someone_elses_thread_is_never_answered(self):
+        fake = self.fake()
+        code, _, err = self.reply("PRRT_theirs")
+        self.assertEqual(code, 2)
+        self.assertIn("threads started by the authenticated user", err)
+        self.assertEqual(fake.replies, [])
+
+    def test_a_reply_planned_before_a_newer_comment_is_refused(self):
+        fake = self.fake()
+        code, _, err = self.reply("PRRT_mine", "--expect-latest", "554")
+        self.assertEqual(code, 2)
+        self.assertIn("thread changed since the plan", err)
+        self.assertEqual(fake.replies, [])
+        code, _, err = self.reply("PRRT_mine", "--expect-latest", "555")
+        self.assertEqual(code, 0, err)
+
+    def test_an_open_draft_stops_a_posted_reply(self):
+        fake = self.fake()
+        code, _, err = self.stage("Owner/Repo", {"verdict": "neutral", "reviewed": ["a.py"], "comments": [
+            {"path": "a.py", "line": 2, "body": "x", "severity": "major"}]}, self.H1)
+        self.assertEqual(code, 0, err)
+        code, _, err = self.reply("PRRT_mine")
+        self.assertEqual(code, 2)
+        self.assertIn("pending review", err)
+        self.assertEqual(fake.replies, [])
+
+
+class TestDiscussion(GitHubCase):
+    def test_everyone_else_is_read_bots_flagged_drafts_and_settled_threads_left_out(self):
+        fake = self.github(self.H1, [text_file("a.py", "@@ -1,1 +1,2 @@\n ctx\n+one")])
+        fake.conversation = [{"user": {"login": "cursor[bot]", "type": "Bot"}, "created_at": "t",
+                              "body": "Bugbot: possible \x1b[31mnull\x1b[0m deref " + "x" * 5000}]
+        fake.reviews[1] = {"id": 1, "state": "COMMENTED", "user": {"login": "claude[bot]", "type": "Bot"},
+                           "body": "Summary of findings", "commit_id": self.H1}
+        fake.reviews[2] = {"id": 2, "state": "APPROVED", "user": {"login": "bob", "type": "User"}, "body": ""}
+        fake.threads = [
+            {"id": "PRRT_a", "path": "a.py", "line": 2, "root_id": 1, "author": "bob", "body": "rename?"},
+            {"id": "PRRT_b", "path": "a.py", "line": 2, "root_id": 2, "author": "me", "body": "mine"},
+            {"id": "PRRT_c", "path": "a.py", "line": 2, "root_id": 3, "author": "bob", "body": "old",
+             "resolved": True},
+            {"id": "PRRT_d", "path": "a.py", "line": 2, "root_id": 4, "author": "me", "body": "draft",
+             "review_state": "PENDING"}]
+        code, out, err = self.main("discussion", "-R", "Owner/Repo", "-n", "1")
+        self.assertEqual(code, 0, err)
+        data = json.loads(out)
+        said = data["conversation"][0]
+        self.assertTrue(said["bot"])
+        self.assertNotIn("\x1b", said["body"])
+        self.assertIn("more characters", said["body"])
+        self.assertEqual([(r["author"], r["bot"]) for r in data["reviews"]], [("claude[bot]", True)])
+        self.assertEqual([(t["thread_id"], t["started_by_me"]) for t in data["threads"]],
+                         [("PRRT_a", False), ("PRRT_b", True)])
+        code, out, _ = self.main("discussion", "-R", "Owner/Repo", "-n", "1", "--all")
+        self.assertEqual(len(json.loads(out)["threads"]), 3)

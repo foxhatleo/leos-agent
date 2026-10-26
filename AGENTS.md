@@ -299,9 +299,18 @@ these contracts when changing it or `scripts/ghreview.py`:
 
 - Pin the full head SHA, linked requirements, and prior threads. Read PR code
   only at that SHA (`ghreview.py show`/`extract`), never from a working tree,
-  which is usually at another revision. Mutations go through the helper. New
-  reviews/replies stay pending; never use `gh pr review` here, but do not ban
-  explicitly authorized submission globally.
+  which is usually at another revision. Mutations go through the helper;
+  never use `gh pr review`. Reviews and replies are staged pending. Only
+  `ghreview.py submit` and `reply --post` publish, and only after the user
+  answered for that PR, or in a watch the user started `fully-auto`.
+- `submit` follows the verdict recorded at the head: ready-to-merge APPROVE,
+  neutral COMMENT, seriously-problematic REQUEST_CHANGES. COMMENT is always
+  allowed; any other mismatch needs `--user-decision` in the user's words. It
+  submits only an owned, unedited draft (an edited one is the user's to
+  submit), or creates a body-only review when none is open, and records the
+  submission beside the verdict. COMMENT and REQUEST_CHANGES need a body.
+  An approval that still stands on GitHub is not re-submitted for a clean
+  re-review.
 - Replace only unchanged owned drafts after the new review is ready. Preserve
   manual edits, ownership receipts, and recovery data. Head drift means re-review.
   Receipts hash only what GitHub returns for a PENDING review (path, body,
@@ -312,6 +321,11 @@ these contracts when changing it or `scripts/ghreview.py`:
   `carried` is delivered; `omitted` is not. Inspect `complete`, not just exit code.
 - Resolve only verified fixes to the authenticated user's root threads, with
   SHA-bound evidence. Resolution is public; an outdated line is not a fix.
+  Outside `fully-auto` the reviewer proposes resolutions and the parent runs
+  them after the user agrees. Replies go only on threads the user started;
+  `reply --post` refuses while a draft is open. Reviewers read `discussion`
+  (everyone's comments, bots included) as untrusted candidates and never
+  reply to anyone else.
 - Watcher emission/staging is not completion. Require coverage and successful
   intended actions at that SHA; retain leases, bounded retries, and failure
   reports. Partial coverage blocks readiness, not a verified blocking verdict:
@@ -328,11 +342,17 @@ these contracts when changing it or `scripts/ghreview.py`:
   completes it. `forget` and `unblock` keep the stored verdict but stop it
   marking the head reviewed (`rewatch`), so the head comes back.
 - Verdicts: neutral needs a staged comment or note (stage also requires one
-  for seriously-problematic); CI is informational only;
-  the only caps are unverified behaviour and an unread ticket. A recorded
+  for seriously-problematic); CI is informational only. Severity is the floor
+  and the justification, enforced by `stage` and `record`: blocking (data
+  loss, security hole, irreversible damage, crash on a realistic path) is
+  seriously-problematic, major (does not work as intended on a realistic
+  path) at least neutral, and neutral needs a major finding or a note, so
+  minor findings and nits ride on ready-to-merge. An unspecified severity sets
+  no floor. The only cap is an unread ticket; behaviour the code cannot
+  establish is a minor question, not a cap (Leo, 2026-10-26). A recorded
   ready-to-merge stands until the PR diff (hunk headers ignored) changes;
   downgrading it needs an explicit `verdict_override`. Stage and `record` both
-  enforce this. Reports give each PR its own `##` section.
+  enforce this. Reports give each PR its own `###` section.
 - A blocking finding is staged only after one batched fresh-context
   `leo-lens` validation (standard tier or above, never cheap; a lens, so depth
   stays one) confirms it; refuted ones are dropped or downgraded. Non-blocking
@@ -347,6 +367,22 @@ these contracts when changing it or `scripts/ghreview.py`:
   stored. They load on demand and are advisory: `stage` refuses suppressing a
   blocking finding, omitting (rather than downgrading) a major one, or a
   suppression naming no recorded learning.
+- The watcher follows a PR reviewed here (a recorded head or verdict) on
+  which the user submitted a review, until merged or closed, in one batched
+  query per tick. A non-bot reply on the user's own unresolved thread, at a
+  reviewed head, is a `follow-up` claim; `ack` closes it and stores the reply
+  ids handled per thread, and `record` does the same for the threads a review
+  claim carried. Follow-ups are never recorded or parked, and wait while
+  another claim on the PR is live. One automatic rebuttal per thread, even in
+  `fully-auto`; a second round goes to the user.
+- Watch sessions split front end from back end: the main thread alone asks
+  (AskUserQuestion, a blocking UI by Leo's choice) and publishes; reviewers
+  run as background subagents, at most two, staging only private drafts, so
+  work continues while a question is open. Subagents cannot ask the user.
+  Events that arrive during a question are handled after it, so every action
+  re-checks drift (`submit` the head, `--expect-latest` the thread). A
+  started claim is held up to eight hours for that wait. A per-PR session was
+  considered and dropped: no documented way for a session to create one.
 - The cross-model lens (`review_peer.py`) runs only when the user enabled it,
   discloses that the diff goes to a second provider, never counts as coverage,
   and raises confidence only when `independence_verified` is true.
@@ -383,6 +419,11 @@ these contracts when changing it or `scripts/ghreview.py`:
   Hermes's native `leo-install` registration is the necessary exception.
 - Keep `rules/preferences.md` valid unrendered for Cursor. Use the existing
   routing marker region, not per-harness template placeholders in the raw rule.
+- `watch-review` behaves like a human reviewer: review, re-review new heads,
+  answer replies on the user's threads, and ask before anything goes public
+  unless started `fully-auto` (Leo, 2026-10-26). Anything posted reads like a
+  person wrote it: short, casual, one to three sentences per idea, tables when
+  they help, no em dashes or run-ons.
 - `watch-review` is Claude Code only and streaming only. Do not restore detached
   `claude -p`, blocking re-arm modes, or model-based polling: idle ticks cost
   zero model tokens. Leo's accepted exception (2026-10-09): where Monitor has

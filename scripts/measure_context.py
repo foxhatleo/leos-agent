@@ -39,6 +39,10 @@ LIMITS = {
 	# only when the repository has recorded review learnings.
 	"review_validation_bytes": 2_600,
 	"review_learnings_bytes": 2_200,
+	# Read by the parent once a review is staged, to show it and ask; and by a
+	# watcher's follow-up round, or a reviewer judging pushback on a thread.
+	"review_submit_bytes": 3_000,
+	"review_followup_bytes": 2_800,
 	# Claude-only skill bodies, one budget each; a new skill there needs one.
 	"attach_pr_body_bytes": 11_200,
 	"watch_review_body_bytes": 9_600,
@@ -155,6 +159,8 @@ def measurements():
 		"review_procedure_bytes": body_bytes(ROOT / "skills" / "review-pr" / "reference" / "procedure.md"),
 		"review_validation_bytes": body_bytes(ROOT / "skills" / "review-pr" / "reference" / "validation.md"),
 		"review_learnings_bytes": body_bytes(ROOT / "skills" / "review-pr" / "reference" / "learnings.md"),
+		"review_submit_bytes": body_bytes(ROOT / "skills" / "review-pr" / "reference" / "submit.md"),
+		"review_followup_bytes": body_bytes(ROOT / "skills" / "review-pr" / "reference" / "followup.md"),
 		**claude_bodies,
 	}
 
