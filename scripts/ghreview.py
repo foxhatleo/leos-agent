@@ -559,35 +559,37 @@ def representable(entry):
     return bool(isinstance(path, str) and path.strip() and isinstance(body, str) and body.strip())
 
 
-def render_carried(findings):
-    """(body, carried, overflow) for findings with no addressable line.
+def render_body(notes, findings):
+    """(body, carried, overflow): the review's top-level text, as the author reads it.
+
+    Written like a person's review, not a report: notes as plain sentences,
+    then each finding with no addressable line as `path:line` and its text. No
+    headings and no boilerplate; why a finding could not anchor goes to the
+    stage report, not to the author. Empty when there is nothing to say.
 
     Truncation is never silent: a finding that does not fit is returned as
     overflow and counted as omitted, because a finding nobody can read has not
     been preserved just because we tried.
     """
-    if not findings:
+    if not notes and not findings:
         return "", [], []
-    header = (MARKER + "\n\n## Findings without an addressable line\n\n"
-              "Recorded here because this diff has no line to anchor them to. Not dropped.\n\n")
-    carried, overflow, size = [], [], len(header)
-    for entry in findings:
-        text = str(entry.get("body", "")).strip()
+    text = MARKER + "\n\n" + render_notes(notes)
+    carried, overflow = [], []
+    for entry in findings or []:
+        rows = str(entry.get("body", "")).strip().splitlines() or [""]
         line = entry.get("line")
         where = "%s:%s" % (entry.get("path"), line if line is not None else "?")
-        rendered = "- `%s` (%s) — %s\n%s\n\n" % (
-            where, entry.get("side") or "RIGHT", entry.get("reason", "not addressable"),
-            "\n".join("  > " + row for row in text.splitlines() or [""]),
-        )
-        if size + len(rendered) > MAX_BODY_CHARS:
+        # A LEFT line is in the old file; say so, or the number points at the wrong code.
+        old = " (old file)" if entry.get("side") == "LEFT" else ""
+        rendered = "- `%s`%s: %s\n" % (where, old, "\n  ".join(rows))
+        if len(text) + len(rendered) > MAX_BODY_CHARS:
             overflow.append(dict(entry, reason="did not fit in the review body; %s" % entry.get("reason", "not addressable")))
             continue
         carried.append(entry)
-        size += len(rendered)
-        header += rendered
+        text += rendered
     if overflow:
-        header += "… %d further finding(s) did not fit; see the stage report.\n" % len(overflow)
-    return header, carried, overflow
+        text += "\n(%d more didn't fit here.)\n" % len(overflow)
+    return text.rstrip() + "\n", carried, overflow
 
 
 def current_login():
@@ -1503,9 +1505,8 @@ def verdict_refusal(verdict, pending, coverage, prior, diff, override, severitie
 
 
 def render_notes(notes):
-    if not notes:
-        return ""
-    return "## Review notes\n\n" + "".join("- %s\n" % n.replace("\n", "\n  ") for n in notes) + "\n"
+    """Each note as its own short paragraph, the way a reviewer writes a summary."""
+    return "".join("%s\n\n" % n.strip() for n in notes or [])
 
 
 def cmd_map(a):
@@ -2136,9 +2137,7 @@ def cmd_stage(a):
     # A finding that failed to anchor is carried in the review body; only input
     # with nothing renderable in it is omitted. `complete` therefore means every
     # finding reached the author, not that every finding reached a diff line.
-    body, carried, overflow = render_carried([d for d in dropped if representable(d)])
-    if notes:
-        body = (body or MARKER + "\n\n") + render_notes(notes)
+    body, carried, overflow = render_body(notes, [d for d in dropped if representable(d)])
     omitted = [d for d in dropped if not representable(d)] + overflow
     severities = severity_counts(comments)
     refusal = verdict_refusal(verdict, len(staged) + len(carried) + len(notes), coverage, prior, diff, override,

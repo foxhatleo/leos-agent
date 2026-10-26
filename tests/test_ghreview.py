@@ -236,29 +236,36 @@ class TestCarriedFindings(unittest.TestCase):
         self.assertFalse(ghreview.representable({"body": "text"}))
         self.assertFalse(ghreview.representable("not an object"))
 
-    def test_the_rendered_body_names_path_line_side_and_reason(self):
-        body, carried, overflow = ghreview.render_carried([
+    def test_the_body_reads_like_a_person_wrote_it(self):
+        body, carried, overflow = ghreview.render_body(["The retry ceiling is unchecked."], [
             {"path": "a.py", "line": 42, "side": "LEFT", "body": "the finding",
              "reason": "line 42 (LEFT) not addressable in any hunk"},
         ])
         self.assertEqual((len(carried), len(overflow)), (1, 0))
-        for needle in ("a.py:42", "LEFT", "not addressable", "the finding", ghreview.MARKER):
+        for needle in ("The retry ceiling is unchecked.", "`a.py:42` (old file): the finding", ghreview.MARKER):
             self.assertIn(needle, body)
+        # No headings, and why it could not anchor is for the report, not the author.
+        self.assertNotIn("#", body.replace(ghreview.MARKER, ""))
+        self.assertNotIn("not addressable", body)
+        self.assertLess(body.index("retry ceiling"), body.index("a.py:42"))
+
+    def test_nothing_to_say_is_no_body(self):
+        self.assertEqual(ghreview.render_body([], []), ("", [], []))
 
     def test_a_finding_that_does_not_fit_is_omitted_rather_than_quietly_cut(self):
         """Coverage honesty: a finding nobody can read has not been preserved
         just because we tried, so it must be reported as omitted, not carried."""
         findings = [{"path": f"f{i}.py", "line": i, "side": "RIGHT",
                      "body": "x" * 2000, "reason": "r"} for i in range(60)]
-        body, carried, overflow = ghreview.render_carried(findings)
+        body, carried, overflow = ghreview.render_body([], findings)
         self.assertTrue(overflow)
         self.assertEqual(len(carried) + len(overflow), len(findings))
         self.assertLessEqual(len(body), ghreview.MAX_BODY_CHARS + 200)
-        self.assertIn("did not fit", body)
+        self.assertIn("didn't fit", body)
         self.assertTrue(all("did not fit" in o["reason"] for o in overflow))
 
     def test_one_huge_finding_cannot_crowd_out_the_others(self):
-        body, carried, _ = ghreview.render_carried([
+        body, carried, _ = ghreview.render_body([], [
             {"path": "big.py", "line": 1, "side": "RIGHT", "body": "y" * 50000, "reason": "r"},
             {"path": "small.py", "line": 2, "side": "RIGHT", "body": "short", "reason": "r"},
         ])
@@ -349,7 +356,7 @@ class TestStageCoverage(unittest.TestCase):
 
     def test_an_owned_draft_with_a_carried_body_is_still_recognised_later(self):
         comments = [{"path": "a.py", "line": 1, "side": "RIGHT", "body": "anchored"}]
-        body, _, _ = ghreview.render_carried([
+        body, _, _ = ghreview.render_body([], [
             {"path": "a.py", "line": 9, "side": "RIGHT", "body": "carried", "reason": "r"}])
         review = {"id": 7, "body": body}
         ghreview.remember_review("o/r", 1, review, comments, body)

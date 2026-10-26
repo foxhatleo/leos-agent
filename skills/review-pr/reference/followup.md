@@ -32,7 +32,7 @@ breaks when `total % size == 0`, see `sync.ts:88`."
    conceded, the blocking one fixed), restage the verdict at this head with
    `stage --since <head>`, no comments, and a note only when a reservation
    remains; then plan a submission as `reference/submit.md` says.
-2. Show it as `submit.md` does (`### owner/repo#N — <title>`, what they said,
+2. Show it as `submit.md` does (heading, who and round, then what they said,
    what you found, the plan) and ask, unless the watch is `fully-auto`.
 3. Carry out what the user agreed to:
    `python3 "<plugin-root>/scripts/ghreview.py" reply -R OWNER/REPO -n N --thread-id PRRT_… --commit SHA --body-file FILE --post --expect-latest ID`
