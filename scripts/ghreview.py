@@ -12,6 +12,8 @@ Subcommands:
                                                   complete review recorded at OLD
   pending        -R OWNER/REPO -n PR              current user's PENDING review {id, node_id}, if any
   clear-pending  -R OWNER/REPO -n PR              DELETE the current user's PENDING review, if any
+  leave-pending  -R OWNER/REPO -n PR              record that the user chose to keep the staged
+                                                  draft: replacing or clearing it then needs --force
   threads        -R OWNER/REPO -n PR [--all]      JSON: unresolved review threads rooted by the
                                                   current user (--all includes resolved ones)
   discussion     -R OWNER/REPO -n PR [--all]      JSON: what everyone has said on the PR, bots
@@ -112,8 +114,9 @@ rate limit, timeout, connection reset). Mutations are never retried.
 
 Exit codes: 0 success; 1 API failure; 2 usage/input error;
 3 refused — a pending review being cleared (clear-pending, or stage
---replace-pending) contains comments not staged by this script; pass --force
-to discard them anyway. submit refuses such a draft with 3 too, and has no
+--replace-pending) contains comments not staged by this script, or is a draft
+the user chose to leave pending; pass --force, with the user's say-so, to
+discard it anyway. submit refuses such a draft with 3 too, and has no
 --force: the user submits a draft they edited themselves.
 """
 import argparse
@@ -835,9 +838,12 @@ def remember_review(repo, pr, review, comments, body="", anchors=None, learn=Non
         key = identity_hash(c)
         if isinstance(rows.get(key), dict) and isinstance(c.get("position"), int):
             rows[key] = dict(rows[key], position=c["position"])
-    atomic_write(str(path), {"scheme": RECEIPT_SCHEME, "review_id": review["id"],
-                             "fingerprint": review_fingerprint(body, comments),
-                             "comments": receipt_rows(comments), "anchors": kept, "learn": rows})
+    receipt = {"scheme": RECEIPT_SCHEME, "review_id": review["id"],
+               "fingerprint": review_fingerprint(body, comments),
+               "comments": receipt_rows(comments), "anchors": kept, "learn": rows}
+    if prior.get("left_pending"):
+        receipt["left_pending"] = prior["left_pending"]
+    atomic_write(str(path), receipt)
     prune_receipts(keep=path)
 
 
@@ -913,6 +919,11 @@ def pending_snapshot(repo, pr, force=False):
     recoverable = targets is not None
     if not force and (not owned or not recoverable):
         return None, ownership_refusal(review, comments, receipt, owned, recoverable)
+    if not force and receipt.get("left_pending"):
+        return None, {"refused": True, "review_id": review["id"], "total_count": len(comments),
+                      "left_pending": True, "reason": (
+                          "the user chose to leave this draft pending; ask them before replacing or "
+                          "discarding it, and pass --force only with their say-so")}
     # The backup restores from these: give each its staged anchor back.
     comments = with_anchors(comments, receipt.get("anchors"))
     return {"review": review, "comments": comments, "replies": targets or [], "forced": not owned}, None
@@ -1663,7 +1674,7 @@ def cmd_delta(a):
         report["reason"] = str(error)
         print(json.dumps(report, indent=1))
         return
-    blocker = incremental_blocker(a.repo, a.pr)
+    blocker = incremental_blocker(a.repo, a.pr, carried)
     if blocker:
         report["reason"] = blocker
         print(json.dumps(report, indent=1))
@@ -1677,20 +1688,34 @@ def cmd_delta(a):
     print(json.dumps(report, indent=1))
 
 
-def incremental_blocker(repo, pr):
+# A finding render_body carried into the body: "- `path:line`" or "- `path:?`".
+CARRIED_LINE = re.compile(r"^- `(.+):(?:\d+|\?)`", re.M)
+
+
+def draft_paths(review, comments):
+    """The files a pending draft holds findings on: its inline comments and
+    replies, and the findings carried in its body. Notes name no file."""
+    paths = {c.get("path") for c in comments if isinstance(c, dict)}
+    paths.update(CARRIED_LINE.findall(review.get("body") or ""))
+    return {p for p in paths if isinstance(p, str) and p}
+
+
+def incremental_blocker(repo, pr, carried):
     """Why an incremental pass may not replace the user's pending draft, or None.
 
     Findings from the earlier pass on files that are now carried exist only in
     that draft until the user submits it. Replacing it with a review that does
     not re-read those files would discard them, so carry only once it is gone.
+    Findings on files read again, and notes, a full pass would replace too.
     """
     review = pending_review(repo, pr)
     if review is None:
         return None
-    if review_comments(repo, pr, review["id"]) or (review.get("body") or "").strip():
-        return ("a pending draft from an earlier pass still holds findings; an incremental "
-                "review would replace it and lose those on unchanged files, so read every "
-                "changed file (or submit or discard the draft first)")
+    held = sorted(draft_paths(review, review_comments(repo, pr, review["id"])) & set(carried))
+    if held:
+        return ("a pending draft from an earlier pass still holds findings on unchanged files (%s); "
+                "an incremental review would replace it and lose them, so read every changed file "
+                "(or submit or discard the draft first)" % ", ".join(held))
     return None
 
 
@@ -1758,6 +1783,24 @@ def cmd_clear_pending(a):
         print(json.dumps(refusal, indent=1))
         sys.exit(3)
     print(json.dumps(result))
+
+
+def cmd_leave_pending(a):
+    """The user answered "Leave pending": mark the draft staged here as theirs
+    to keep, so a later pass asks before replacing it. Changes nothing on GitHub."""
+    review = pending_review(a.repo, a.pr)
+    if review is None:
+        print(json.dumps({"left_pending": None, "reason": "no pending review"}))
+        return
+    receipt = read_receipt(a.repo, a.pr, review["id"])
+    if not owns(review, review_comments(a.repo, a.pr, review["id"]), receipt):
+        # Not ours, or edited since: stage already refuses to replace it.
+        print(json.dumps({"left_pending": review["id"], "owned": False}))
+        return
+    from state import atomic_write
+    receipt["left_pending"] = {"at": int(time.time())}
+    atomic_write(str(receipt_file(a.repo, a.pr, review["id"])), receipt)
+    print(json.dumps({"left_pending": review["id"], "owned": True}))
 
 
 def cmd_threads(a):
@@ -2127,7 +2170,7 @@ def cmd_stage(a):
     carried_files = set()
     if since:
         carried_files = carried_paths(files, prior, since)
-        blocker = incremental_blocker(a.repo, a.pr)
+        blocker = incremental_blocker(a.repo, a.pr, carried_files)
         if blocker:
             raise ValueError(blocker)
     coverage = review_coverage(files, reviewed, rules, carried_files, since,
@@ -2270,6 +2313,7 @@ COMMANDS = {
     "extract": cmd_extract,
     "pending": cmd_pending,
     "clear-pending": cmd_clear_pending,
+    "leave-pending": cmd_leave_pending,
     "threads": cmd_threads,
     "discussion": cmd_discussion,
     "resolve-thread": cmd_resolve_thread,
@@ -2296,7 +2340,8 @@ def main():
             sp.add_argument("--all", action="store_true", help="with forget: every entry for this repository")
         if name == "clear-pending":
             sp.add_argument("--force", action="store_true",
-                             help="delete even if it holds comments not staged by this script")
+                             help="delete even if it holds comments not staged by this script, "
+                                  "or the user chose to leave it pending")
         if name in ("map", "extract", "resolve-thread", "reply", "verdict", "delta"):
             sp.add_argument("--commit", required=True, help="full reviewed head SHA")
         if name == "extract":
@@ -2340,7 +2385,7 @@ def main():
                                              "whose patch is unchanged since then")
             sp.add_argument("--force", action="store_true",
                              help="with --replace-pending, delete even if it holds "
-                                  "comments not staged by this script")
+                                  "comments not staged by this script, or the user chose to leave it pending")
             sp.add_argument("--dry-run", action="store_true")
     a = p.parse_args()
     try:

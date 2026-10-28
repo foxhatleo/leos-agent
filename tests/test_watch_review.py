@@ -109,9 +109,13 @@ class FakeGitHub:
                     "latest": {"nodes": [{"databaseId": t["latest_id"], "author": {
                         "__typename": "Bot" if t["bot"] else "User", "login": t["latest"]}}]}}
                    for t in pr["threads"]]
+        # GitHub leaves a reviewer out of latestReviews while a request for them
+        # is open; reviews(author:) still lists what they submitted.
         return {"id": f"PR_{number}", "number": number, "title": pr["title"], "isDraft": pr["draft"],
                 "state": state, "url": f"https://github.com/{self.full_name}/pull/{number}",
-                "headRefOid": pr["head"], "author": {"login": "alice"}, "latestReviews": {"nodes": reviews},
+                "headRefOid": pr["head"], "author": {"login": "alice"},
+                "latestReviews": {"nodes": [] if pr["requested"] else reviews[-1:]},
+                "reviewed": {"nodes": [{"state": r["state"]} for r in reviews[:1]]},
                 "reviewThreads": {"nodes": threads, "pageInfo": {"hasNextPage": False, "endCursor": None}}}
 
     def submit(self, number):
@@ -173,6 +177,7 @@ class FakeGitHub:
             fields = dict(a.split("=", 1) for a in args[2:] if "=" in a)
             if "pullRequest(number:" in fields["query"]:
                 assert (fields["owner"] + "/" + fields["name"]).lower() == self.full_name.lower(), fields
+                assert fields["login"] == self.login and "reviews(author:$login," in fields["query"], fields
                 numbers = [int(n) for n in re.findall(r"\bp(\d+): pullRequest\(number:", fields["query"])]
                 return json.dumps({"data": {"repository": {
                     f"p{n}": self.follow_node(n, self.prs[n]) if n in self.prs else None for n in numbers}}})
@@ -320,6 +325,59 @@ class TestEmitDecision(unittest.TestCase):
         # a new head is a new key, so it waits its own full window
         self.assertEqual(self.due([pr(1, head="def")], {}, first_seen, emitted, now=1100.0, settle=120), [])
         self.assertEqual(len(self.due([pr(1, head="def")], {}, first_seen, emitted, now=1221.0, settle=120)), 1)
+
+
+class TestFollows(unittest.TestCase):
+    def setUp(self):
+        self.watcher = load_watcher()
+
+    @staticmethod
+    def node(reviewed=("COMMENTED",), state="OPEN", draft=False):
+        # While a review is requested from leo, GitHub's latestReviews omits them.
+        return {"state": state, "isDraft": draft,
+                "latestReviews": {"nodes": [{"state": "COMMENTED", "author": {"login": "cursor"}},
+                                            {"state": "COMMENTED", "author": {"login": "claude"}}]},
+                "reviewed": {"nodes": [{"state": s} for s in reviewed]}}
+
+    def test_a_submitted_review_follows_though_latest_reviews_omits_the_user(self):
+        self.assertTrue(self.watcher.follows(self.node()))
+        for state in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED"):
+            self.assertTrue(self.watcher.follows(self.node((state,))), state)
+
+    def test_no_submitted_review_closed_or_draft_does_not_follow(self):
+        self.assertFalse(self.watcher.follows(self.node(())))
+        self.assertFalse(self.watcher.follows(self.node(("PENDING",))))
+        self.assertFalse(self.watcher.follows(self.node(state="MERGED")))
+        self.assertFalse(self.watcher.follows(self.node(draft=True)))
+
+    def test_followed_keeps_a_re_requested_pull_request(self):
+        node = dict(self.node(), id="PR_1", number=1, title="t", url="u", headRefOid="a" * 40,
+                    author={"login": "alice"}, reviewThreads={"nodes": [
+                        {"id": "PRRT_1", "isResolved": False,
+                         "root": {"nodes": [{"author": {"login": "leo"}, "pullRequestReview": {"state": "COMMENTED"}}]},
+                         "latest": {"nodes": [{"databaseId": 41, "author": {"__typename": "User", "login": "alice"}}]}}],
+                        "pageInfo": {"hasNextPage": False, "endCursor": None}})
+        calls = []
+
+        def graphql(query, variables, cwd, partial=False):
+            calls.append(variables)
+            return {"repository": {"p1": node}}
+
+        with mock.patch.object(self.watcher, "graphql", graphql), \
+                mock.patch.object(self.watcher, "load_entry", lambda _repo: {"heads": {"1": "a" * 40}}):
+            [pr_] = self.watcher.followed("o/r", "leo", ".")
+        self.assertEqual(calls[0]["login"], "leo")
+        self.assertEqual(pr_["awaiting"], {"PRRT_1": 41})
+
+    def test_a_requested_and_followed_pull_request_carries_its_replies_to_follow_up(self):
+        head = "a" * 40
+        requested = [pr(1, head=head)]  # discovery's entry: no awaiting of its own
+        following = [dict(pr(1, head=head), followed=True, awaiting={"PRRT_1": 41})]
+        [merged] = self.watcher.candidates(requested, following)
+        self.assertEqual(merged["awaiting"], {"PRRT_1": 41})
+        self.assertEqual(self.watcher.due([merged], {1: head}, {}, set(), 1000.0, 0), [])
+        [(item, threads)] = self.watcher.follow_due([merged], {1: head}, {}, {}, 1000.0, 0)
+        self.assertEqual((item["number"], threads), (1, {"PRRT_1": 41}))
 
 
 class TestStateMigration(unittest.TestCase):
@@ -1512,6 +1570,19 @@ class TestFollowing(HostCase):
         self.github.push(1, H2, patch=PATCH + "\n+more")
         events, _ = self.events(ticks=1, start=0, settle=120)
         self.assertEqual([e["verb"] for e in events], ["re-review"])
+
+    def test_a_re_request_at_the_same_head_still_brings_the_replies(self):
+        # colonylabs/colony#31330: the author answered the user's threads and
+        # re-requested review without pushing. GitHub then drops the user from
+        # latestReviews; the replies must still come back as a follow-up.
+        self.reviewed_and_submitted()
+        self.assertEqual(self.events()[0], [])
+        self.github.thread(1, "PRRT_1", latest="alice", latest_id=41)
+        self.github.thread(1, "PRRT_2", latest="alice", latest_id=42)
+        self.github.prs[1]["requested"] = True
+        events, out = self.events(ticks=3, start=600)
+        self.assertEqual([(e["verb"], e["pr"], e["head"], e["threads"]) for e in events],
+                         [("follow-up", 1, H1, 2)], out)
 
     def test_merged_closed_or_never_submitted_pull_requests_are_not_followed(self):
         self.reviewed_and_submitted(1)

@@ -43,9 +43,9 @@ out the plan.
 
 The answer can come long after the plan, so act only on what is still true.
 `submit` refuses a moved head, and passing each thread's `latest_comment_id`
-(from planning) as `--expect-latest` makes `reply` and `resolve-thread` refuse
+as `--expect-latest` makes `reply` and `resolve-thread` refuse
 a thread someone added to since. On such a refusal, re-read, show what
-changed, and ask again; never push the old plan through.
+changed, and ask again.
 
 1. `python3 "<plugin-root>/scripts/ghreview.py" submit -R OWNER/REPO -n N --commit SHA --event EVENT --body-file summary.txt`.
    The summary is one or two sentences, required for COMMENT and
@@ -55,5 +55,6 @@ changed, and ask again; never push the old plan through.
 2. Each proposed resolution:
    `python3 "<plugin-root>/scripts/ghreview.py" resolve-thread -R OWNER/REPO -n N --thread-id PRRT_… --commit SHA --evidence-file FILE --expect-latest ID`.
 
-"Leave pending" changes nothing; the draft waits for the user. Report what
-was posted, with the review URL, and never call a pending one submitted.
+"Leave pending" only runs ghreview.py `leave-pending -R OWNER/REPO -n N`, so
+a later pass asks before replacing the draft. Report what was posted, with the
+review URL, and never call a pending one submitted.

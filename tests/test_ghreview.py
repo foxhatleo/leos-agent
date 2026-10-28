@@ -1261,6 +1261,126 @@ class TestIncrementalReview(GitHubCase):
         self.assertEqual(first_lines(fake), ["keep?"])
 
 
+    def note_only_draft_then_push(self, fake, comments=()):
+        code, _, err = self.stage("Owner/Repo", {"verdict": "neutral", "reviewed": ["a.py", "b.py"],
+                                                 "comments": list(comments),
+                                                 "notes": ["Unverified: the retry ceiling."]}, self.H1)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(fake.reviews), 1)
+        fake.heads, fake.files = [self.H2], [self.A2, self.B2]
+
+    def delta(self):
+        code, out, err = self.main("delta", "-R", "Owner/Repo", "-n", "1", "--commit", self.H2, "--since", self.H1)
+        self.assertEqual(code, 0, err)
+        return json.loads(out)
+
+    def test_a_draft_holding_only_a_note_does_not_prevent_carrying(self):
+        # colonylabs/colony#31701: the earlier draft held one body note and no
+        # file findings, yet every file had to be read again.
+        self.note_only_draft_then_push(self.github(self.H1, [self.A1, self.B1]))
+        plan = self.delta()
+        self.assertEqual((plan["incremental"], plan["review"], plan["carry"]), (True, ["a.py"], ["b.py"]), plan)
+        code, report, err = self.stage("Owner/Repo", {"verdict": "ready-to-merge", "reviewed": ["a.py"]},
+                                       self.H2, "--since", self.H1, "--replace-pending")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(report["coverage"]["carried"], ["b.py"])
+
+    def test_a_finding_on_a_file_read_again_does_not_prevent_carrying(self):
+        fake = self.github(self.H1, [self.A1, self.B1])
+        self.note_only_draft_then_push(fake, [{"path": "a.py", "line": 2, "body": "a.py again"}])
+        self.assertTrue(self.delta()["incremental"])
+
+    def test_a_finding_carried_in_the_body_on_an_unchanged_file_prevents_carrying(self):
+        fake = self.github(self.H1, [self.A1, self.B1])
+        # Line 99 is outside b.py's hunk, so the finding is carried in the body.
+        self.note_only_draft_then_push(fake, [{"path": "b.py", "line": 99, "body": "outside the hunk"}])
+        self.assertIn("- `b.py:99`", next(iter(fake.reviews.values()))["body"])
+        plan = self.delta()
+        self.assertFalse(plan["incremental"])
+        self.assertIn("(b.py)", plan["reason"])
+
+    def test_draft_paths_count_inline_and_carried_findings_but_not_notes(self):
+        body, _, _ = ghreview.render_body(["A note naming `c.py:3` in passing."],
+                                          [{"path": "b.py", "line": 9, "body": "x"},
+                                           {"path": "d:e.py", "line": None, "body": "y"}])
+        self.assertEqual(ghreview.draft_paths({"body": body}, [{"path": "a.py"}]), {"a.py", "b.py", "d:e.py"})
+
+
+class TestLeftPending(GitHubCase):
+    """A draft the user chose to leave pending is theirs: a later pass asks first."""
+
+    FILES = [text_file("a.py", "@@ -1,1 +1,3 @@\n ctx\n+one\n+two")]
+    NOTE = {"verdict": "neutral", "reviewed": ["a.py"], "notes": ["Unverified: the retry ceiling."]}
+    EMPTY = {"verdict": "ready-to-merge", "reviewed": ["a.py"], "comments": [], "notes": []}
+
+    def kept_draft(self):
+        fake = self.github(self.H1, self.FILES)
+        code, _, err = self.stage("Owner/Repo", self.NOTE, self.H1)
+        self.assertEqual(code, 0, err)
+        code, out, err = self.main("leave-pending", "-R", "Owner/Repo", "-n", "1")
+        self.assertEqual(code, 0, err)
+        rid = max(fake.reviews)
+        self.assertEqual(json.loads(out), {"left_pending": rid, "owned": True})
+        fake.heads = [self.H2]
+        return fake, rid
+
+    def test_an_empty_pass_does_not_delete_a_kept_draft(self):
+        # colonylabs/colony#31701: round 3 deleted the round 2 draft and created nothing.
+        fake, rid = self.kept_draft()
+        code, out, _ = self.main("stage", "-R", "Owner/Repo", "-n", "1", "--commit", self.H2,
+                                 "--input", str(self.write(self.EMPTY)), "--replace-pending")
+        self.assertEqual(code, 3)
+        self.assertTrue(json.loads(out)["left_pending"])
+        self.assertIn(rid, fake.reviews)
+        self.assertEqual(ghreview.load_verdict("Owner/Repo", 1)["head"], self.H1)
+
+    def test_a_pass_with_findings_does_not_replace_a_kept_draft_either(self):
+        fake, rid = self.kept_draft()
+        data = dict(self.NOTE, comments=[{"path": "a.py", "line": 2, "body": "new finding"}])
+        code, _, _ = self.stage("Owner/Repo", data, self.H2, "--replace-pending")
+        self.assertEqual(code, 3)
+        self.assertEqual(list(fake.reviews), [rid])
+        self.assertEqual(self.main("clear-pending", "-R", "Owner/Repo", "-n", "1")[0], 3)
+
+    def test_the_users_say_so_replaces_it(self):
+        fake, rid = self.kept_draft()
+        code, report, err = self.stage("Owner/Repo", self.EMPTY, self.H2, "--replace-pending", "--force")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(report["deleted_pending"], rid)
+        self.assertNotIn(rid, fake.reviews)
+
+    def test_a_draft_nobody_kept_is_still_replaced(self):
+        fake = self.github(self.H1, self.FILES)
+        self.assertEqual(self.stage("Owner/Repo", self.NOTE, self.H1)[0], 0)
+        rid = max(fake.reviews)
+        fake.heads = [self.H2]
+        code, report, err = self.stage("Owner/Repo", self.EMPTY, self.H2, "--replace-pending")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(report["deleted_pending"], rid)
+
+    def test_the_mark_survives_a_receipt_refresh(self):
+        review = {"id": 7, "body": ""}
+        comments = [{"body": ghreview._mark("x"), "path": "a.py", "line": 1, "side": "RIGHT"}]
+        ghreview.remember_review("o/r", 1, review, comments)
+        receipt = ghreview.read_receipt("o/r", 1, 7)
+        receipt["left_pending"] = {"at": 1}
+        ghreview.receipt_path("o/r", 1, 7).write_text(json.dumps(receipt))
+        ghreview.remember_review("o/r", 1, review, comments)  # as a staged reply refreshes it
+        self.assertEqual(ghreview.read_receipt("o/r", 1, 7)["left_pending"], {"at": 1})
+
+    def test_nothing_to_keep_or_not_ours(self):
+        fake = self.github(self.H1, self.FILES)
+        self.assertEqual(json.loads(self.main("leave-pending", "-R", "Owner/Repo", "-n", "1")[1])["left_pending"],
+                         None)
+        fake.post_review({"commit_id": self.H1, "body": "hand-written"})
+        self.assertEqual(json.loads(self.main("leave-pending", "-R", "Owner/Repo", "-n", "1")[1])["owned"], False)
+
+    def write(self, data):
+        path = Path(self.tmp.name) / "in.json"
+        path.write_text(json.dumps(data))
+        return path
+
+
 class TestShowAtSha(GitHubCase):
     def show(self, *argv):
         return self.main("show", "-R", "owner/repo", "-n", "1", *argv)
