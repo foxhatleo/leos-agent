@@ -73,7 +73,7 @@ With `incremental: true`, re-read only the files under `review`; the files
 under `carry` have the same patch as when they were last read, and stage
 counts them as covered when you pass `--since PREV`. Their interactions with
 re-read files are still yours to check. Otherwise `reason` says why (often a
-pending draft that still holds the earlier findings); review every file.
+pending draft holding findings on carried files); review every file.
 
 Inspect prior pending work and your submitted threads:
 
@@ -267,7 +267,8 @@ The script backs up owned drafts and keeps recovery data, preserves user
 edits and foreign drafts, reports invalid anchors rather than moving them, and
 never blindly retries a changed head or uncertain outcome. An empty comment
 list with no notes creates no review, but may clear an unchanged owned draft
-when replacement was requested.
+when replacement was requested, unless the user left it pending
+(`left_pending`): then ask them.
 
 A finding whose line is not addressable in the diff is **carried in the review
 body**, with its path, line and the reason it could not anchor. It is not
