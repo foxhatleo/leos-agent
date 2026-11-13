@@ -1717,7 +1717,10 @@ def build_parser():
 
 	follow = sub.add_parser("watch", help="follow a pull request until it merges or closes")
 	where = follow.add_mutually_exclusive_group()
-	where.add_argument("-C", "--directory", default=".", help="repository directory (default: cwd)")
+	# default None, not ".": before Python 3.12 a mutually exclusive group only
+	# notices an option whose value is not the default object, and "-C ." passes
+	# the same interned "." string, so "-C . -R o/r" slipped through.
+	where.add_argument("-C", "--directory", default=None, help="repository directory (default: cwd)")
 	where.add_argument("-R", "--repo", type=owner_repo, help="OWNER/REPO instead of the directory's repository")
 	follow.add_argument("number", type=int)
 	follow.add_argument("--head", type=full_sha, help="full head SHA a manual pass is reviewing; counts a round")
@@ -1765,6 +1768,8 @@ def build_parser():
 
 def main(argv):
 	args = build_parser().parse_args(argv)
+	if args.directory is None:
+		args.directory = "."
 	if not os.path.isdir(args.directory):
 		fail(f"{args.directory} is not a directory")
 
