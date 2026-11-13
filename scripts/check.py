@@ -767,6 +767,28 @@ def main():
 		check(False, f"identifying strings: {problem}")
 	check(True, "identifying strings")
 
+	# 10. The Claude-only policy drops must not orphan. Every CLAUDE_DROP entry has
+	# to match rules/preferences.md (an edit to the policy would otherwise stop
+	# dropping silently, or make the render fail at session start), and the Claude
+	# render may differ from the raw render only by those drops: strip them from
+	# the raw text by hand and the two must be equal.
+	sys.path.insert(0, str(ROOT / "scripts"))
+	import payload as payload_module
+	raw_policy = payload_module.payload_body(ROOT, "codex", {})
+	check(bool(payload_module.CLAUDE_DROP), "CLAUDE_DROP is empty; delete the mechanism or add entries")
+	for entry in payload_module.CLAUDE_DROP:
+		hits = payload_module._drop_pattern(entry).findall(raw_policy)
+		check(len(hits) == 1, f"CLAUDE_DROP entry matches {len(hits)} time(s) in rules/preferences.md, want 1: {entry!r}")
+	if all(len(payload_module._drop_pattern(e).findall(raw_policy)) == 1 for e in payload_module.CLAUDE_DROP):
+		by_hand = raw_policy
+		for entry in payload_module.CLAUDE_DROP:
+			by_hand = payload_module._drop_pattern(entry).sub("", by_hand, count=1)
+		claude_policy = payload_module.payload_body(ROOT, "claude", {})
+		routing_claude = payload_module.routing.stanza("claude", {})
+		routing_codex = payload_module.routing.stanza("codex", {})
+		check(by_hand.replace(routing_codex, routing_claude) == claude_policy,
+			"the Claude render differs from the raw policy by more than CLAUDE_DROP")
+
 	print(f"checked {checks} invariant(s)")
 	if failures:
 		for message in failures:

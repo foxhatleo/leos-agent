@@ -108,6 +108,30 @@ class TestTheGateFailsOnPlantedViolations(unittest.TestCase):
 
 
 
+    def test_check_py_refuses_a_policy_edit_that_orphans_a_claude_drop(self):
+        with tempfile.TemporaryDirectory(prefix="leo check drop ") as tmp:
+            base = Path(tmp)
+            copy = base / "repo"
+            shutil.copytree(ROOT, copy, ignore=shutil.ignore_patterns(".git", ".claude", "__pycache__", "node_modules", "tests"))
+            policy = copy / "rules" / "preferences.md"
+            text = policy.read_text(encoding="utf-8")
+            self.assertIn("Do not copy history or repeat returned work.", text)
+            policy.write_text(text.replace("Do not copy history or repeat returned work.",
+                                           "Avoid copying history."), encoding="utf-8")
+            env = {**os.environ, "HOME": str(base / "home"), "LEOS_AGENT_LOCAL_PATH": str(base / "data"),
+                   "CLAUDE_CONFIG_DIR": str(base / "claude"), "CODEX_HOME": str(base / "codex"),
+                   "HERMES_HOME": str(base / "hermes"), "PI_CODING_AGENT_DIR": str(base / "pi"),
+                   "OPENCODE_CONFIG_DIR": str(base / "opencode"),
+                   "OPENCODE_CONFIG": str(base / "opencode" / "opencode.jsonc"),
+                   "XDG_CONFIG_HOME": str(base / "xdg"), "LEOS_AGENT_PRICE_REFRESH": "off",
+                   "PYTHONDONTWRITEBYTECODE": "1"}
+            env.pop("LEOS_AGENT_ROOT", None)
+            (base / "home").mkdir()
+            result = subprocess.run([sys.executable, str(copy / "scripts" / "check.py")], cwd=str(copy),
+                                    env=env, capture_output=True, text=True, timeout=120)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("CLAUDE_DROP", result.stderr)
+
 
 class TestIdentifyingStringGate(unittest.TestCase):
     def tree(self, files):
