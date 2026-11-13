@@ -2515,11 +2515,18 @@ def observe(repo, pr):
     reviews = all_reviews(repo, pr)
     draft = next((r for r in reviews if r.get("state") == "PENDING"
                   and login_of(r, "user").lower() == login.lower()), None)
+    every = fetch_threads(repo, pr)
     if draft is not None:
+        staged = review_comments(repo, pr, draft["id"])
+        # Which threads the draft's staged replies answer: a reply staged on a
+        # thread that changed since the plan must not be published as is.
+        owner = {c.get("databaseId"): t["id"] for t in every for c in t["comments"]["nodes"]
+                 if c.get("databaseId") is not None}
         draft = {"id": draft["id"],
-                 "fingerprint": review_fingerprint(draft.get("body"), review_comments(repo, pr, draft["id"]))}
-    threads = [t for t in fetch_threads(repo, pr)
-               if t["comments"]["nodes"] and not draft_comment(t["comments"]["nodes"][0])]
+                 "fingerprint": review_fingerprint(draft.get("body"), staged),
+                 "reply_threads": sorted({owner.get(c.get("in_reply_to_id"), "unplaced")
+                                          for c in staged if c.get("in_reply_to_id")})}
+    threads = [t for t in every if t["comments"]["nodes"] and not draft_comment(t["comments"]["nodes"][0])]
     return {"login": login, "state": (pull.get("state") or "").lower(), "merged": bool(pull.get("merged")),
             "head": (pull.get("head") or {}).get("sha"), "draft": draft,
             "my_reviews": [{"id": r.get("id"), "state": r.get("state"), "commit": r.get("commit_id")}
@@ -2582,6 +2589,11 @@ def cmd_recheck(a):
     changed = sorted(t for t in old if now.get(t) != old[t])
     new_threads = sorted(t for t in now if t not in old)
     publishable = open_ and not head_moved
+    # Submitting the draft publishes its staged replies too, so a reply staged
+    # on a thread that changed (or can no longer be placed) blocks the submit
+    # until a reviewer refreshes the draft.
+    staged_on = set((seen["draft"] or {}).get("reply_threads") or [])
+    stale_staged = sorted(t for t in staged_on if t in changed or t == "unplaced" or t not in now)
     replies, resolves = [], []
     if publishable:
         texts = review_texts_of(a.repo, a.pr, seen["login"])
@@ -2596,8 +2608,9 @@ def cmd_recheck(a):
     print(json.dumps({"open": open_, "merged": seen["merged"], "head_moved": head_moved, "head": seen["head"],
                       "draft_changed": draft_changed, "my_new_reviews": new_reviews,
                       "new_conversation": new_conversation, "changed_threads": changed,
-                      "new_threads": new_threads,
-                      "valid": {"submit": publishable and not draft_changed and not new_reviews,
+                      "new_threads": new_threads, "stale_staged_replies": stale_staged,
+                      "valid": {"submit": publishable and not draft_changed and not new_reviews
+                                and not stale_staged,
                                 "replies": replies, "resolves": resolves,
                                 "comments": publishable and not new_conversation}}, indent=1))
 

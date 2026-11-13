@@ -1992,6 +1992,19 @@ class TestFreshness(HostCase):
         self.cli("ack", "1", "--claim", events[0]["claim"])
         self.assertEqual(self.events(ticks=3, start=600)[0], [])
 
+    def test_a_re_approve_leaves_an_unanswered_reply_for_its_own_follow_up(self):
+        self.github.rules = self.STRICT_RULES
+        self.approved()
+        self.github.thread(1, "PRRT_1", latest="alice", latest_id=41)
+        self.github.push(1, H2)  # a merge from the base, plus a reply on the user's thread
+        events, out = self.events(ticks=3)
+        self.assertEqual([(e["verb"], e.get("threads")) for e in events], [("re-approve", 0)], out)
+        started = json.loads(self.cli("start", "1", "--head", H2, "--claim", events[0]["claim"]))
+        self.assertFalse(started["threads"])
+        self.cli("ack", "1", "--claim", events[0]["claim"])
+        events, out = self.events(ticks=3, start=600)
+        self.assertEqual([(e["verb"], e.get("threads")) for e in events], [("follow-up", 1)], out)
+
     def test_a_dismissed_approval_asks_for_a_re_approve_but_a_dismissed_request_for_changes_does_not(self):
         self.github.rules = self.STRICT_RULES
         self.approved()

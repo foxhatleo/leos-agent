@@ -328,6 +328,12 @@ class TestProcessGroup(PeerCase):
         pid = self.overrun("trap '' TERM; (trap '' TERM; exec sleep 60) & echo $! > %s; wait", 1)
         self.assertFalse(alive(pid))
 
+    def test_a_descendant_left_behind_by_an_exiting_peer_is_killed(self):
+        # The peer itself exits on SIGTERM; its child ignores SIGTERM and has
+        # closed its pipes, so communicate() returns while it still runs.
+        pid = self.overrun("(trap '' TERM; exec sleep 60 </dev/null >/dev/null 2>&1) & echo $! > %s; wait", 1)
+        self.assertFalse(alive(pid))
+
 
 class TestDetect(PeerCase):
     def test_detect_reports_the_route_without_sending_anything(self):

@@ -230,22 +230,41 @@ def command(target, binary, settings, workdir, last_message):
     return argv
 
 
+def group_alive(pgid):
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True  # exists but not ours to signal: treat as still running
+    return True
+
+
 def stop_group(proc):
-    """End the peer and everything it spawned: SIGTERM to the group, SIGKILL after a grace."""
+    """End the peer and everything it spawned: SIGTERM to the group, SIGKILL after a grace.
+
+    The direct child exiting proves nothing about the rest of the group: a
+    descendant that ignores SIGTERM and closed its pipes keeps running, so the
+    group itself is checked until the grace runs out, then killed.
+    """
     try:
         os.killpg(proc.pid, signal.SIGTERM)
     except OSError:
         proc.terminate()
+    deadline = time.monotonic() + KILL_GRACE
     try:
         proc.communicate(timeout=KILL_GRACE)
-        return
     except subprocess.TimeoutExpired:
         pass
+    while group_alive(proc.pid) and time.monotonic() < deadline:
+        time.sleep(0.05)
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except OSError:
-        proc.kill()
-    proc.communicate()
+        if proc.poll() is None:
+            proc.kill()
+    if proc.poll() is None:
+        proc.communicate()
 
 
 def invoke(argv, prompt, workdir, timeout, env):

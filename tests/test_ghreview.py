@@ -2363,6 +2363,28 @@ class TestSnapshotRecheck(GitHubCase):
         self.assertFalse(result["valid"]["submit"])
         self.assertTrue(fake.reviews)
 
+    def test_a_staged_reply_on_a_thread_that_changed_blocks_the_submit(self):
+        fake = self.setup_pr()
+        fake.reviews[7]["node_id"] = "R7"
+        body = Path(self.tmp.name) / "reply.txt"
+        body.write_text("Fair, the caller checks it.")
+        code, _, err = self.main("reply", "-R", "Owner/Repo", "-n", "1", "--thread-id", "PRRT_mine",
+                                 "--commit", self.H1, "--body-file", str(body))
+        self.assertEqual(code, 0, err)
+        snap, path = self.snapshot()
+        self.assertEqual(snap["draft"]["reply_threads"], ["PRRT_mine"])
+        self.assertTrue(self.recheck(path)["valid"]["submit"])
+        fake.threads[0]["replies"].append({"id": 557, "author": "bob", "body": "one more thing"})
+        result = self.recheck(path)
+        self.assertFalse(result["draft_changed"])
+        self.assertEqual(result["stale_staged_replies"], ["PRRT_mine"])
+        self.assertFalse(result["valid"]["submit"])
+        # A change on a thread the draft does not answer leaves the submit alone.
+        fake.threads[0]["replies"].pop()
+        fake.threads[1]["replies"].append({"id": 602, "author": "bob", "body": "ok"})
+        result = self.recheck(path)
+        self.assertEqual((result["stale_staged_replies"], result["valid"]["submit"]), ([], True))
+
     def test_a_snapshot_of_another_pull_request_or_a_bad_file_is_an_input_error(self):
         self.setup_pr()
         _, path = self.snapshot()

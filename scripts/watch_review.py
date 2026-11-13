@@ -1634,13 +1634,15 @@ def monitor(args):
 					continue
 				if freshness_mode(repo, pr.get("base"), args.directory) != STRICT:
 					continue
-				threads = unseen(pr.get("awaiting"), seen.get(number))
-				token = claim_review(repo, number, head, time.time(), monitor_id, hold, FOLLOW_UP, threads,
+				# No reviewer runs for a re-approve, so its claim carries no replies:
+				# ack would mark them seen unanswered. They stay for follow_due,
+				# which claims them once this claim is done.
+				token = claim_review(repo, number, head, time.time(), monitor_id, hold, FOLLOW_UP, {},
 					RE_APPROVE)
 				if token:
 					approved = (pr.get("approval") or {}).get("commit") or ""
 					print(event_line(RE_APPROVE, repo, pr, approved if re.fullmatch(SHA_RE, approved) else "",
-						token, threads), flush=True)
+						token, {}), flush=True)
 			for pr, threads, reason in follow_due(matches, known, seen, first_seen, time.time(), settle, covered,
 					handled):
 				token = claim_review(repo, pr["number"], pr.get("headRefOid") or "", time.time(), monitor_id, hold,

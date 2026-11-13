@@ -67,8 +67,9 @@ The answer can come long after the question: proceed only where safe.
    - each thread in `valid.resolves`: `python3 "<plugin-root>/scripts/ghreview.py" resolve-thread -R OWNER/REPO -n N --thread-id PRRT_… --commit SHA --evidence-file FILE --expect-latest ID`.
    - `valid.comments`: `comment ... --body-file FILE --expect-latest ID|none [--in-reply-to ID]`,
      ID being the snapshot's `latest_conversation`.
-3. What drifted (a moved head, a changed draft, a newer comment): dispatch a
-   reviewer for just that, then ask again.
+3. What drifted (a moved head, a changed draft, a newer comment, or a staged
+   reply whose thread moved, `stale_staged_replies`): dispatch a reviewer for
+   just that, refreshing the draft first, then ask again.
 4. A merge or close, or the user's own GitHub actions (`my_new_reviews`): one
    line, "Since you were asked: ...", and skip what it overtook.
 5. Outside a watch, remove the review worktree:
