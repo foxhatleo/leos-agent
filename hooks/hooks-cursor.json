@@ -3,19 +3,25 @@
   "hooks": {
     "sessionStart": [
       {
-        "command": "python3 ./scripts/cursor_hook.py",
+        "command": "python3 \"$CURSOR_PLUGIN_ROOT/scripts/cursor_hook.py\" sessionStart",
         "timeout": 10
       }
     ],
     "subagentStart": [
       {
-        "command": "python3 ./scripts/cursor_hook.py subagentStart",
+        "command": "python3 \"$CURSOR_PLUGIN_ROOT/scripts/cursor_hook.py\" subagentStart",
         "timeout": 10
       }
     ],
     "subagentStop": [
       {
-        "command": "python3 ./scripts/cursor_hook.py",
+        "command": "python3 \"$CURSOR_PLUGIN_ROOT/scripts/cursor_hook.py\" subagentStop",
+        "timeout": 10
+      }
+    ],
+    "preCompact": [
+      {
+        "command": "python3 \"$CURSOR_PLUGIN_ROOT/scripts/cursor_hook.py\" preCompact",
         "timeout": 10
       }
     ]
