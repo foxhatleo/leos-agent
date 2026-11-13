@@ -32,20 +32,26 @@ LIMITS = {
 	# Command descriptions are listed alongside skills in Claude Code and Cursor,
 	# so they are always-loaded context on the same terms as skill metadata.
 	"command_description_bytes": 0,
-	"review_dispatch_bytes": 1_800,
+	"review_dispatch_bytes": 2_200,
 	# Deferred, but every review reads it: the reviewer worker's brief names it.
-	"review_procedure_bytes": 20_000,
+	"review_procedure_bytes": 23_600,
 	# Deferred and conditional: read only before staging a blocking finding, and
 	# only when the repository has recorded review learnings.
-	"review_validation_bytes": 2_600,
+	"review_validation_bytes": 2_900,
 	"review_learnings_bytes": 2_200,
 	# Read by the parent once a review is staged, to show it and ask; and by a
 	# watcher's follow-up round, or a reviewer judging pushback on a thread.
-	"review_submit_bytes": 3_000,
-	"review_followup_bytes": 2_800,
+	"review_submit_bytes": 5_200,
+	"review_followup_bytes": 3_500,
+	# Read when a pass marks its PR watched, a lens runs, a check is proposed or
+	# run, or the cross-model lens is considered.
+	"review_watch_bytes": 1_300,
+	"review_lenses_bytes": 5_300,
+	"review_execution_bytes": 2_500,
+	"review_cross_model_bytes": 4_200,
 	# Claude-only skill bodies, one budget each; a new skill there needs one.
 	"attach_pr_body_bytes": 11_200,
-	"watch_review_body_bytes": 9_600,
+	"watch_review_body_bytes": 9_800,
 	# Portable skill bodies and their references, each limited to its current size plus about 15%.
 	"doctor_skill_body_bytes": 4_450,
 	"handoff_skill_body_bytes": 4_800,
@@ -60,7 +66,17 @@ LIMITS = {
 
 # Portable skills whose bodies load when the skill is invoked.
 PORTABLE_BODY_SKILLS = ("doctor", "install", "handoff", "handon", "review-usage", "tune-routing")
+# Every skills/*/reference/*.md file needs an entry here and a ceiling above.
 REFERENCE_FILES = {
+	"review_procedure_bytes": "skills/review-pr/reference/procedure.md",
+	"review_validation_bytes": "skills/review-pr/reference/validation.md",
+	"review_learnings_bytes": "skills/review-pr/reference/learnings.md",
+	"review_submit_bytes": "skills/review-pr/reference/submit.md",
+	"review_followup_bytes": "skills/review-pr/reference/followup.md",
+	"review_watch_bytes": "skills/review-pr/reference/watch.md",
+	"review_lenses_bytes": "skills/review-pr/reference/lenses.md",
+	"review_execution_bytes": "skills/review-pr/reference/execution.md",
+	"review_cross_model_bytes": "skills/review-pr/reference/cross-model.md",
 	"tune_routing_advisor_reference_bytes": "skills/tune-routing/reference/advisor.md",
 	"tune_routing_harnesses_reference_bytes": "skills/tune-routing/reference/harnesses.md",
 	"review_usage_sources_reference_bytes": "skills/review-usage/reference/sources.md",
@@ -204,22 +220,21 @@ def measurements():
 		"claude_agent_description_bytes": claude_agent_bytes,
 		"command_description_bytes": command_bytes,
 		"review_dispatch_bytes": byte_len(review_body.strip()),
-		"review_procedure_bytes": body_bytes(ROOT / "skills" / "review-pr" / "reference" / "procedure.md"),
-		"review_validation_bytes": body_bytes(ROOT / "skills" / "review-pr" / "reference" / "validation.md"),
-		"review_learnings_bytes": body_bytes(ROOT / "skills" / "review-pr" / "reference" / "learnings.md"),
-		"review_submit_bytes": body_bytes(ROOT / "skills" / "review-pr" / "reference" / "submit.md"),
-		"review_followup_bytes": body_bytes(ROOT / "skills" / "review-pr" / "reference" / "followup.md"),
 		**claude_bodies,
 		**skill_bodies,
 		**reference_bytes,
 	}
 
 
-def main(argv=None):
+def build_parser():
 	parser = argparse.ArgumentParser(description=__doc__)
 	parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
 	parser.add_argument("--check", action="store_true", help="fail when a committed ceiling is exceeded")
-	args = parser.parse_args(argv)
+	return parser
+
+
+def main(argv=None):
+	args = build_parser().parse_args(argv)
 
 	values = measurements()
 	# A measurement without a ceiling (a new Claude-only skill) fails --check

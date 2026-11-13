@@ -271,8 +271,13 @@ class TestStaticPromptBudget(unittest.TestCase):
     def test_deferred_review_and_claude_only_bodies_are_budgeted(self):
         measure = self.load_measure()
         values = measure.measurements()
-        for name in ("review_procedure_bytes", "review_validation_bytes", "review_learnings_bytes"):
-            with self.subTest(measurement=name):
+        budgeted = {(ROOT / rel).resolve(): key for key, rel in measure.REFERENCE_FILES.items()}
+        references = sorted((ROOT / "skills").glob("*/reference/*.md"))
+        self.assertTrue(references)
+        for path in references:
+            with self.subTest(reference=path.relative_to(ROOT).as_posix()):
+                name = budgeted.get(path.resolve())
+                self.assertIsNotNone(name, "every deferred reference file needs a budget")
                 self.assertIn(name, values)
                 self.assertIn(name, measure.LIMITS)
         for path in sorted((ROOT / "skills-claude").glob("*/SKILL.md")):

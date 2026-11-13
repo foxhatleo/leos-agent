@@ -41,7 +41,7 @@ or silently approve hook trust. What it does per harness:
   to it (model, session cost, children by tier with reference cost). The
   launcher finds the current plugin at run time, so upgrades need no rerun.
   Other settings stay as they are; a different `statusLine` is a conflict
-  unless `--force <settings.json>` names the file, and uninstall or rollback
+  unless `--force-path <settings.json>` names the file, and uninstall or rollback
   puts it back and removes the launcher.
 
 All three file-writing harnesses also remove unchanged copies of the retired
@@ -68,10 +68,11 @@ Modes:
   provably ours are `preserved`, even with `--force`. Keep routing config,
   handoffs, and user data. Run before removing the native plugin/source.
 
-Report changed, preserved, and failed targets accurately. Use `--force <path>`
-only for a specific conflicting or preserved file the user explicitly wants
-replaced; a bare `--force` replaces every conflict. Never work
-around a conflict by directly overwriting the file. Successful install/update
+Report changed, preserved, and failed targets accurately. Use
+`--force-path PATH` (repeatable) only for a specific conflicting file or
+preserved older copy the user explicitly wants replaced; `--force` replaces
+every conflict, but not a preserved copy. Never work around a conflict by
+directly overwriting the file. Successful install/update
 starts a bounded background price refresh unless LEOS_AGENT_PRICE_REFRESH=off;
 a network failure preserves the last catalog and does not invalidate installed
 files.

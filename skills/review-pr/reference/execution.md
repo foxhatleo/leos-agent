@@ -9,10 +9,11 @@ yes, only from the front end, and never for a fork.
 
 ## The worktree
 
-The front end checks out the pinned head once per round:
+The reviewer adds it at the pinned head (`reference/procedure.md` §1); the
+command is idempotent, so the front end may add it first and pass `path`:
 `python3 "<plugin-root>/scripts/review_worktree.py" add -R OWNER/REPO -n N -C <repo-dir> --commit SHA`.
 It is detached, outside any project, with hooks off. Exit 4 means the head
-moved: re-pin. Pass its `path` and `symlinks` to the reviewer.
+moved: re-pin.
 
 Reviewers and lenses read the worktree only: no builds, installs, tests or
 edits there. A symlink may point outside it; do not follow one. Line anchors
@@ -23,12 +24,13 @@ worktree.
 
 Only when confidence stays low after reading (frontend especially), the
 reviewer's report lists commands under `Exercise:`, one per line, each with
-the reason and what result would settle it. Never for a fork
+its cwd (the worktree), the reason and what result would settle it. Never for a fork
 (`cross_repository` true or null).
 
 ## Running it (front end)
 
-1. Ask the user, showing each command and its reason. No answer, no run.
+1. Ask the user, showing each command and its reason ("Run checks first" in
+   `reference/submit.md`). No answer, no run.
 2. Run with the user's words, quoted as given:
    `python3 "<plugin-root>/scripts/review_worktree.py" run -R OWNER/REPO -n N -C <repo-dir> --commit SHA --approved "<user's words>" [--timeout 600] -- CMD ...`
    For a dev server, add `--serve --port P`; it binds to localhost and
@@ -41,6 +43,8 @@ the reason and what result would settle it. Never for a fork
 
 ## Cleanup
 
-Remove worktrees when the round ends or the PR closes:
+Outside a watch, the front end removes the worktree once the user has
+answered and the answer is applied:
 `python3 "<plugin-root>/scripts/review_worktree.py" remove -R OWNER/REPO -n N --all-heads`.
-It also stops any server started with `--serve`.
+It also stops any server started with `--serve`. In a watch, the watcher's
+`record`, `release`, `forget` and the PR closing remove it.

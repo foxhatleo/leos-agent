@@ -1,4 +1,4 @@
-# Review learnings — leos-agent
+# Review learnings: leos-agent
 
 Read this only when `learnings list` printed entries. Each entry records how
 the user edited a review staged here before submitting it: a comment they

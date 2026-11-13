@@ -1,4 +1,4 @@
-# Fresh-context validation — leos-agent
+# Fresh-context validation: leos-agent
 
 ## Reviewer: before staging a blocking finding
 
@@ -33,9 +33,9 @@ never the lens that raised them.
 
 ## Validator lens
 
-Follow `reference/lenses.md` for reading rules: code at SHA only, through
-`ghreview.py show` and `extract`, never a working tree; no mutation, no
-delegation. For each finding, read the cited lines and enough surrounding
+Follow `reference/lenses.md` for reading rules: line numbers from
+`ghreview.py show` and `extract` at SHA, the worktree for reading only, no
+execution, mutation or delegation. For each finding, read the cited lines and enough surrounding
 code, callers included, to decide whether the claimed failure happens at SHA
 and whether this PR introduced or worsened it. Judge the claim as stated; do
 not hunt for new issues.
