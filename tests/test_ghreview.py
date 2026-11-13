@@ -1275,7 +1275,7 @@ class TestIncrementalReview(GitHubCase):
         return json.loads(out)
 
     def test_a_draft_holding_only_a_note_does_not_prevent_carrying(self):
-        # colonylabs/colony#31701: the earlier draft held one body note and no
+        # A real review: the earlier draft held one body note and no
         # file findings, yet every file had to be read again.
         self.note_only_draft_then_push(self.github(self.H1, [self.A1, self.B1]))
         plan = self.delta()
@@ -1325,7 +1325,7 @@ class TestLeftPending(GitHubCase):
         return fake, rid
 
     def test_an_empty_pass_does_not_delete_a_kept_draft(self):
-        # colonylabs/colony#31701: round 3 deleted the round 2 draft and created nothing.
+        # A real review: round 3 deleted the round 2 draft and created nothing.
         fake, rid = self.kept_draft()
         code, out, _ = self.main("stage", "-R", "Owner/Repo", "-n", "1", "--commit", self.H2,
                                  "--input", str(self.write(self.EMPTY)), "--replace-pending")

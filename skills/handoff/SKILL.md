@@ -63,7 +63,7 @@ That path is fixed and needs no plugin root.
    created: <the timestamp step 1 printed>
    harness: claude
    repo: foxhatleo/leos-agent
-   cwd: /Users/leoliang/workspace/leos-agent
+   cwd: /Users/<you>/workspace/leos-agent
    branch: main
    head: 16a724e
    ---
@@ -79,7 +79,7 @@ That path is fixed and needs no plugin root.
 
    Sections, and what each is for:
 
-   - **Goal** — what Leo is trying to achieve and why. Two or three sentences.
+   - **Goal** — what the user is trying to achieve and why. Two or three sentences.
    - **Done** — what actually landed, with paths. Claims here need the same
      evidence a completion claim needs; "probably works" is a Gotcha, not a Done.
    - **Next** — the real next steps, in order, specific enough to start on.

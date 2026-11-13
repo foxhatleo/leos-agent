@@ -107,5 +107,62 @@ class TestTheGateFailsOnPlantedViolations(unittest.TestCase):
         self.assertIn("skills/handoff/SKILL.md: builds a path from CLAUDE_PLUGIN_ROOT", failures[1])
 
 
+
+
+class TestIdentifyingStringGate(unittest.TestCase):
+    def tree(self, files):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        for rel, text in files.items():
+            path = Path(tmp.name) / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        return Path(tmp.name)
+
+    def test_a_planted_denied_token_fails_without_echoing_it(self):
+        word = "zzplantedword"
+        root = self.tree({"notes/a.txt": "fine\n", "b.md": f"zz{word}x is another word\n"})
+        problems = check.identifying_string_problems(root, deny={check.deny_digest(word)})
+        self.assertEqual(problems, [])
+        # A denied word inside a longer slug still matches.
+        root = self.tree({"notes/a.txt": f"fine\nsee fix/{word.upper()}-1-foo here\n"})
+        self.assertEqual(len(check.identifying_string_problems(root, deny={check.deny_digest(word)})), 1)
+        root = self.tree({"notes/a.txt": f"fine\nsee {word.upper()} here\n"})
+        problems = check.identifying_string_problems(root, deny={check.deny_digest(word)})
+        self.assertEqual(len(problems), 1)
+        self.assertIn("notes/a.txt:2", problems[0])
+        self.assertNotIn(word, problems[0].lower())
+
+    def test_a_clean_tree_passes(self):
+        root = self.tree({"skills/x/SKILL.md": "Ask the user. Path /Users/<you>/work.\n", "README.md": "hi\n"})
+        self.assertEqual(check.identifying_string_problems(root), [])
+
+    def test_the_real_repo_passes(self):
+        self.assertEqual(check.identifying_string_problems(ROOT), [])
+
+    def test_a_placeholder_home_path_passes_in_a_skill(self):
+        root = self.tree({"skills/x/SKILL.md": "cwd: /Users/<you>/workspace/x\n"})
+        self.assertEqual(check.identifying_string_problems(root), [])
+
+    def test_a_real_looking_home_path_fails_in_a_skill_but_not_in_tests(self):
+        root = self.tree({"skills/x/SKILL.md": "cwd: /Users/someone-real/work\n",
+                          "tests/t.py": "p = '/Users/me/secret'\nq = '/Users/someone/x'\n"})
+        problems = check.identifying_string_problems(root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("skills/x/SKILL.md:1", problems[0])
+        self.assertNotIn("someone-real", problems[0])
+
+    def test_the_maintainer_name_fails_in_prompt_text_only(self):
+        root = self.tree({"skills/x/SKILL.md": "Ask Leo first.\n", "agents/a.md": "Leo's call.\n",
+                          "scripts/s.py": "# Leo wrote this\n"})
+        problems = check.identifying_string_problems(root)
+        self.assertEqual(sorted(p.split(":")[0] for p in problems), ["agents/a.md", "skills/x/SKILL.md"])
+
+    def test_deny_hash_flag_prints_the_digest(self):
+        run = subprocess.run([sys.executable, str(ROOT / "scripts" / "check.py"), "--deny-hash", "Word"],
+                             capture_output=True, text=True)
+        self.assertEqual((run.returncode, run.stdout.strip()), (0, check.deny_digest("word")))
+
+
 if __name__ == "__main__":
     unittest.main()

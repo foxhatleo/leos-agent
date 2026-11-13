@@ -331,8 +331,8 @@ def resolve(identifier, repo):
             die(err)
         return pr, f"resolved from PR number #{number}"
 
-    # A ticket-shaped identifier may also be a literal branch name — colony's bare-ticket
-    # branches (`DOCS-5943`) and kebab variants (`docs-6171`) both look like ticket ids.
+    # A ticket-shaped identifier may also be a literal branch name — repos whose
+    # branches are bare ticket keys (`ABC-123`) and kebab variants (`abc-123`) both look like ticket ids.
     # An exact branch match is the more specific reading, so it wins; ticket search is the
     # fallback for ids that name no branch directly.
     if TICKET_RE.fullmatch(ident):

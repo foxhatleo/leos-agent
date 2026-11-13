@@ -385,8 +385,8 @@ class TestStateMigration(unittest.TestCase):
         self.watcher = load_watcher()
 
     def test_legacy_number_list_migrates_to_an_unknown_head(self):
-        heads = self.watcher.heads_of({"reviewed": [27532, 27540]})
-        self.assertEqual(heads, {27532: "", 27540: ""})
+        heads = self.watcher.heads_of({"reviewed": [101, 102]})
+        self.assertEqual(heads, {101: "", 102: ""})
 
     def test_a_migrated_entry_comes_back_once_then_tracks(self):
         known = self.watcher.heads_of({"reviewed": [1]})
@@ -1572,7 +1572,7 @@ class TestFollowing(HostCase):
         self.assertEqual([e["verb"] for e in events], ["re-review"])
 
     def test_a_re_request_at_the_same_head_still_brings_the_replies(self):
-        # colonylabs/colony#31330: the author answered the user's threads and
+        # A real review: the author answered the user's threads and
         # re-requested review without pushing. GitHub then drops the user from
         # latestReviews; the replies must still come back as a follow-up.
         self.reviewed_and_submitted()

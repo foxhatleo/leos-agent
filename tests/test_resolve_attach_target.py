@@ -113,9 +113,9 @@ class AttachTarget(unittest.TestCase):
         self.assertEqual((code, out["pr_number"], out["head_owner"]), (0, 7, "leo"))
 
     def test_ticket_search_sets_fork_prs_aside(self):
-        prs = [pr(9, "stranger", True, head="other-DOCS-12", title="DOCS-12 fix"),
-               pr(4, "leo", False, head="leo-docs-12", title="DOCS-12 fix")]
-        code, out = self.resolve("DOCS-12", "leo/repo", prs)
+        prs = [pr(9, "stranger", True, head="other-ABC-12", title="ABC-12 fix"),
+               pr(4, "leo", False, head="leo-abc-12", title="ABC-12 fix")]
+        code, out = self.resolve("ABC-12", "leo/repo", prs)
         self.assertEqual((code, out["pr_number"]), (0, 4))
 
     def test_an_explicit_number_for_a_fork_pr_resolves_with_a_warning(self):
@@ -202,7 +202,7 @@ class AttachCommand(unittest.TestCase):
 
 class Ownership(unittest.TestCase):
     def test_remote_owner_forms(self):
-        cases = {"git@github.com:leo/repo.git": "leo", "github-work:leo/repo.git": "leo",
+        cases = {"git@github.com:leo/repo.git": "leo", "gh-alias:leo/repo.git": "leo",
                  "https://github.com/leo/repo.git": "leo", "https://github.com/leo/repo": "leo",
                  "ssh://git@github.com:22/leo/repo.git": "leo", "https://u:t@github.com/leo/repo/": "leo",
                  "/srv/git/repo.git": None, "file:///srv/leo/repo.git": None}

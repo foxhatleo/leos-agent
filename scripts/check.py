@@ -23,10 +23,13 @@ Each numbered comment in main() states one invariant and why it holds. By topic
   7        injection is idempotent and uninstall round-trips
            [installer idempotency]
   8        malformed markers refuse rather than swallow content [marker safety]
+  9        no identifying strings: denied tokens (by hash), real home paths and
+           the maintainer's name in shipped prompt text [identifying strings]
 
 Stdlib only.
 """
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -157,6 +160,101 @@ def plugin_root_violations(text):
 	for prefix in re.findall(r'(?m)^\s*python3\s+"?(\S*?)scripts/[\w.-]+\.py', text):
 		if prefix != "<plugin-root>/":
 			problems.append(f"runs {prefix or './'}scripts/...; every script invocation goes through <plugin-root>/scripts/")
+	return problems
+
+
+# 9. Identifying strings. Digests of "leos-agent-deny-v1:" + a lowercased token
+# (an organization, a repo, a ticket key, a PR number, a home directory name, an
+# SSH alias) that must not appear in any text file of the repo. Only hashes are
+# kept here so the gate does not itself carry what it forbids. Add an entry with
+# `python3 scripts/check.py --deny-hash WORD`.
+DENY_PREFIX = "leos-agent-deny-v1:"
+DENY_SHA256 = frozenset({
+	"0dcdf1d7af920e171ba3dc3b0418934759bfb6cb518e0f51e4cfb6e5dec46eb3",
+	"68e576077dc2715ede8756b3d7963e766f1329b37b69c9f784ebe15f7d22b02c",
+	"f413302b04ff57c72a2e699ea939895312449e674ac39fa8264035277c9f5c65",
+	"4912806a9eb72882c617c294865d825b59c1aa7ec0aba32fcaef2ebbba7b0852",
+	"a1c6748d6fe92eb7c4bf78308cf18045801ba5852987418a84732d59ea474ea0",
+	"e81615314d70b022c16710f36ee6caac5b76d1a608763747759a807e3bac9848",
+	"0d27418c2b083dcaef97dfaa19fee1525658864ace0cb8619e05b35291336d52",
+	"f5d25be253619988bca47ba55d45d61e1d8a8210db8bd7840723c225f4c7613d",
+	"c1a0228e55e823d94ea93e1d1a407a6d7b325e621d9de2d6042785a667903e4d",
+	"fcb6effa98ec7dc294b90c9e69b84026c6fc1f34de8178a49ca53e422cdfc649",
+})
+TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+# Shipped prompt text: what reaches a model or a user's machine as instructions.
+PROMPT_DIRS = ("skills", "skills-claude", "agents", "rules", "payload/codex-agents")
+PROMPT_DOCS = ("README.md", "AGENTS.md", "hooks/README.md")
+HOME_PATH_RE = re.compile(r"/Users/(?!<|you\b|me\b)[A-Za-z0-9._-]+/")
+OWNER_NAME_RE = re.compile(r"\bLeo(?:'s)?\b")
+
+
+def deny_digest(word):
+	return hashlib.sha256((DENY_PREFIX + word.lower()).encode("utf-8")).hexdigest()
+
+
+def token_words(token):
+	"""The token and every hyphen-joined run of its parts, so a denied word
+	inside a longer slug (fix/abc-123-foo) still matches."""
+	parts = [p for p in re.split(r"[-_]", token) if p]
+	words = {token}
+	for i in range(len(parts)):
+		for j in range(i + 1, len(parts) + 1):
+			words.add("-".join(parts[i:j]))
+	return words
+
+
+def repo_text_files(root):
+	"""Relative paths of the repo's files: tracked plus untracked-not-ignored in a
+	git checkout, otherwise everything outside .git and node_modules."""
+	root = Path(root)
+	paths = None
+	if (root / ".git").exists():
+		env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE")}
+		run = subprocess.run(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+			cwd=root, env=env, capture_output=True)
+		if run.returncode == 0:
+			paths = sorted({p for p in run.stdout.decode("utf-8", "replace").split("\0") if p})
+	if paths is None:
+		paths = sorted(
+			str(f.relative_to(root)) for f in root.rglob("*")
+			if f.is_file() and not {".git", "node_modules"} & set(f.relative_to(root).parts)
+		)
+	skipped = []
+	for rel in paths:
+		parts = Path(rel).parts
+		if "results" in parts and parts[0] == "evals":
+			continue
+		if (root / rel).is_file():
+			skipped.append(rel)
+	return skipped
+
+
+def identifying_string_problems(root, deny=None):
+	"""File:line problems for denied tokens, real home paths, and the maintainer's
+	name in prompt text. Messages never repeat the offending text."""
+	root = Path(root)
+	deny = DENY_SHA256 if deny is None else deny
+	problems = []
+	for rel in repo_text_files(root):
+		try:
+			data = (root / rel).read_bytes()
+			if b"\0" in data:
+				continue
+			text = data.decode("utf-8")
+		except (OSError, UnicodeDecodeError):
+			continue
+		posix = Path(rel).as_posix()
+		is_prompt = any(posix == d or posix.startswith(d + "/") for d in PROMPT_DIRS)
+		check_paths = is_prompt or posix in PROMPT_DOCS
+		for number, line in enumerate(text.splitlines(), 1):
+			hashed = {deny_digest(word) for tok in TOKEN_RE.findall(line) for word in token_words(tok)}
+			if hashed & deny:
+				problems.append(f"{posix}:{number}: contains a denied identifying token (see DENY_SHA256 in scripts/check.py)")
+			if check_paths and HOME_PATH_RE.search(line):
+				problems.append(f"{posix}:{number}: names a real home directory; write /Users/<you>/")
+			if is_prompt and OWNER_NAME_RE.search(line):
+				problems.append(f"{posix}:{number}: names the maintainer in prompt text; write 'the user'")
 	return problems
 
 
@@ -663,6 +761,12 @@ def main():
 	check(raises_block_error(installer, "stray\n</leos-agent>\n"), "a stray closer must refuse")
 	check(raises_block_error(installer, block + "\n" + block), "two blocks must refuse rather than update only the first")
 
+	# 9. No identifying strings anywhere in the repo's text, and no real home
+	# paths or maintainer name in shipped prompt text.
+	for problem in identifying_string_problems(ROOT):
+		check(False, f"identifying strings: {problem}")
+	check(True, "identifying strings")
+
 	print(f"checked {checks} invariant(s)")
 	if failures:
 		for message in failures:
@@ -673,4 +777,7 @@ def main():
 
 
 if __name__ == "__main__":
+	if len(sys.argv) == 3 and sys.argv[1] == "--deny-hash":
+		print(deny_digest(sys.argv[2]))
+		sys.exit(0)
 	sys.exit(main())
