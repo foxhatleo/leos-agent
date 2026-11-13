@@ -1,4 +1,4 @@
-# Native model mapping — leos-agent
+# Native model mapping: leos-agent
 
 Use account-visible native model IDs. Read-only model lists/pickers are useful;
 none proves that a future child request will succeed under organization rules.

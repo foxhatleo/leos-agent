@@ -216,6 +216,35 @@ class TestStaticPromptBudget(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_measure_context_runs_from_the_npm_file_set(self):
+        import json
+        import shutil
+        import tempfile
+        files = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["files"]
+        include = [f for f in files if not f.startswith("!")]
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp)
+            shutil.copy(ROOT / "package.json", dest / "package.json")
+            for entry in include:
+                src = ROOT / entry
+                if src.is_dir():
+                    shutil.copytree(src, dest / entry, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+                elif src.is_file():
+                    shutil.copy(src, dest / entry)
+            self.assertFalse((dest / ".claude-plugin").exists())
+            result = subprocess.run(
+                [sys.executable, str(dest / "scripts" / "measure_context.py"), "--check"],
+                cwd=dest, capture_output=True, text=True, timeout=60,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_field_reads_folded_and_literal_descriptions(self):
+        measure = self.load_measure()
+        for marker in (">", ">-", "|", "|-"):
+            fm = "name: x\ndescription: %s\n  first part\n  second part\nother: y" % marker
+            self.assertEqual(measure.field(fm, "description"), "first part second part", marker)
+        self.assertEqual(measure.field("description: plain one", "description"), "plain one")
+
     def load_measure(self):
         spec = importlib.util.spec_from_file_location(
             "measure_budget_test", ROOT / "scripts" / "measure_context.py"
@@ -242,8 +271,13 @@ class TestStaticPromptBudget(unittest.TestCase):
     def test_deferred_review_and_claude_only_bodies_are_budgeted(self):
         measure = self.load_measure()
         values = measure.measurements()
-        for name in ("review_procedure_bytes", "review_validation_bytes", "review_learnings_bytes"):
-            with self.subTest(measurement=name):
+        budgeted = {(ROOT / rel).resolve(): key for key, rel in measure.REFERENCE_FILES.items()}
+        references = sorted((ROOT / "skills").glob("*/reference/*.md"))
+        self.assertTrue(references)
+        for path in references:
+            with self.subTest(reference=path.relative_to(ROOT).as_posix()):
+                name = budgeted.get(path.resolve())
+                self.assertIsNotNone(name, "every deferred reference file needs a budget")
                 self.assertIn(name, values)
                 self.assertIn(name, measure.LIMITS)
         for path in sorted((ROOT / "skills-claude").glob("*/SKILL.md")):
@@ -281,6 +315,22 @@ class TestStaticPromptBudget(unittest.TestCase):
             with self.subTest(skill=path.parent.name):
                 self.assertIsNotNone(match)
                 self.assertLessEqual(len(match.group(1).encode("utf-8")), 260)
+
+
+class TestRemovedModes(unittest.TestCase):
+    SHIPPED = ("skills", "skills-claude", "agents", "payload", "scripts", "hooks", "rules")
+
+    def test_fully_auto_publishing_is_gone_from_everything_shipped(self):
+        # The review skills publish only after the user answers; no mode skips that.
+        found = []
+        for top in self.SHIPPED:
+            for path in sorted((ROOT / top).rglob("*")):
+                if not path.is_file() or "__pycache__" in path.parts:
+                    continue
+                text = path.read_text(encoding="utf-8", errors="ignore").lower()
+                found += ["%s: %s" % (path.relative_to(ROOT), word)
+                          for word in ("fully-auto", "actions: auto") if word in text]
+        self.assertEqual(found, [])
 
 
 if __name__ == "__main__":

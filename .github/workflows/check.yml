@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 env:
   LEOS_AGENT_PRICE_REFRESH: "off"
   PYTHONDONTWRITEBYTECODE: "1"
@@ -15,10 +18,12 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python: ["3.9", "3.14"]
-        exclude:
-          # setup-python ships no 3.9 build for the arm64 macOS runners.
-          - os: macos-latest
+        python: ["3.14"]
+        include:
+          # The Python 3.9 floor. setup-python ships no 3.9 build for the
+          # arm64 macOS runners or for Ubuntu 26.04 (ubuntu-latest since
+          # November 2026), so it runs on the 24.04 image.
+          - os: ubuntu-24.04
             python: "3.9"
     runs-on: ${{ matrix.os }}
     steps:

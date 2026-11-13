@@ -32,6 +32,21 @@ OPEN_RE = re.compile(r"^<leos-agent(?:[ \t][^>\n]*)?>[ \t]*$", re.MULTILINE)
 CLOSE_RE = re.compile(r"^</leos-agent>[ \t]*$", re.MULTILINE)
 
 
+# Policy text Claude Code's own Agent tool guidance already states (do small work
+# yourself, brief with goal and file pointers instead of retyping, never repeat
+# delegated work, parallelise only independent pieces). Dropped from the Claude
+# render only, to save always-loaded bytes; every other harness keeps the full
+# policy. Entries match rules/preferences.md ignoring line wrapping, and a
+# leading separator belongs to the entry so the prose stays well formed.
+# scripts/check.py fails if an entry stops matching the policy.
+CLAUDE_DROP = (
+	"Do not repeat finished investigation to hand it off.",
+	"Pass large briefs and diffs as file paths, not inline.",
+	"Do not copy history or repeat returned work.",
+	"; parallel work must justify its integration cost",
+)
+
+
 class PayloadError(ValueError):
 	pass
 
@@ -75,6 +90,19 @@ def render_routing(body, harness, config):
 	return body[:start] + routing.stanza(harness, config) + body[end + len(ROUTING_CLOSE):]
 
 
+def _drop_pattern(entry):
+	return re.compile(r"\s*" + r"\s+".join(re.escape(word) for word in entry.split()))
+
+
+def drop_claude_redundant(body):
+	"""Remove CLAUDE_DROP entries from a body; a missing entry is an error."""
+	for entry in CLAUDE_DROP:
+		body, count = _drop_pattern(entry).subn("", body, count=1)
+		if not count:
+			raise PayloadError(f"leos-agent: CLAUDE_DROP entry no longer matches the policy: {entry!r}")
+	return body
+
+
 def payload_body(root, harness=None, config=None):
 	"""The canonical payload: rules/preferences.md with its frontmatter stripped.
 
@@ -89,6 +117,8 @@ def payload_body(root, harness=None, config=None):
 		raise PayloadError("leos-agent: rules/preferences.md contains a <leos-agent> marker; it must not")
 	if harness:
 		body = render_routing(body, harness, config if config is not None else routing.load())
+		if harness == "claude":
+			body = drop_claude_redundant(body)
 	return body
 
 

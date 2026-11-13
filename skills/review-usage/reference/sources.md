@@ -1,4 +1,4 @@
-# Usage sources — leos-agent
+# Usage sources: leos-agent
 
 The scanner reads local records as data. It never executes or prints prompt
 text. A report describes retained observations, not complete provider billing.

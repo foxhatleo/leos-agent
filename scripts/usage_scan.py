@@ -322,6 +322,12 @@ def scan_codex(since, root=None):
     return finish(out)
 
 
+def _numeric_fields(mapping, keys):
+    """Whether every present value under `keys` is a number (None counts as absent)."""
+    return all(mapping.get(k) is None or (isinstance(mapping[k], (int, float)) and not isinstance(mapping[k], bool))
+               for k in keys)
+
+
 def scan_opencode(since, db=None):
     """Use message-time usage, never whole-session totals filtered by last update."""
     db = db or SOURCES["opencode"]
@@ -362,15 +368,26 @@ def scan_opencode(since, db=None):
                     if role != "assistant":
                         continue
                     tokens = message.get("tokens")
-                    if not isinstance(tokens, dict):
+                    if tokens is None:
                         out["diagnostics"]["missing_usage"] += 1
                         continue
+                    cache = tokens.get("cache") if isinstance(tokens, dict) else None
+                    model_ref = message.get("model")
+                    if (not isinstance(tokens, dict) or (cache is not None and not isinstance(cache, dict))
+                            or (model_ref is not None and not isinstance(model_ref, dict)
+                                and not message.get("modelID"))
+                            or not _numeric_fields(tokens, ("input", "output", "reasoning"))
+                            or not _numeric_fields(cache or {}, ("read", "write"))):
+                        out["diagnostics"]["invalid_records"] += 1
+                        continue
                     seen.add(message_id)
-                    cache = tokens.get("cache") or {}
-                    model_ref = message.get("model") or {}
+                    cache = cache or {}
+                    model_ref = model_ref if isinstance(model_ref, dict) else {}
                     model = message.get("modelID") or model_ref.get("id")
                     provider = message.get("providerID") or model_ref.get("providerID")
-                    if model and provider and "/" not in model:
+                    if not isinstance(model, str):
+                        model = None
+                    if model and isinstance(provider, str) and provider and "/" not in model:
                         model = provider + "/" + model
                     # OpenCode stores output excluding reasoning; sum them once.
                     output = count(tokens.get("output")) + count(tokens.get("reasoning"))
@@ -596,7 +613,7 @@ def render(report):
     # from its sort_keys JSON; a bundle's .txt and .json must agree to the byte.
     for name, data in sorted(report["harnesses"].items()):
         if data.get("status") not in ("ok", "partial"):
-            lines.append(name + ": " + data["status"] + " — " + str(data.get("error") or data.get("reason") or data.get("looked_in", "")))
+            lines.append(name + ": " + data["status"] + ": " + str(data.get("error") or data.get("reason") or data.get("looked_in", "")))
             continue
         if data.get("source") == "ccusage":
             lines.append("%s: %s tokens, read from ccusage" % (name, data["main"]["total"]))
@@ -634,12 +651,16 @@ def render(report):
     return "\n".join(lines)
 
 
-def main(argv=None):
+def build_parser():
     parser = argparse.ArgumentParser(prog="usage_scan.py", description=__doc__.splitlines()[0])
     parser.add_argument("--since", default="7d", help="window, e.g. 24h, 7d, 2w (default 7d)")
     parser.add_argument("--harness", choices=sorted(SOURCES), help="only this harness")
     parser.add_argument("--json", action="store_true", help="machine-readable")
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
 
     report = collect(parse_since(args.since), args.harness)
     print(json.dumps(report, indent=1, sort_keys=True) if args.json else render(report))

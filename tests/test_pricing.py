@@ -19,6 +19,22 @@ def catalog(*rows):
 
 
 class ModelPrices(unittest.TestCase):
+    def _load_with_cache(self, cache_stamp, bundled_stamp):
+        def write(path, stamp, ident):
+            data = pricing.snapshot({"data": [{"id": ident, "pricing": {"prompt": "1", "completion": "1"}}]},
+                                    fetched_at=stamp)
+            path.write_text(json.dumps(data))
+        with tempfile.TemporaryDirectory() as tmp:
+            cache, bundled = Path(tmp) / "cache.json", Path(tmp) / "bundled.json"
+            write(cache, cache_stamp, "anthropic/claude-haiku-4.5")
+            write(bundled, bundled_stamp, "anthropic/claude-sonnet-4.5")
+            with patch.object(pricing, "cache_path", return_value=cache), patch.object(pricing, "BUNDLED", bundled):
+                return pricing.load()["models"][0]["id"]
+
+    def test_load_takes_the_newer_of_cache_and_bundled(self):
+        self.assertEqual(self._load_with_cache(100, 200), "anthropic/claude-sonnet-4.5")
+        self.assertEqual(self._load_with_cache(300, 200), "anthropic/claude-haiku-4.5")
+
     def test_provider_aliases_and_dated_ids(self):
         data = catalog(("anthropic/claude-haiku-4.5", 1, 5))
         for name in ("claude-haiku-4-5-20251001", "haiku 4.5", "anthropic/claude-haiku-4.5",

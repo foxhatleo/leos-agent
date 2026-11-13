@@ -13,6 +13,7 @@ Prints a single JSON object to stdout:
 Exit code is 0 for "ok" and 1 otherwise, so callers can branch on it directly.
 """
 
+import argparse
 import json
 import os
 import re
@@ -70,7 +71,10 @@ def is_safe_ref(ref):
 
 
 def suggested_worktree(root, branch):
-    """A readable name with a stable digest prevents slash-to-dash collisions."""
+    """<root>/.claude/worktrees/<branch-dashed>-<10-hex digest>.
+
+    <branch-dashed> is the branch with slashes turned into dashes; the first 10
+    hex digits of the branch's SHA-256 keep `a/b` and `a-b` apart."""
     readable = branch.replace("/", "-")
     digest = sha256(branch.encode("utf-8")).hexdigest()[:10]
     return os.path.join(root, ".claude", "worktrees", f"{readable}-{digest}")
@@ -116,7 +120,7 @@ def rtk_configured():
 def repo_root():
     rc, out, _ = run(["git", "rev-parse", "--show-toplevel"])
     if rc != 0:
-        die("not inside a git repository — cd into the repo before running /attach-pr")
+        die("not inside a git repository, cd into the repo before running /attach-pr")
     return out
 
 
@@ -160,8 +164,12 @@ def branch_exists_local(branch):
 
 
 def branch_exists_remote(branch):
-    rc, out, _ = run(["git", "ls-remote", "--heads", "origin", branch])
-    return rc == 0 and bool(out)
+    ref = f"refs/heads/{branch}"
+    rc, out, _ = run(["git", "ls-remote", "--heads", "origin", ref])
+    if rc != 0:
+        return False
+    # ls-remote patterns match by trailing path components; keep exact names only.
+    return any(line.split("\t", 1)[-1] == ref for line in out.splitlines())
 
 
 def all_known_branches():
@@ -331,8 +339,8 @@ def resolve(identifier, repo):
             die(err)
         return pr, f"resolved from PR number #{number}"
 
-    # A ticket-shaped identifier may also be a literal branch name — colony's bare-ticket
-    # branches (`DOCS-5943`) and kebab variants (`docs-6171`) both look like ticket ids.
+    # A ticket-shaped identifier may also be a literal branch name, as in repos whose
+    # branches are bare ticket keys (`ABC-123`) and kebab variants (`abc-123`) both look like ticket ids.
     # An exact branch match is the more specific reading, so it wins; ticket search is the
     # fallback for ids that name no branch directly.
     if TICKET_RE.fullmatch(ident):
@@ -367,7 +375,7 @@ def resolve_branch(branch, repo):
             )
         die(
             f"branch `{branch}` exists {where} but has no pull request "
-            "(any state). Open a PR for it first — /attach-pr only attaches to an existing PR."
+            "(any state). Open a PR for it first, since /attach-pr only attaches to an existing PR."
         )
     if len(prs) > 1:
         chosen = pick_one(prs)
@@ -382,6 +390,11 @@ def resolve_branch(branch, repo):
     return prs[0]
 
 
+def mentions_ticket(key, text):
+    """The key on token boundaries: ABC-12 is in `fix/abc-12-x`, not in `abc-123`."""
+    return bool(re.search(r"(?<![A-Z0-9])" + re.escape(key) + r"(?![0-9])", text.upper()))
+
+
 def resolve_ticket(ticket, repo):
     """Ticket-tracker-agnostic: match the id against branch names and PR text.
     Heads in other owners' forks are set aside, as for a branch name."""
@@ -389,7 +402,7 @@ def resolve_ticket(ticket, repo):
     found, foreign, owners = {}, {}, {}
 
     for branch in all_known_branches():
-        if key in branch.upper():
+        if mentions_ticket(key, branch):
             prs, others, _ = prs_for_branch(branch, accepted_owners(repo, branch, owners))
             for pr in prs:
                 found[pr["number"]] = pr
@@ -397,8 +410,8 @@ def resolve_ticket(ticket, repo):
                 foreign.setdefault(pr["number"], pr)
 
     for pr in prs_by_search(key):
-        haystack = f"{pr.get('title', '')} {pr.get('headRefName', '')}".upper()
-        if key in haystack and pr["number"] not in found:
+        haystack = f"{pr.get('title', '')} {pr.get('headRefName', '')}"
+        if mentions_ticket(key, haystack) and pr["number"] not in found:
             if is_own(pr, accepted_owners(repo, pr.get("headRefName"), owners)):
                 found[pr["number"]] = pr
             else:
@@ -446,15 +459,28 @@ def resolve_workdir(branch, root):
     return None, "not_checked_out"
 
 
+USAGE = "usage: resolve_attach_target.py <pr-number|pr-url|branch|TICKET-123>"
+
+
+def build_parser():
+    # No -h: every argument is an identifier to resolve, as it always was.
+    parser = argparse.ArgumentParser(prog="resolve_attach_target.py", add_help=False,
+                                     description=__doc__.splitlines()[0])
+    parser.add_argument("identifier", help="pr-number, pr-url, branch, or TICKET-123")
+    return parser
+
+
 def main():
     if len(sys.argv) != 2 or not sys.argv[1].strip():
-        die("usage: resolve_attach_target.py <pr-number|pr-url|branch|TICKET-123>")
+        die(USAGE)
+    # `--` keeps an identifier that starts with a dash an identifier.
+    identifier = build_parser().parse_args(["--", sys.argv[1]]).identifier
 
     root = repo_root()
     require_gh()
     repo = name_with_owner()
 
-    pr, note = resolve(sys.argv[1], repo)
+    pr, note = resolve(identifier, repo)
     branch = pr.get("headRefName")
     base_ref = pr.get("baseRefName") or "main"
     pr_url = pr.get("url")

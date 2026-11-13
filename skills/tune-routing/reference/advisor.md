@@ -1,4 +1,4 @@
-# Claude Code advisor — leos-agent
+# Claude Code advisor: leos-agent
 
 The advisor is Claude Code's server-side advisor tool. The main model decides
 when to consult a second model, typically before committing to an approach,

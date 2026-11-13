@@ -23,14 +23,27 @@ Each numbered comment in main() states one invariant and why it holds. By topic
   7        injection is idempotent and uninstall round-trips
            [installer idempotency]
   8        malformed markers refuse rather than swallow content [marker safety]
+  9        no identifying strings: denied tokens (by hash), real home paths and
+           the maintainer's name in shipped prompt text [identifying strings]
+  10       the Claude policy render differs from the raw one only by CLAUDE_DROP
+  11       every script parses with the Python 3.9 grammar [python floor]
+  12       every documented script command parses against the script's
+           build_parser() [documented commands]
+  13       no em dash in shipped prompt text, README, AGENTS.md, or script
+           string literals [em dashes]
 
 Stdlib only.
 """
 
+import ast
+import contextlib
+import hashlib
 import importlib.util
+import io
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -158,6 +171,289 @@ def plugin_root_violations(text):
 		if prefix != "<plugin-root>/":
 			problems.append(f"runs {prefix or './'}scripts/...; every script invocation goes through <plugin-root>/scripts/")
 	return problems
+
+
+# 9. Identifying strings. Digests of "leos-agent-deny-v1:" + a lowercased token
+# (an organization, a repo, a ticket key, a PR number, a home directory name, an
+# SSH alias) that must not appear in any text file of the repo. Only hashes are
+# kept here so the gate does not itself carry what it forbids. Add an entry with
+# `python3 scripts/check.py --deny-hash WORD`.
+DENY_PREFIX = "leos-agent-deny-v1:"
+DENY_SHA256 = frozenset({
+	"0dcdf1d7af920e171ba3dc3b0418934759bfb6cb518e0f51e4cfb6e5dec46eb3",
+	"68e576077dc2715ede8756b3d7963e766f1329b37b69c9f784ebe15f7d22b02c",
+	"f413302b04ff57c72a2e699ea939895312449e674ac39fa8264035277c9f5c65",
+	"4912806a9eb72882c617c294865d825b59c1aa7ec0aba32fcaef2ebbba7b0852",
+	"a1c6748d6fe92eb7c4bf78308cf18045801ba5852987418a84732d59ea474ea0",
+	"e81615314d70b022c16710f36ee6caac5b76d1a608763747759a807e3bac9848",
+	"0d27418c2b083dcaef97dfaa19fee1525658864ace0cb8619e05b35291336d52",
+	"f5d25be253619988bca47ba55d45d61e1d8a8210db8bd7840723c225f4c7613d",
+	"c1a0228e55e823d94ea93e1d1a407a6d7b325e621d9de2d6042785a667903e4d",
+	"fcb6effa98ec7dc294b90c9e69b84026c6fc1f34de8178a49ca53e422cdfc649",
+})
+TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+# Shipped prompt text: what reaches a model or a user's machine as instructions.
+PROMPT_DIRS = ("skills", "skills-claude", "agents", "rules", "payload/codex-agents")
+PROMPT_DOCS = ("README.md", "AGENTS.md", "hooks/README.md")
+HOME_PATH_RE = re.compile(r"/Users/(?!<|you\b|me\b)[A-Za-z0-9._-]+/")
+OWNER_NAME_RE = re.compile(r"\bLeo(?:'s)?\b")
+
+
+def deny_digest(word):
+	return hashlib.sha256((DENY_PREFIX + word.lower()).encode("utf-8")).hexdigest()
+
+
+def token_words(token):
+	"""The token and every hyphen-joined run of its parts, so a denied word
+	inside a longer slug (fix/abc-123-foo) still matches."""
+	parts = [p for p in re.split(r"[-_]", token) if p]
+	words = {token}
+	for i in range(len(parts)):
+		for j in range(i + 1, len(parts) + 1):
+			words.add("-".join(parts[i:j]))
+	return words
+
+
+def repo_text_files(root):
+	"""Relative paths of the repo's files: tracked plus untracked-not-ignored in a
+	git checkout, otherwise everything outside .git and node_modules."""
+	root = Path(root)
+	paths = None
+	if (root / ".git").exists():
+		env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE")}
+		run = subprocess.run(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+			cwd=root, env=env, capture_output=True)
+		if run.returncode == 0:
+			paths = sorted({p for p in run.stdout.decode("utf-8", "replace").split("\0") if p})
+	if paths is None:
+		paths = sorted(
+			str(f.relative_to(root)) for f in root.rglob("*")
+			if f.is_file() and not {".git", "node_modules"} & set(f.relative_to(root).parts)
+		)
+	skipped = []
+	for rel in paths:
+		parts = Path(rel).parts
+		if "results" in parts and parts[0] == "evals":
+			continue
+		if (root / rel).is_file():
+			skipped.append(rel)
+	return skipped
+
+
+def identifying_string_problems(root, deny=None):
+	"""File:line problems for denied tokens, real home paths, and the maintainer's
+	name in prompt text. Messages never repeat the offending text."""
+	root = Path(root)
+	deny = DENY_SHA256 if deny is None else deny
+	problems = []
+	for rel in repo_text_files(root):
+		try:
+			data = (root / rel).read_bytes()
+			if b"\0" in data:
+				continue
+			text = data.decode("utf-8")
+		except (OSError, UnicodeDecodeError):
+			continue
+		posix = Path(rel).as_posix()
+		is_prompt = any(posix == d or posix.startswith(d + "/") for d in PROMPT_DIRS)
+		check_paths = is_prompt or posix in PROMPT_DOCS
+		for number, line in enumerate(text.splitlines(), 1):
+			hashed = {deny_digest(word) for tok in TOKEN_RE.findall(line) for word in token_words(tok)}
+			if hashed & deny:
+				problems.append(f"{posix}:{number}: contains a denied identifying token (see DENY_SHA256 in scripts/check.py)")
+			if check_paths and HOME_PATH_RE.search(line):
+				problems.append(f"{posix}:{number}: names a real home directory; write /Users/<you>/")
+			if is_prompt and OWNER_NAME_RE.search(line):
+				problems.append(f"{posix}:{number}: names the maintainer in prompt text; write 'the user'")
+	return problems
+
+
+# 11. Python floor. CI runs 3.9 and 3.14, but a newer-only construct in a
+# script that CI never imports would still pass there and fail on stock macOS
+# Python 3.9. Parse every script with the 3.9 grammar.
+PYTHON_FLOOR = (3, 9)
+
+
+def python_floor_problems(root):
+	problems = []
+	for path in sorted((Path(root) / "scripts").glob("*.py")):
+		try:
+			ast.parse(path.read_text(encoding="utf-8"), filename=path.name, feature_version=PYTHON_FLOOR)
+		except SyntaxError as exc:
+			problems.append(f"scripts/{path.name}:{exc.lineno}: not Python {PYTHON_FLOOR[0]}.{PYTHON_FLOOR[1]} syntax: {exc.msg}")
+	return problems
+
+
+# 12. Documented commands. A skill line is what the model runs, so a flag the
+# script does not take fails at the worst moment. Each documented line is
+# parsed against the script's own build_parser().
+COMMAND_DIRS = ("skills", "skills-claude")
+COMMAND_RE = re.compile(r'python3 "<plugin-root>/scripts/([\w-]+)\.py"')
+FENCE_RE = re.compile(r"\s*(`{3,}|~{3,})")
+HEX40 = "a" * 40
+# Placeholders the docs use, and a value of the right shape for each.
+PLACEHOLDERS = {
+	"N": "1", "P": "1", "ID": "1", "SHA": HEX40, "FULL_SHA": HEX40, "PREV": HEX40, "HEAD": HEX40,
+	"TOKEN": "c" * 32, "OWNER/REPO": "o/r", "FILE": "/tmp/x", "FP": "none", "EVENT": "COMMENT", "CMD": "x",
+}
+# Angle-bracket placeholders whose value is checked against choices.
+ANGLE_PLACEHOLDERS = {"<harness>": "claude"}
+# (file, script) pairs whose documented line is deliberately not a whole
+# command. Empty: every documented line parses. An entry needs a reason.
+PARTIAL_COMMANDS = frozenset()
+
+
+def documented_commands(text):
+	"""(line number, script, argument text) for each documented script command.
+
+	In a fenced block or on a bare line the command runs to the end of the line,
+	with backslash continuations joined. In inline code it runs to the closing
+	backtick, which may sit on a later line of the same paragraph."""
+	lines = text.splitlines()
+	found = []
+	fence = None
+	for index, line in enumerate(lines):
+		marker = FENCE_RE.match(line)
+		if marker:
+			char = marker.group(1)[0]
+			if fence is None:
+				fence = char
+			elif char == fence:
+				fence = None
+			continue
+		for match in COMMAND_RE.finditer(line):
+			rest = line[match.end():]
+			if fence is None and line[:match.start()].count("`") % 2 == 1:
+				following = index + 1
+				while "`" not in rest and following < len(lines) and lines[following].strip():
+					rest += " " + lines[following].strip()
+					following += 1
+				rest = rest.split("`", 1)[0]
+			else:
+				following = index + 1
+				while rest.rstrip().endswith("\\") and following < len(lines):
+					rest = rest.rstrip()[:-1] + " " + lines[following].strip()
+					following += 1
+			found.append((index + 1, match.group(1), rest))
+	return found
+
+
+def command_argv(rest):
+	"""The argv a documented argument text stands for: optional [groups] dropped,
+	placeholders filled, the shell comment, pipe or redirect cut off."""
+	previous = None
+	while previous != rest:
+		previous, rest = rest, re.sub(r"\[[^\[\]]*\]", " ", rest)
+	for placeholder, value in ANGLE_PLACEHOLDERS.items():
+		rest = rest.replace(placeholder, value)
+	rest = re.sub(r"<[^<>\n]*>", "x", rest)
+	rest = rest.replace("$SCRATCH", "/tmp/x")
+	rest = re.sub(r"PRRT_(?:\u2026|\.\.\.)", "PRRT_x", rest)
+	lexer = shlex.shlex(rest, posix=True, punctuation_chars=True)
+	lexer.whitespace_split = True
+	argv = []
+	for token in lexer:
+		if set(token) <= set("();<>|&"):
+			break
+		if token in ("...", "\u2026"):
+			continue
+		argv.append(PLACEHOLDERS.get(token, token))
+	return argv
+
+
+def load_script(path):
+	spec = importlib.util.spec_from_file_location("check_cli_" + path.stem.replace("-", "_"), path)
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	return module
+
+
+def documented_command_problems(root):
+	"""file:line problems for documented script commands that do not parse."""
+	root = Path(root)
+	scripts = str(root / "scripts")
+	added = scripts not in sys.path
+	if added:
+		sys.path.insert(0, scripts)  # scripts import their siblings
+	try:
+		return _documented_command_problems(root)
+	finally:
+		if added:
+			sys.path.remove(scripts)
+
+
+def _documented_command_problems(root):
+	parsers = {}
+	problems = []
+	for base in COMMAND_DIRS:
+		for doc in sorted((root / base).rglob("*.md")):
+			rel = doc.relative_to(root).as_posix()
+			for number, script, rest in documented_commands(doc.read_text(encoding="utf-8")):
+				path = root / "scripts" / f"{script}.py"
+				if (rel, script) in PARTIAL_COMMANDS or not path.is_file():
+					continue  # a missing script is 5c's failure
+				if script not in parsers:
+					try:
+						parsers[script] = load_script(path).build_parser
+					except AttributeError:
+						parsers[script] = None
+				if parsers[script] is None:
+					problems.append(f"{rel}:{number}: scripts/{script}.py has no build_parser(); add one")
+					continue
+				argv = command_argv(rest)
+				err = io.StringIO()
+				try:
+					with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+						parsers[script]().parse_args(argv)
+				except SystemExit as exc:
+					if exc.code:
+						said = [l for l in err.getvalue().splitlines() if "error:" in l]
+						reason = said[-1].split("error:", 1)[1].strip() if said else f"exit {exc.code}"
+						problems.append(f"{rel}:{number}: {script}.py {' '.join(argv)}: {reason}")
+	return problems
+
+
+# 13. Em dashes. Prompt text, docs and what scripts print read as a person
+# wrote them, and these two dashes are the tell. A script constant that names
+# the dash only to refuse or parse it is listed here by its variable name.
+DASHES = ("\u2014", "\u2015")
+DASH_DETECTORS = {
+	"scripts/check.py": {"DASHES"},
+	"scripts/ghreview.py": {"EM_DASHES"},
+	"scripts/outcome.py": {"_SEP"},
+}
+
+
+def em_dash_problems(root):
+	root = Path(root)
+	problems = []
+	docs = [root / rel for rel in PROMPT_DOCS]
+	for base in PROMPT_DIRS:
+		docs.extend(sorted(p for p in (root / base).rglob("*") if p.is_file()))
+	for doc in docs:
+		try:
+			text = doc.read_text(encoding="utf-8")
+		except (OSError, UnicodeDecodeError):
+			continue
+		for number, line in enumerate(text.splitlines(), 1):
+			if any(dash in line for dash in DASHES):
+				problems.append(f"{doc.relative_to(root).as_posix()}:{number}: em dash; rewrite the sentence")
+	for path in sorted((root / "scripts").glob("*.py")):
+		rel = f"scripts/{path.name}"
+		try:
+			tree = ast.parse(path.read_text(encoding="utf-8"))
+		except SyntaxError:
+			continue  # 11 reports it
+		skip = set()
+		for node in ast.walk(tree):
+			if isinstance(node, ast.Assign) and any(
+				isinstance(t, ast.Name) and t.id in DASH_DETECTORS.get(rel, ()) for t in node.targets):
+				skip.update(id(n) for n in ast.walk(node.value))
+		for node in ast.walk(tree):
+			if (isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in skip
+				and any(dash in node.value for dash in DASHES)):
+				problems.append(f"{rel}:{node.lineno}: string literal holds an em dash; rewrite it")
+	return sorted(set(problems), key=lambda p: (p.split(":")[0], int(p.split(":")[1])))
 
 
 def main():
@@ -471,7 +767,7 @@ def main():
 
 	# 5a-agents. Claude Code auto-discovers agents/ at the plugin root. The set
 	# must stay in lockstep with the Codex profiles (same names, one policy), and
-	# each definition needs the frontmatter Claude reads — a missing model field
+	# each definition needs the frontmatter Claude reads. A missing model field
 	# would silently inherit the parent model, which is the failure this tier
 	# exists to prevent.
 	claude_agents = sorted((ROOT / "agents").glob("*.md"))
@@ -541,7 +837,7 @@ def main():
 	# 5c. Plugin-root references. Skill, command, and agent text points at plugin
 	# files through the <plugin-root> placeholder and nothing else (see
 	# plugin_root_violations for why ${CLAUDE_PLUGIN_ROOT} is not portable), and
-	# the OpenCode installer bakes the absolute root into its copies — so every
+	# the OpenCode installer bakes the absolute root into its copies, so every
 	# referenced path must actually exist, or an install ships a command that can
 	# only fail.
 	for base in BODY_DIRS:
@@ -558,7 +854,7 @@ def main():
 	install_fm = (ROOT / "skills" / "install" / "SKILL.md").read_text(encoding="utf-8").split("---", 2)[1]
 	check(
 		re.search(r"(?m)^name:\s*install\s*$", install_fm) is not None,
-		"skills/install/SKILL.md: frontmatter name must stay 'install' — leo-install.py's OpenCode rename keys on it",
+		"skills/install/SKILL.md: frontmatter name must stay 'install'; leo-install.py's OpenCode rename keys on it",
 	)
 
 	# 5b. Invocation split: a skill is either user-invoked (and hidden from the
@@ -663,6 +959,50 @@ def main():
 	check(raises_block_error(installer, "stray\n</leos-agent>\n"), "a stray closer must refuse")
 	check(raises_block_error(installer, block + "\n" + block), "two blocks must refuse rather than update only the first")
 
+	# 9. No identifying strings anywhere in the repo's text, and no real home
+	# paths or maintainer name in shipped prompt text.
+	for problem in identifying_string_problems(ROOT):
+		check(False, f"identifying strings: {problem}")
+	check(True, "identifying strings")
+
+	# 10. The Claude-only policy drops must not orphan. Every CLAUDE_DROP entry has
+	# to match rules/preferences.md (an edit to the policy would otherwise stop
+	# dropping silently, or make the render fail at session start), and the Claude
+	# render may differ from the raw render only by those drops: strip them from
+	# the raw text by hand and the two must be equal.
+	sys.path.insert(0, str(ROOT / "scripts"))
+	import payload as payload_module
+	raw_policy = payload_module.payload_body(ROOT, "codex", {})
+	check(bool(payload_module.CLAUDE_DROP), "CLAUDE_DROP is empty; delete the mechanism or add entries")
+	for entry in payload_module.CLAUDE_DROP:
+		hits = payload_module._drop_pattern(entry).findall(raw_policy)
+		check(len(hits) == 1, f"CLAUDE_DROP entry matches {len(hits)} time(s) in rules/preferences.md, want 1: {entry!r}")
+	if all(len(payload_module._drop_pattern(e).findall(raw_policy)) == 1 for e in payload_module.CLAUDE_DROP):
+		by_hand = raw_policy
+		for entry in payload_module.CLAUDE_DROP:
+			by_hand = payload_module._drop_pattern(entry).sub("", by_hand, count=1)
+		claude_policy = payload_module.payload_body(ROOT, "claude", {})
+		routing_claude = payload_module.routing.stanza("claude", {})
+		routing_codex = payload_module.routing.stanza("codex", {})
+		check(by_hand.replace(routing_codex, routing_claude) == claude_policy,
+			"the Claude render differs from the raw policy by more than CLAUDE_DROP")
+
+	# 11. Every script parses with the Python 3.9 grammar.
+	for problem in python_floor_problems(ROOT):
+		check(False, f"python floor: {problem}")
+	check(True, "python floor")
+
+	# 12. Every documented `python3 "<plugin-root>/scripts/X.py" ...` line parses
+	# against X.build_parser().
+	for problem in documented_command_problems(ROOT):
+		check(False, f"documented command: {problem}")
+	check(True, "documented commands")
+
+	# 13. No em dash in shipped prompt text, the docs, or script strings.
+	for problem in em_dash_problems(ROOT):
+		check(False, f"em dashes: {problem}")
+	check(True, "em dashes")
+
 	print(f"checked {checks} invariant(s)")
 	if failures:
 		for message in failures:
@@ -673,4 +1013,7 @@ def main():
 
 
 if __name__ == "__main__":
+	if len(sys.argv) == 3 and sys.argv[1] == "--deny-hash":
+		print(deny_digest(sys.argv[2]))
+		sys.exit(0)
 	sys.exit(main())

@@ -9,7 +9,8 @@
 
 Claude/Codex commands set LEOS_AGENT_HARNESS explicitly. Their SessionStart
 hooks emit the compact deterministic policy; both also cover fork starts.
-Cursor loads its native rule directly, so its lifecycle hook emits no policy.
+Cursor's sessionStart returns `additional_context` holding the live rendered
+policy (none when `LEOS_AGENT_PAYLOAD=off`).
 
 Codex PreCompact (`scripts/compact_nudge.py`) answers a top-level compaction
 with only a `systemMessage`, which Codex shows as a UI warning naming
@@ -30,12 +31,25 @@ input names a multi-agent v2 spawn `collaborationspawn_agent` (namespace and
 tool joined with no separator); the matcher and guard accept it alongside
 `spawn_agent`. A custom `features.multi_agent_v2.tool_namespace` is not matched.
 
-Cursor checks the resolved subagent_model at subagentStart and always answers:
-`allow`, or `deny` with an `agent_message` the model reads. Cursor blocks a
-permission hook on invalid JSON or an invalid response, so failures also
-answer `allow`. Missing prices are allowed with a log diagnostic. It
-never invents a model argument for Task. SubagentStop records lifecycle
-completion separately from actual model observation.
+Cursor runs `scripts/cursor_hook.py` for each event and reads only the
+fields its hooks documentation lists. Plugin hooks run from the plugin
+directory except subagentStop, which runs from the workspace root, so every
+command names its script through `"$CURSOR_PLUGIN_ROOT"`.
+
+- subagentStart checks the resolved subagent_model and returns `permission`
+  plus, on a refusal, `user_message`, nothing else: `allow`, or `deny` with
+  the guard's text. Missing prices are allowed with a log diagnostic. It never
+  invents a model argument for Task.
+- subagentStop records lifecycle completion separately from actual model
+  observation. When a leo-* child's summary lacks the `Result:`/`Verified:`
+  lines (guard mode `on` only) it may return `followup_message` once per
+  subagent (a marker under `~/.leos-agent-local/handbacks/`), asking for the
+  same report with them; the child's next stop is recorded.
+- preCompact returns `user_message` with the handoff nudge.
+
+Cursor treats an invalid permission response as a denial, so every failure
+(bad input, an import error, an exception) answers allow: `{"permission":
+"allow"}` at subagentStart, an empty `{}` elsewhere.
 
 The installed Cursor agents carry the no-delegation rule as worker instructions
 only. Cursor publishes no per-agent tool restriction, and subagentStart reports
@@ -231,8 +245,9 @@ starts inherit the variable but not `CLAUDE_PLUGIN_ROOT`, so tests and manual
 runs inside a session still decide. On earlier builds the module clears the
 variable, and wherever mods do not load (`disableAllHooks`,
 `allowManagedModsOnly`, `--safe-mode`) nothing sets it, so the command guard
-decides. Forks, workflow agents and other plugins' own `$.agent.spawn` calls are
-left alone. Claude Code 2.1.250 and older reject this hooks file outright, so
+decides. Forks, resumed agents (which keep the model they started on),
+workflow agents and other plugins' own `$.agent.spawn` calls pass through
+untouched. Claude Code 2.1.250 and older reject this hooks file outright, so
 none of its hooks load there.
 
 `claude plugin validate .` lists what the module hooks and calls;

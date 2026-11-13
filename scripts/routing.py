@@ -372,7 +372,7 @@ def cmd_show(args):
             print(f"{harness:9} {'(all)':9} shipped default")
 
 
-def main(argv):
+def build_parser():
     parser = argparse.ArgumentParser(prog="routing.py", description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="mode", required=True)
     show = sub.add_parser("show", help="what is configured, resolved")
@@ -400,8 +400,11 @@ def main(argv):
     unsetter.add_argument("--standard", action="store_true", help="drop the standard tier")
     unsetter.add_argument("--premium", action="store_true", help="drop the premium tier")
     unsetter.add_argument("--dry-run", action="store_true", help="show the result, write nothing")
+    return parser
 
-    args = parser.parse_args(argv)
+
+def main(argv):
+    args = build_parser().parse_args(argv)
     # An explicit branch per mode: a bare else would silently route a new
     # subcommand into render and crash on an attribute it does not have.
     if args.mode == "path":

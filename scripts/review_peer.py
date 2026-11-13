@@ -59,6 +59,7 @@ SEVERITIES = ("blocking", "major", "minor", "nit")
 MAX_FINDINGS = 30
 MAX_CONTEXT_CHARS = 8000
 AUTH_TIMEOUT = 20
+KILL_GRACE = 5
 NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,99}")
 EFFORT_RE = re.compile(r"[a-z]{2,16}")
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
@@ -229,6 +230,43 @@ def command(target, binary, settings, workdir, last_message):
     return argv
 
 
+def group_alive(pgid):
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True  # exists but not ours to signal: treat as still running
+    return True
+
+
+def stop_group(proc):
+    """End the peer and everything it spawned: SIGTERM to the group, SIGKILL after a grace.
+
+    The direct child exiting proves nothing about the rest of the group: a
+    descendant that ignores SIGTERM and closed its pipes keeps running, so the
+    group itself is checked until the grace runs out, then killed.
+    """
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except OSError:
+        proc.terminate()
+    deadline = time.monotonic() + KILL_GRACE
+    try:
+        proc.communicate(timeout=KILL_GRACE)
+    except subprocess.TimeoutExpired:
+        pass
+    while group_alive(proc.pid) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        if proc.poll() is None:
+            proc.kill()
+    if proc.poll() is None:
+        proc.communicate()
+
+
 def invoke(argv, prompt, workdir, timeout, env):
     """(returncode, stdout, stderr) or raises TimeoutError after killing the group."""
     proc = subprocess.Popen(argv, cwd=workdir, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -236,11 +274,7 @@ def invoke(argv, prompt, workdir, timeout, env):
     try:
         out, err = proc.communicate(prompt, timeout=timeout)
     except subprocess.TimeoutExpired:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except OSError:
-            proc.kill()
-        proc.communicate()
+        stop_group(proc)
         raise TimeoutError("timed out after %ds" % timeout) from None
     return proc.returncode, out, err
 
@@ -333,7 +367,27 @@ def write_artifact(path, artifact):
                                                    "independence_verified", "findings_count", "out")}))
 
 
+def check_out_path(path):
+    """Refuse an artifact path that could land in a repository, before anything is sent."""
+    if not path or not os.path.isabs(path):
+        raise ValueError("--out must be an absolute path outside the repository, got %r" % path)
+    parent = os.path.realpath(os.path.dirname(path))
+    if not os.path.isdir(parent):
+        raise ValueError("--out parent directory does not exist: %s" % os.path.dirname(path))
+    try:
+        top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True,
+                             timeout=AUTH_TIMEOUT, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return
+    if top.returncode != 0 or not top.stdout.strip():
+        return
+    root = os.path.realpath(top.stdout.strip())
+    if os.path.commonpath([root, parent]) == root:
+        raise ValueError("--out must be outside the repository at %s" % root)
+
+
 def cmd_run(a, env=None, which=shutil.which, probe=auth_probe):
+    check_out_path(a.out)
     env = dict(os.environ if env is None else env)
     settings = load_settings()
     decision = plan(env, settings, a.target, a.user_enabled, which, probe)
@@ -442,7 +496,7 @@ def cmd_config(a):
               % (shown["target"] or "the other harness"), file=sys.stderr)
 
 
-def main(argv=None):
+def build_parser():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     detect = sub.add_parser("detect")
@@ -465,7 +519,11 @@ def main(argv=None):
     config.add_argument("--effort")
     config.add_argument("--max-budget-usd", dest="max_budget_usd", type=float)
     config.add_argument("--timeout", type=int)
-    a = p.parse_args(argv)
+    return p
+
+
+def main(argv=None):
+    a = build_parser().parse_args(argv)
     try:
         {"detect": cmd_detect, "run": cmd_run, "config": cmd_config}[a.cmd](a)
     except subprocess.TimeoutExpired:

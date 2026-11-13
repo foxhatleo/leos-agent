@@ -2,7 +2,7 @@
 """state: machine-local JSON state for leos-agent skills and agents.
 
 CODE ships inside the plugin (possibly a versioned cache that a plugin update
-can wipe or relocate) — this file must never derive the data root from its own
+can wipe or relocate), so this file must never derive the data root from its own
 __file__ location. DATA always lives under
 ${LEOS_AGENT_LOCAL_PATH:-$HOME/.leos-agent-local}, independent of where this
 script itself happens to run from, so a plugin update can never lose state.
@@ -43,7 +43,7 @@ def state_file(name):
     if "/" in name or "\\" in name or ".." in name or os.path.isabs(name):
         sys.exit(f"state: {name!r} is not a valid state name (no slashes, no .., not absolute)")
     root = _data_root()
-    # 0700: the root holds handoffs and per-repo state — project context that
+    # 0700: the root holds handoffs and per-repo state, project context that
     # is nobody else's business on a shared machine. Applies on creation only;
     # an existing directory keeps whatever Leo set on it.
     os.makedirs(root, mode=0o700, exist_ok=True)
@@ -69,9 +69,9 @@ def load(path):
     except FileNotFoundError:
         return {}
     except json.JSONDecodeError as e:
-        sys.exit(f"state: {path} is corrupt ({e}) — fix or delete it")
+        sys.exit(f"state: {path} is corrupt ({e}); fix or delete it")
     if not isinstance(data, dict):
-        sys.exit(f"state: {path} is corrupt (top level is {type(data).__name__}, expected object) — fix or delete it")
+        sys.exit(f"state: {path} is corrupt (top level is {type(data).__name__}, expected object); fix or delete it")
     return data
 
 

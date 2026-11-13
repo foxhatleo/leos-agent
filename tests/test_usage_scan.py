@@ -374,6 +374,29 @@ class TestAccountingRegressions(ScanCase):
         self.assertEqual(result["reported_cost_records"], 1)
         self.assertEqual(result["reported_cost_usd"], 0)
 
+    def test_opencode_odd_rows_count_as_invalid_not_a_crash(self):
+        import sqlite3
+        db = self.root / "odd.db"
+        conn = sqlite3.connect(str(db))
+        conn.execute("CREATE TABLE session (id TEXT, parent_id TEXT)")
+        conn.execute("CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, data TEXT)")
+        conn.execute("INSERT INTO session VALUES ('s', NULL)")
+        now = int(time.time() * 1000)
+        good = {"role": "assistant", "modelID": "m", "providerID": "p", "tokens": {"input": 1, "output": 2}}
+        odd = [
+            dict(good, tokens={"input": "ten"}),
+            dict(good, tokens={"input": 1, "cache": "x"}),
+            dict(good, tokens=[1, 2]),
+            {"role": "assistant", "model": "flat", "tokens": {"input": 1}},
+            dict(good, tokens={"input": 1, "cache": {"read": {"n": 1}}}),
+        ]
+        for i, row in enumerate(odd + [good]):
+            conn.execute("INSERT INTO message VALUES (?,?,?,?)", (f"m{i}", "s", now, json.dumps(row)))
+        conn.commit(); conn.close()
+        result = self.scan.scan_opencode(self.since, str(db))
+        self.assertEqual(result["diagnostics"]["invalid_records"], len(odd))
+        self.assertEqual(result["buckets"]["main"].requests, 1)
+
     def test_reference_cost_keeps_unknown_cache_explicit(self):
         catalog = {"models": [{"id": "anthropic/claude-sonnet-5", "pricing": {"prompt": "0.000003", "completion": "0.000015"}}]}
         buckets = {"main": {"input": 1000, "cache_read": 2000, "cache_write": 0, "output": 100}}

@@ -168,9 +168,16 @@ def rollback(backup, boundary=None, redo=None):
     redo = Path(redo) if redo is not None else backup.with_name(backup.name.split(".")[0] + "-redo.json")
     tx = Transaction(redo, None if boundary is None else (boundary, backup.parent, redo.parent))
     for entry in data["files"]:
+        malformed = ValueError("rollback refused: backup entry malformed")
+        if (not isinstance(entry, dict) or not isinstance(entry.get("path"), str)
+                or "before" not in entry or "after_sha256" not in entry or "mode" not in entry):
+            raise malformed
         path = Path(entry["path"])
         current = snapshot(path)
-        original = base64.b64decode(entry["before"], validate=True) if entry["before"] is not None else None
+        try:
+            original = base64.b64decode(entry["before"], validate=True) if entry["before"] is not None else None
+        except (ValueError, TypeError):
+            raise malformed from None
         if "before_symlink" in entry:
             target = entry["before_symlink"]
             if data["schema"] != 2 or not isinstance(target, str) or not target or "\0" in target:

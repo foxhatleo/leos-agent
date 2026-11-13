@@ -12,6 +12,7 @@ The runner evaluates grader regexes as JavaScript. Python's `re` agrees with it
 on the subset the patterns are held to here, so that subset is enforced as well.
 """
 import contextlib
+import importlib.util
 import io
 import json
 import os
@@ -60,11 +61,31 @@ CASE_KEYS = {"schema_version", "name", "description", "tags", "plugins", "runs",
 CONTEXT_KEYS = {"scaffold_script", "history_file", "add_dirs"}
 SCAFFOLD = "stage-fixtures.sh"
 # Case files that are not fixtures: the case definition and its graders.
-CASE_FILES = {"case.yaml", "prompt.md", "graders", SCAFFOLD}
+GENERATOR = "generate.py"
+CASE_FILES = {"case.yaml", "prompt.md", "graders", SCAFFOLD, GENERATOR}
 
 
 def fixture_dirs(case_dir):
+    """A case with a generator stages one generated directory; others ship theirs."""
+    if (case_dir / GENERATOR).is_file():
+        return ["corpus"]
     return sorted(p.name for p in case_dir.iterdir() if p.name not in CASE_FILES)
+
+
+def load_generator(case_dir):
+    spec = importlib.util.spec_from_file_location("eval_generate_" + case_dir.name.replace("-", "_"),
+                                                  case_dir / GENERATOR)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def fixture_source(case_dir, rel, scratch):
+    """The directory a case stages as `rel`: committed, or generated into scratch."""
+    if (case_dir / GENERATOR).is_file():
+        load_generator(case_dir).generate(Path(scratch, "source", rel))
+        return Path(scratch, "source", rel)
+    return case_dir / rel
 
 
 def tree(root):
@@ -448,6 +469,30 @@ def answer_bulk_triage(case_dir, careless=False):
     return match, names
 
 
+def answer_large_corpus(case_dir, careless=False):
+    """Read the generated write-ups: a confirmed expired-certificate root cause
+    and a customer-facing outage. careless matches certificate keywords anywhere
+    in the investigation and root cause."""
+    gen = load_generator(case_dir)
+    banks = {"cert": gen.CAUSE["cert"], "other": sum((v for k, v in gen.CAUSE.items() if k != "cert"), ())}
+    impact = {"yes": gen.IMPACT[True], "no": gen.IMPACT[False]}
+    match, names = [], []
+    with tempfile.TemporaryDirectory() as tmp:
+        gen.generate(tmp)
+        for path in sorted(Path(tmp).glob("INC-*.md")):
+            text = path.read_text(encoding="utf-8")
+            names.append(path.stem)
+            if careless:
+                body = section(text, "Investigation", path) + section(text, "Root cause", path)
+                hit = "certificate" in body and ("expired" in body or "expiry" in body)
+            else:
+                hit = (classify(section(text, "Root cause", path), banks, path) == "cert"
+                       and classify(section(text, "Customer impact", path), impact, path) == "yes")
+            if hit:
+                match.append(path.stem)
+    return match, names
+
+
 def answer_separable_audit(case_dir, careless=False):
     """Flags past removal and on in production, then tier 1 runbooks last
     reviewed before 2026. careless counts a flag that is on only in staging."""
@@ -482,6 +527,7 @@ DERIVATIONS = {
     "escalation-after-failed-check": answer_escalation,
     "quality-guard": answer_quality_guard,
     "bulk-triage": answer_bulk_triage,
+    "large-corpus-audit": answer_large_corpus,
     "separable-audit": answer_separable_audit,
 }
 
@@ -576,7 +622,7 @@ class SuiteLayout(unittest.TestCase):
                     staged = sorted(p.name for p in workspace.iterdir())
                     self.assertEqual(staged, fixture_dirs(case_dir))
                     for rel in staged:
-                        source, copy = case_dir / rel, workspace / rel
+                        source, copy = fixture_source(case_dir, rel, tmp), workspace / rel
                         self.assertFalse(any(p.is_symlink() for p in source.rglob("*")), rel)
                         self.assertEqual(tree(copy), tree(source), rel)
                         # Read-only files, as the prompt says. Directories stay
@@ -680,7 +726,8 @@ class CorrectAnswers(unittest.TestCase):
     def test_the_traps_in_the_fixtures_change_the_answer_and_are_graded_as_wrong(self):
         # Reading commented-out lines as live, or matching keywords instead of
         # reading the sentence, gives a different, wrong answer.
-        for name in ("worker-contract", "quality-guard", "bulk-triage", "separable-audit"):
+        for name in ("worker-contract", "quality-guard", "bulk-triage", "separable-audit",
+                     "large-corpus-audit"):
             with self.subTest(case=name):
                 case_dir = self.cases[name]["dir"]
                 careful, _ = DERIVATIONS[name](case_dir)
@@ -712,6 +759,79 @@ class CorrectAnswers(unittest.TestCase):
                                                  "Past their removal date and still on in production"))
         self.assertEqual(len(answer) - len(flags), index_count(audit / "runbooks" / "INDEX.md",
                                                                "Tier 1 and last reviewed before 2026"))
+
+        corpus = self.cases["large-corpus-audit"]["dir"]
+        answer, _ = answer_large_corpus(corpus)
+        with tempfile.TemporaryDirectory() as tmp:
+            load_generator(corpus).generate(tmp)
+            self.assertEqual(len(answer), index_count(Path(tmp) / "INDEX.md",
+                                                      load_generator(corpus).LABEL))
+
+
+class LargeCorpus(unittest.TestCase):
+    """The generated corpus is reproducible, the right size, and graded by its fact bank."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.case = load_suite()["large-corpus-audit"]
+        cls.gen = load_generator(cls.case["dir"])
+
+    def generated(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.gen.generate(tmp.name)
+        return Path(tmp.name)
+
+    def test_generation_is_deterministic_across_runs_and_processes(self):
+        first, second = self.generated(), self.generated()
+        self.assertEqual(tree(first), tree(second))
+        self.assertEqual(self.gen.digest(first), self.gen.digest(second))
+        with tempfile.TemporaryDirectory() as tmp:
+            done = subprocess.run([sys.executable, str(self.case["dir"] / GENERATOR), tmp],
+                                  capture_output=True, text=True, timeout=60)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertEqual(tree(Path(tmp)), tree(first))
+
+    def test_the_corpus_is_large_and_made_of_many_prose_files(self):
+        files = tree(self.generated())
+        total = sum(len(data) for data in files.values())
+        self.assertTrue(300_000 <= total <= 500_000, total)
+        incidents = [name for name in files if name.startswith("INC-")]
+        self.assertEqual(len(incidents), 120)
+        self.assertEqual(len(files), 121)
+        self.assertIn("INDEX.md", files)
+
+    def test_the_answer_from_the_fact_bank_is_the_one_the_grader_expects(self):
+        expected = self.gen.answer_ids()
+        self.assertTrue(expected)
+        self.assertEqual(expected, sorted(expected))
+        from_text, universe = answer_large_corpus(self.case["dir"])
+        self.assertEqual(from_text, expected)
+        self.assertEqual(universe, [f["id"] for f in self.gen.facts()])
+        grader = self.case["graders"]["correct-answer"][0]
+        self.assertTrue(regex_passes(grader, final_message(expected)))
+
+    def test_the_index_count_is_a_usable_check(self):
+        corpus = self.generated()
+        count = index_count(corpus / "INDEX.md", self.gen.LABEL)
+        self.assertEqual(count, len(self.gen.answer_ids()))
+        self.assertGreater(count, 1)
+
+    def test_keyword_traps_exist_and_give_a_different_answer(self):
+        facts = self.gen.facts()
+        self.assertTrue(any(f["theory"] for f in facts))
+        self.assertTrue(any(f["near_miss"] for f in facts))
+        self.assertTrue(any(f["cause"] == "cert" and not f["customer_facing"] for f in facts))
+        careful, _ = answer_large_corpus(self.case["dir"])
+        careless, _ = answer_large_corpus(self.case["dir"], careless=True)
+        self.assertNotEqual(careful, careless)
+        self.assertFalse(regex_passes(self.case["graders"]["correct-answer"][0], final_message(careless)))
+        # Every write-up carries the sections the prompt tells the model to read.
+        for name, data in tree(self.generated()).items():
+            if name.startswith("INC-"):
+                text = data.decode("utf-8")
+                for heading in ("Investigation", "Root cause", "Customer impact"):
+                    self.assertIn("\n## " + heading + "\n", text, name)
 
 
 # Tier graders read the effective tier the way Claude Code resolves it: an
@@ -791,7 +911,7 @@ class RoutingGraders(unittest.TestCase):
 
     def test_benchmark_cases_report_cheap_delegation_as_an_indicator(self):
         reference = self.grader("cheap-retrieval", "cheap-delegation")
-        for name in ("bulk-triage", "separable-audit"):
+        for name in ("bulk-triage", "separable-audit", "large-corpus-audit"):
             with self.subTest(case=name):
                 grader = self.grader(name, "cheap-delegation")
                 self.assertEqual(grader, reference)

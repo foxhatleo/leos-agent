@@ -325,14 +325,14 @@ class CursorPermission(Sandboxed):
     def test_a_deny_tells_the_model_why(self):
         response = json.loads(self.run_hook(self.start("claude-opus-5")))
         self.assertEqual(response["permission"], "deny")
-        self.assertIn("parent", response["agent_message"])
-        self.assertEqual(response["user_message"], response["agent_message"])
+        self.assertIn("parent", response["user_message"])
+        self.assertNotIn("agent_message", response)
 
     def test_failures_still_answer_allow(self):
         for raw in (b"", b"not json", b"[1]", b"\xff\xfe"):
             with self.subTest(raw=raw):
                 self.assertEqual(json.loads(self.run_hook(raw)), {"permission": "allow"})
-        with mock.patch.object(self.hook.dispatch_guard, "process", side_effect=RuntimeError("boom")):
+        with mock.patch.object(__import__("dispatch_guard"), "process", side_effect=RuntimeError("boom")):
             self.assertEqual(json.loads(self.run_hook(self.start("claude-opus-5"), argv=())), {"permission": "allow"})
 
     def test_the_manifest_names_the_permission_event(self):

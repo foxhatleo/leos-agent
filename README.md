@@ -56,9 +56,9 @@ the session's own sandbox, since a Codex role cannot narrow it, so it stays
 read-only there by instruction. The price guard never moves a lens to another
 profile: where it cannot hold a lens within the reviewer's price, it refuses
 the lens and the reviewer reviews that area itself. Bash stays available for
-reading the PR. Ordinary
-workers do not delegate. Small reviews run locally, and larger reviews divide
-independent areas rather than requiring every lens to reread everything.
+reading the PR. Ordinary workers do not delegate. A small review outside a
+watch may run locally; a large or risky one gives each named lens its own
+files rather than having every lens reread everything.
 
 Delegation is decided by decomposition, not by guessing at size. A step is
 delegated when it is independent of the parent's next step or when its tool
@@ -118,9 +118,9 @@ operation.
 
 | Harness | Policy delivery | Model control | Outcome signal | Important limit |
 |---|---|---|---|---|
-| Claude Code | SessionStart, including forks | `agent.spawn` model setting on builds where it covers teammates too ([hooks/README.md](hooks/README.md#claude-agentspawn-mod)), else Agent/Task argument correction; native profiles | SubagentStop final message, child transcript fallback, child usage from transcript | On the Agent/Task path the first dispatch may precede parent transcript persistence; missing parent data permits dispatch with a diagnostic. Forced settings/provider substitutions also limit enforcement. |
-| Codex | Separate native SessionStart hook | Tier-enforcing explicit spawn selection; model-free native profiles | SubagentStop final message, rollout fallback, cumulative token counts | Hooks need native trust. A renamed multi-agent tool namespace is not matched. Other/customized profiles can still override spawn settings. Encrypted briefs make the escalation marker unobservable; recorded as such. |
-| Cursor | Native always-apply rule | Installed user agents; resolved subagentStart model ceiling | subagentStop summary and status, joined by call id; no usage | No invented Task model argument; hook diagnostics distinguish planned models from completion. Worker no-delegation is instruction-only: no per-agent tool restriction, and no parent-agent identity at subagentStart. |
+| Claude Code | SessionStart, including forks; the Claude render leaves out lines Claude Code's own Agent guidance already covers | `agent.spawn` model setting on builds where it covers teammates too ([hooks/README.md](hooks/README.md#claude-agentspawn-mod)), else Agent/Task argument correction; native profiles | SubagentStop final message, child transcript fallback, child usage from transcript | On the Agent/Task path the first dispatch may precede parent transcript persistence; missing parent data permits dispatch with a diagnostic. Forced settings/provider substitutions also limit enforcement. |
+| Codex | Separate native SessionStart hook | Tier-enforcing explicit spawn selection; model-free native profiles | SubagentStop final message, rollout fallback, cumulative token counts | Hooks need native trust, renewed in `/hooks` after a hook or a script it runs changes. A renamed multi-agent tool namespace is not matched. Other/customized profiles can still override spawn settings. Encrypted briefs make the escalation marker unobservable; recorded as such. |
+| Cursor | Native always-apply rule, plus the live rendered policy as sessionStart `additional_context` | Installed user agents; resolved subagentStart model ceiling | subagentStop summary and status, joined by call id where Cursor sends one; a worker missing its contract lines is asked once through `followup_message`; no usage | No invented Task model argument; hook diagnostics distinguish planned models from completion. Worker no-delegation is instruction-only: no per-agent tool restriction, and no parent-agent identity at subagentStart. |
 | OpenCode 1 (1.4+) | One registered rendered instruction | Native agent selection, confirmed through the SDK | `tool.execute.after` output of a foreground `task`, joined by call id, child model from task metadata; no usage | Task has no model field; a correction that cannot be applied blocks the task. A slash-command subtask's own model is not visible to the guard. Source/config paths must remain valid. |
 | OpenCode 2 | Plugin context hook, rendered once per session | `subagent` model argument, moved to the parent's model when the call or its agent would run over it; native agents listed through the plugin context | `execute.after` result of a foreground `subagent`, joined by call id, child model from the child session's own requests; no usage | `instructions` entries are not loaded. A background subagent's completion is not observed. Source/config paths must remain valid. |
 | Hermes | Frozen system-prompt section | Global native delegation-model ceiling when parent/model are observable | `subagent_stop` per child (`post_tool_call` only when the build lacks it); no usage | Native delegation has one global model, not separate per-task tiers. Older builds skip post-tool hooks for built-in tools; the report then says no completion signal was observed. |
@@ -128,9 +128,9 @@ operation.
 
 Completion capture reads the last 4 KiB of a worker's final text, or of the
 report a Claude child handed back through its hand-back tool, for its
-`Result:` and `Verified:` lines and drops the text. On Claude Code and Codex, a
-leo-* worker whose final message lacks those lines is asked once, at its first
-SubagentStop, to restate its report with them. In Claude Code auto mode, where
+`Result:` and `Verified:` lines and drops the text. On Claude Code, Codex and
+Cursor, a leo-* worker whose final message lacks those lines is asked once, at
+its first SubagentStop, to restate its report with them. In Claude Code auto mode, where
 a worker reports through the hand-back tool instead, its first report without
 them is refused once and the worker is asked to hand it back with both lines.
 Guard modes `warn` and `off` skip both. The dispatch log stores the outcome enum, a verified
@@ -161,8 +161,10 @@ adapters implement only supported controls. See [hook contracts](hooks/README.md
 
 ## Install and upgrade
 
-Requires macOS or Linux, Python 3.9+, and a current public harness. GitHub workflows need
-authenticated `gh`. JavaScript harnesses supply their own Node/Bun runtime.
+Requires macOS or Linux, Python 3.9+, and a current public harness. Claude
+Code builds up to the one [hooks/README.md](hooks/README.md#claude-agentspawn-mod)
+names reject the plugin's hooks file, so none of its hooks load there. GitHub
+workflows need authenticated `gh`. JavaScript harnesses supply their own Node/Bun runtime.
 No OpenAI or Anthropic marketplace submission is needed: use this repository
 as your own plugin source or a local checkout.
 
@@ -173,7 +175,8 @@ removes a `<leos-agent>` block an older release left in the harness's global
 instruction file, so on a fresh machine it has nothing to do there. Where it
 writes files, run it again after upgrades or model-mapping changes. It needs
 the harness's config directory to exist already (run the harness once), and
-never creates one.
+never creates one. A successful install ends with a `Next steps (<harness>):`
+line; on Claude Code there is nothing to install.
 
 ### Claude Code
 
@@ -205,7 +208,7 @@ session cost estimate, and this session's children by tier with their reference
 cost (the same counting and pricing as `dispatch_log.py report`; a reference
 estimate, not a bill). It reads local files only, never the network or a model,
 and prints the model name, or just "Claude", on any error. A different
-`statusLine` already set is a conflict: `--force <path to settings.json>`
+`statusLine` already set is a conflict: `--force-path <path to settings.json>`
 replaces it, and `--uninstall` or `--rollback` puts your previous one back and
 removes the launcher. `/leos-agent:doctor` reports whether the line is installed
 and the launcher resolves a plugin.
@@ -223,8 +226,9 @@ standard, premium, parent and reviewer agent TOMLs, plus the read-only review
 lens, into `~/.codex/agents`.
 Review the current hook definitions in `/hooks`; enabling a plugin does not
 trust its hooks automatically. On upgrade, refresh the marketplace/plugin,
-rerun `$leos-agent:install`, and review any changed hook definition. The
-project does not bypass that native trust boundary.
+rerun `$leos-agent:install`, and review `/hooks` again, also when only a
+script a hook runs changed. The project does not bypass that native trust
+boundary.
 
 ### Cursor
 
@@ -240,6 +244,12 @@ models available to your Cursor account, then rerun the installer. Profiles
 are written under `~/.cursor/agents`; `~/.cursor/rules` is not assumed to be a
 supported global rule location. Upgrade a local clone with `git pull --ff-only`,
 rerun the installer, and reload the plugin.
+
+The plugin's hooks run `scripts/cursor_hook.py` through `$CURSOR_PLUGIN_ROOT`,
+since Cursor runs `subagentStop` from the workspace root. `sessionStart` adds
+the live rendered policy beside the always-apply rule, `subagentStart` checks
+the model ceiling, `subagentStop` re-prompts a worker missing its contract
+lines once, and `preCompact` shows a handoff reminder. Every hook fails open.
 
 ### OpenCode
 
@@ -350,10 +360,11 @@ records the sha256 of every file it writes in `leos-agent-paths.json` in the
 harness config directory, and a file is replaced or removed only while it
 still matches that receipt, this release's copy, or a copy an earlier release
 wrote. On install, an edited copy or a file leos-agent never wrote is a
-conflict that stops the run (`--force <path>` replaces that file, a bare
-`--force` every conflicting file); an edited copy from a release older than v12
-is reported as `preserved` and the rest continues, and only a `--force <path>`
-naming it replaces it. `--check` exits 3, not 0, while a preserved copy keeps
+conflict that stops the run (`--force-path PATH`, repeatable, replaces that
+file; `--force` replaces every conflicting file); an edited copy from a
+release older than v12 is reported as `preserved` and the rest continues, and
+only a `--force-path` naming it replaces it. The older `--force PATH`
+spelling still works. `--check` exits 3, not 0, while a preserved copy keeps
 an older payload. A pending backup left by an interrupted install blocks the
 next install until `--rollback` undoes it. Uninstall and rollback remove only
 directories an install created. On uninstall, anything not provably ours is
@@ -411,21 +422,21 @@ require investigation of actual execution.
 | doctor | Check installation, pricing, model references, and runtime evidence without paid calls. |
 | tune-routing | Configure tiers and diagnose actual native model selection; opt into Claude Code's advisor or `opusplan`. |
 | review-usage | Mechanical usage scan with reference-cost estimates and explicit gaps. |
-| review-pr | Review a pinned GitHub PR, stage it as pending, and submit once you agree. |
+| review-pr | Review a pinned GitHub PR from a read-only worktree, stage it as pending, submit once you agree, and mark it watched. |
 | handoff / handon | Save concise context pointers and resume after checking drift. |
-| watch-review | Claude Monitor watcher that reviews, re-reviews and answers replies like a human reviewer; code polls GitHub, models run only when there is work. |
+| watch-review | Claude Monitor watcher that reviews, re-reviews and answers what is addressed to you like a human reviewer; code polls GitHub, models run only when there is work. |
 | attach-pr | Claude-specific attachment of an existing PR to the desktop session. |
 
 Only small routing instructions and necessary metadata are always present.
 Detailed review procedures remain in deferred reference files. Duplicate
 slash-command wrappers are removed; native skills provide invocation. Explicit
-invocation controls do not universally imply hidden metadata—measure both.
+invocation controls do not universally imply hidden metadata; measure both.
 
-On Codex, a PreCompact hook shows a one-line UI warning before each
+On Codex and Cursor, a PreCompact hook shows a one-line warning before each
 top-level compaction pointing to `$leos-agent:handoff`; the model never
-sees it, and compaction always proceeds. Like every changed hook definition,
-it needs trust in `/hooks` after the upgrade that adds it. Claude Code
-discards a PreCompact hook's message, so it has no equivalent.
+sees it, and compaction always proceeds. On Codex it needs trust in `/hooks`
+like every changed hook. Claude Code discards a PreCompact hook's message, so
+it has no equivalent.
 
 ```sh
 python3 scripts/doctor.py --harness claude --json
@@ -435,7 +446,9 @@ python3 scripts/measure_context.py --check
 python3 scripts/pricing.py resolve claude-sonnet-5
 ```
 
-Default policy bodies are about 2.5 KB, with a 2.6 KB component budget.
+Default policy bodies are 2.3 to 2.6 KB, with a 2.6 KB component budget;
+Claude's is the smallest because it drops lines Claude Code's own guidance
+covers. Every skill body and reference file has its own budget.
 Measurement counts metadata separately and treats bytes/4 only as a rough
 prose-token proxy. Harness wrappers, history, tools, cache behavior, and child
 work are outside that static measurement. No assertion is made that instruction
@@ -451,61 +464,110 @@ unknown cache/model costs remain explicit. Compaction pre-context counts are
 not discarded tokens. Requested/corrected/blocked dispatches are distinct from
 observed child models. Missing/rotated logs do not prove a broken install.
 
-PR review pins the full head SHA and reads code only at it, from GitHub, never
-from a local checkout; it never silently moves line anchors or retries old
-findings against a new head. Replacing a pending review requires
-an unchanged ownership receipt and saves recovery data. Comments and replies
-are staged pending. After each review you see the verdict, the findings, what
-other reviewers and bots said, and the plan, and nothing is submitted,
-replied to or resolved until you answer. The event follows the verdict:
-ready-to-merge approves, neutral comments, seriously-problematic requests
-changes. A draft you edited is yours to submit. Only verified addressed
-threads you started can be resolved; resolution is public and requires
-SHA-bound evidence. Reviews read everyone's comments, bots included, as
-input to verify, and never reply to anyone else's thread.
-Every changed non-generated file is read before staging. A name alone exempts
-only a file the PR modifies, never one it adds, and a lockfile edit that adds a
-package origin is read too. After a complete
-review whose draft is no longer pending, a new head re-reads only the files
-whose patch changed. Each finding is
-re-checked at the SHA before staging, and the repository's own CLAUDE.md,
-AGENTS.md and REVIEW.md rules count only when quoted. Blocking findings also
-go, in one batch, to a fresh-context read-only lens at the standard tier or
-above, which confirms or refutes each against the code at the SHA; a refuted
-one is dropped or downgraded, and each result is recorded with the verdict.
-When you submit a review it staged, the next
-review of that PR notes which staged comments you deleted, rewrote or
-downgraded, as data-only entries (category, path glob, a short normalized
-pattern) in `~/.leos-agent-local/review-learnings/<owner>__<repo>.json`.
-Reviews read them only when entries exist and report each suppression: a
-learning may omit a minor or nit finding or downgrade a major one, never
-omit a major one or touch a blocking one. `ghreview.py learnings -R OWNER/REPO list` shows them and
-`forget --id ID` or `forget --all` drops them. Review runs at the
-standard tier; a consequential PR or an escalation runs it at premium.
-Severity decides the verdict: data loss, a security hole or a crash on a
-realistic path requests changes; something that does not work as intended is
-a comment; minor findings and nits ride along with an approval, and an
-unlikely corner case is minor at most. Neutral and seriously-problematic
-always come with a pending comment; CI never affects the verdict. A ready-to-merge verdict stands until the PR diff changes, hunk
-line numbers aside: a merge from the base keeps it unless the base touched
-lines within three of a PR hunk or a file GitHub sends no patch for. An
-optional cross-model lens, off unless the user enables it, sends the pinned
-diff to a second provider's CLI.
-Watchers use cross-process leases, bounded retries, and completion reports;
-emission alone never records a PR as reviewed. Once you submit a review, the
-watcher follows that PR until it is merged or closed: a new head is
-re-reviewed, and a reply on one of your threads is judged against the code
-and answered (conceded and resolved, or rebutted once) after you agree.
-`/watch-review fully-auto` skips the questions. A head waiting on the user's
-decision is parked without spending retries. A head already reviewed by hand
-with every changed non-generated file read, or carried from an earlier
-complete review, is not emitted again, whatever its verdict.
-
 Logs omit prompt text by default and rotate at 1 MiB plus one retained file.
 `LEOS_AGENT_DISPATCH_LOG_PROMPTS=1` is an explicit debug option that retains
 brief excerpts; avoid it for sensitive work. Installation backups and handoffs
 stay local. Handoff names are validated, reservations avoid collisions, and
 symlink escapes are refused by the helper.
+
+### PR review and the watcher
+
+`/review-pr` reviews one PR the way a careful human reviewer would, and
+nothing goes public until you answer for that PR.
+
+- **Pinned and read-only.** It pins the full head SHA and checks it out as a
+  detached worktree outside your projects, with git hooks off, so reviewers
+  can read whole files, callers and tests. Line anchors still come from
+  GitHub at that SHA; a moved head means a re-review, never old findings
+  moved onto new lines. Reviewers never run the PR's code.
+- **Running code only on your yes.** When reading cannot settle something
+  (frontend behaviour especially), the report proposes commands under
+  `Exercise:` and you can pick "Run checks first". Your session then runs
+  them with a rebuilt environment holding no tokens, binding servers to
+  localhost. A PR from a fork never runs.
+- **Coverage.** Every changed non-generated file is read before staging. A
+  name alone exempts only a file the PR modifies, never one it adds, and a
+  lockfile edit that adds a package origin is read too. After a complete
+  review, a new head re-reads only the files whose patch changed.
+- **Lenses.** Security and correctness always; tests, performance,
+  frontend/UX and requirements when the PR touches them. Over about 150
+  changed lines, or in a risky area (auth, money, migrations, infra,
+  secrets), each runs as its own read-only `leo-lens`; otherwise the reviewer
+  works through them as a checklist. A blocking finding is confirmed by a
+  fresh-context lens at the standard tier or above before it is staged.
+- **Others' input.** Bot reviews (Copilot, Cursor, Claude and others), tool
+  reports such as Sonar, failed check annotations and other people's comments
+  are candidates to verify. One that holds is restated in your voice as your
+  own comment, never as a reply on their thread.
+- **CI.** Pending checks never delay a verdict. A failure the PR caused is a
+  finding; a flaky or unrelated one is a note to you, never posted.
+- **Verdict.** Data loss, a security hole or a crash on a realistic path
+  requests changes; something that does not work as intended comments; minor
+  findings, nits and concrete test gaps ride on an approval. Every review
+  carries a body, and an approval is one specific line, never "LGTM". A
+  ready-to-merge verdict stands until the PR diff changes, hunk line numbers
+  aside. The repository's own CLAUDE.md, AGENTS.md and REVIEW.md rules count
+  only when quoted.
+- **Writing.** Short, casual, specific, `nit:` for nits, tables when they
+  help. Text with an em dash is refused before it reaches GitHub.
+- **Replies.** It answers only comments addressed to you after your last
+  one, in threads you started, replied in or were @mentioned in, and in the
+  PR conversation when someone answers your review or comment. It resolves
+  only threads you started, with SHA-bound evidence of the fix, and rebuts a
+  thread at most once.
+- **Drafts.** Comments and replies are staged pending. Replacing a pending
+  review needs an unchanged ownership receipt and saves recovery data; a
+  draft you edited is yours to submit.
+
+Each PR you are asked about opens with a header and its round:
+
+```
+## Alice Chen [ABC-123] Fix pagination for empty pages
+Round #2: New commit
+```
+
+The round counts every pass on that PR. Its label is `Initial review`,
+`New commit`, `Comment response`, `New commit + Comment response`, or
+`New commit (base merge only)`. Answers can come late: before acting, the
+review rechecks the PR, applies what is still valid, re-reviews only what
+drifted, and tells you in one line what changed meanwhile.
+
+When you submit a review it staged, the next review of that PR notes which
+staged comments you deleted, rewrote or downgraded, as data-only entries in
+`~/.leos-agent-local/review-learnings/<owner>__<repo>.json`. A learning may
+omit a minor or nit finding or downgrade a major one, never omit a major one
+or touch a blocking one. `ghreview.py learnings -R OWNER/REPO list` shows
+them and `forget --id ID` or `forget --all` drops them. Review runs at the
+standard tier; a consequential PR or an escalation runs it at premium. An
+optional cross-model lens, off unless you enable it, sends the pinned diff to
+a second provider's CLI.
+
+`/watch-review` (Claude Code) follows a repository from one session:
+
+| Source | What happens |
+|---|---|
+| A PR you ran `/review-pr` on | Watched at once |
+| A direct review request (not a team request) | Reviewed |
+| A re-request at a head already reviewed | Looked at again |
+| A new head on a followed PR | Re-reviewed |
+| A reply or comment addressed to you | Judged against the code and answered |
+| Your approval gone stale where the repo wants a fresh one | Offered a one-line re-approval |
+
+A PR stays followed until merged or closed; there is no unwatch, and a draft
+pauses it. Up to two background reviewers work while you are asked about one
+PR at a time in a blocking question. A head waiting on a decision only you
+can make is parked without spending retries. Approval freshness is read from
+the base branch's rules (`watch_review.py config --freshness auto|strict|off`
+overrides it). Each piece of work is one line:
+
+```
+<verb> OWNER/REPO#N head=SHA [prev=SHA] [threads=K] [conversation=1] [by=LOGIN] claim=TOKEN URL | TITLE
+```
+
+The verbs are `review-requested`, `re-review`, `re-requested`, `follow-up`
+and `re-approve`, and everything after the first ` | ` is the untrusted
+title. Watchers use cross-process leases, bounded retries and completion
+reports; emitting a line never records a PR as reviewed.
 
 ### Evaluating cost and quality
 
@@ -516,7 +578,8 @@ the plugin's default tiers apply rather than your `routing.json`. A run receives
 only `EVAL_*` variables beside an allowlist of your shell, so each case sets
 `EVAL_LEOS_AGENT_PRICE_REFRESH=off`, which the SessionStart hook honours like
 `LEOS_AGENT_PRICE_REFRESH=off`; no run starts a price refresh. Fixtures are
-small directories inside each case. A run starts in an empty workspace and
+small directories inside each case, except `large-corpus-audit`, whose corpus
+a seeded `generate.py` writes at staging. A run starts in an empty workspace and
 `add_dirs` would only grant reads to a path the model is never told, so each
 case's `stage-fixtures.sh` copies its fixtures into the workspace read-only.
 Pass `--scaffold` so it runs; without it every case scores 0 in both arms. No
@@ -532,6 +595,7 @@ no judge model is called.
 | `quality-guard` | Correctness only |
 | `bulk-triage` | Correct answer. Thirty-six prose tickets with an index count as the check, so the policy allows a cheap worker to do the read. Its cheap-delegation indicator reports whether one did |
 | `separable-audit` | Correct answer. Two independent scans, each with its own index count, that could go to separate cheap workers. Same indicator |
+| `large-corpus-audit` | Correct answer. About 400 KB of incident write-ups with traps and an index count, where a cheap worker doing the read should pay off. Same indicator |
 
 ```sh
 claude plugin eval . --scaffold --no-publish --max-cost-usd 8
@@ -539,9 +603,10 @@ claude plugin eval . --scaffold --case local-small-task --runs 1 --ablation none
 ```
 
 Every run is a real model call billed to your plan or API account. A full run
-is 7 cases × 3 runs × 2 arms = 42 agent runs; `--max-cost-usd` caps the
+is 8 cases × 3 runs × 2 arms = 48 agent runs; `--max-cost-usd` caps the
 spend. Each case pins its parent in `model:`: Opus for `cheap-retrieval`,
-`escalation-after-failed-check`, `bulk-triage`, and `separable-audit`, whose
+`escalation-after-failed-check`, `bulk-triage`, `separable-audit`, and
+`large-corpus-audit`, whose
 routing needs tiers below the parent
 (under Sonnet, one tier up from cheap is the parent's own price, which the
 policy keeps local), and Sonnet for the rest. `--model` overrides every case's
@@ -559,7 +624,7 @@ with-arm indicators, because the baseline has no `leo-*` agents;
 indicator is expected off). At the default threshold of 1.0, one failed scored
 grader fails the case. `COST` is the CLI's list-price estimate for both arms of
 a case together. It is not a bill, and the summary does not split it by arm.
-Results show how the policy behaves on these seven tasks with the pinned model;
+Results show how the policy behaves on these eight tasks with the pinned model;
 they do not establish savings in general.
 
 `scripts/bench.py` turns the suite into a paired cost benchmark. `run` calls

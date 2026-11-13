@@ -25,16 +25,16 @@ The repo root *is* the plugin. Six manifests sit side by side over one tree:
 
 | Path | Role |
 |---|---|
-| `rules/preferences.md` | The always-loaded policy. Cursor reads it raw as an always-apply rule, so the routing region's shipped default is written for Cursor; OpenCode reads a copy the installer renders, current only until the next upgrade or routing change (`--check` flags it); every other harness renders it live through `scripts/emit_payload.py` or a native hook, replacing that region. |
+| `rules/preferences.md` | The always-loaded policy. Cursor reads it raw as an always-apply rule, so the routing region's shipped default is written for Cursor, and its sessionStart hook adds the live render; OpenCode reads a copy the installer renders, current only until the next upgrade or routing change (`--check` flags it); every other harness renders it live through `scripts/emit_payload.py` or a native hook, replacing that region. The Claude render also drops `payload.CLAUDE_DROP`, lines Claude Code's own Agent guidance already covers. |
 | `skills/` | Portable skills. `skills-claude/` holds the two Claude-only ones. `reference/` subdirectories hold deferred procedure text. |
 | `agents/` | Claude Code agent profiles (`leo-cheap`, `leo-standard`, `leo-premium`, `leo-parent`, `leo-reviewer`, and the read-only review lens `leo-lens`, whose tier comes from the dispatch's `model`). The retired `leo-runner`/`leo-executor` names have no profile but still map to cheap/standard in routing code. |
 | `payload/` | Codex agent TOMLs, the bundled price catalog, legacy-copy hashes. |
 | `hooks/` | Native hook manifests per harness. Scripts they call live in `scripts/` so npm installs ship them. |
-| `scripts/` | Installer, guard, routing engine, diagnostics, release tooling. Stdlib-only Python, Python 3.9 floor. |
+| `scripts/` | Installer, guard, routing engine, diagnostics, release tooling, and the review helpers (`ghreview.py`, `watch_review.py`, `review_worktree.py`, `review_peer.py`). Stdlib-only Python, Python 3.9 floor. |
 | `tests/` | `unittest` suites plus `tests/js/` for Node 22. |
-| `evals/` | `claude plugin eval` suite for the delegation policy; every run is a paid model call. `tests/test_evals.py` is its offline gate. `scripts/bench.py` pairs its two arms into a significance-tested cost benchmark; `tests/test_bench.py` covers its statistics and parsing offline. |
+| `evals/` | `claude plugin eval` suite for the delegation policy; every run is a paid model call. `tests/test_evals.py` is its offline gate. `large-corpus-audit` generates its 446 KB corpus at staging from a seeded `generate.py` rather than committing it. `scripts/bench.py` pairs its two arms into a significance-tested cost benchmark; `tests/test_bench.py` covers its statistics and parsing offline. |
 | `evals-write/` | The write-capable eval suite, run with `--eval-dir evals-write` and the `--allow-tools` grant in `bench.GRANTS`; kept out of `evals/` so that suite stays read-only. `tests/test_evals_write.py` is its offline gate. |
-| `~/.leos-agent-local` | Per-machine state (routing, handoffs, dispatch log, backups, review learnings). Never inside a versioned plugin cache. |
+| `~/.leos-agent-local` | Per-machine state (routing, handoffs, dispatch log, backups, review learnings, review worktrees and `review-worktrees.json`). Never inside a versioned plugin cache. |
 
 ## Gates and when to run them
 
@@ -61,8 +61,15 @@ python3 scripts/measure_context.py --check
   `modules` entry, or the guard's Claude correction path changes.
 - `check.py` is the structural gate (version agreement, manifest paths, skill
   frontmatter, invocation split, plugin-root references, installer
-  idempotency, marker safety, determinism). Read its numbered comments before
-  adding a new kind of artifact.
+  idempotency, marker safety, determinism, identifying strings, and 10: the
+  Claude render differs from the raw policy only by `CLAUDE_DROP`, each entry
+  matching once; 11: every script parses at Python 3.9 grammar; 12: every
+  documented `python3 "<plugin-root>/scripts/X.py"` line in a skill parses
+  against `X.build_parser()`; 13: no em dash in shipped prompt text, docs or
+  script strings). Read its numbered comments before adding a new kind of
+  artifact. Invariant 9 keeps denied tokens only as salted hashes; add one
+  with `python3 scripts/check.py --deny-hash WORD`, and never write the token
+  itself into the repo.
 - Git fixtures can inherit signing settings; sandboxed signing or npm-cache
   writes may fail locally. Confirm the cause, use process-local Git overrides
   and a temporary npm cache, and rerun. Never dismiss the module or change
@@ -88,6 +95,9 @@ Use `scripts/measure_context.py --check`; its ceilings are real budgets.
 - Dedupe rules across files and do not restate harness system instructions.
   Keep the rule and its reason; wordy instructions cost tokens and are harder
   for models to follow.
+- Every `skills/*/reference/*.md` and every portable skill body has its own
+  budget; `tests/test_policy.py` fails a reference file without one. Raise a
+  ceiling deliberately and record before and after in the commit message.
 - Static UTF-8 bytes and bytes/4 are component measurements, not total injected
   tokens or task savings. Report the baseline and exclusions; include agent
   descriptions and dispatch briefs when comparing designs.
@@ -210,10 +220,12 @@ The policy in `rules/preferences.md` applies to work on this repo too.
   In `claude plugin eval`, `add_dirs` only grants reads; a run starts in an
   empty workspace and is never told the path, so each case stages its fixtures
   with `scaffold_script` and runs need `--scaffold`.
-- **Codex** uses native `/hooks` trust for changed hook definitions; do not
-  bypass it or assume enabling a plugin approves hooks. Batch related releases.
-  The PreCompact handoff reminder is Codex only: Codex shows a PreCompact
-  `systemMessage` in its UI, while Claude Code discards it.
+- **Codex** uses native `/hooks` trust for changed hook definitions, and a
+  changed script a hook runs needs the same re-trust; do not bypass it or
+  assume enabling a plugin approves hooks. Batch related releases. Codex shows
+  a PreCompact `systemMessage` in its UI and Cursor a preCompact
+  `user_message`; Claude Code discards both kinds, so it gets no handoff
+  reminder.
   `spawn_agent` selects the model by `model` and `reasoning_effort`; `agent_type`,
   offered once roles exist, layers its role config after them. A role cannot
   set `sandbox_mode`: a child keeps its parent's sandbox (codex-rs
@@ -224,7 +236,16 @@ The policy in `rules/preferences.md` applies to work on this repo too.
   rollout briefs are unavailable data, not zero-length work.
 - **Cursor** remains best-effort. It has no per-agent tool restriction and no
   parent-agent identity at `subagentStart`; worker no-delegation is prose only.
-  Validate against native templates and disclose runtime coverage separately.
+  Plugin hooks run from the plugin directory, but `stop` and `subagentStop`
+  run from the workspace root, so `hooks-cursor.json` calls scripts through
+  `$CURSOR_PLUGIN_ROOT`. Read only documented fields (`subagent_id` and
+  `tool_call_id` at start; stop documents no id; there is no `agent_message`,
+  so a deny carries `user_message`). `sessionStart` returns the live rendered
+  policy as `additional_context`, `subagentStop` re-prompts a worker missing
+  its contract lines once through `followup_message`, and `cursor_hook.py`
+  always prints one JSON object and fails open, since invalid JSON blocks a
+  permission hook. Validate against native templates and disclose runtime
+  coverage separately.
 - **OpenCode** config can add skill directories (`skills.paths`, `skills.urls`)
   and plugins get a `config(cfg)` hook, but on OpenCode 1 the installer still
   copies skills with the absolute plugin root baked in. Its config is
@@ -294,23 +315,36 @@ The policy in `rules/preferences.md` applies to work on this repo too.
 
 ## PR review and watcher invariants
 
-The canonical procedure is `skills/review-pr/reference/procedure.md`. Preserve
-these contracts when changing it or `scripts/ghreview.py`:
+The canonical procedure is `skills/review-pr/reference/procedure.md`; the
+front end's steps are in `submit.md`, `followup.md`, `execution.md` and
+`watch.md` beside it. Preserve these contracts when changing them,
+`scripts/ghreview.py`, `scripts/watch_review.py` or
+`scripts/review_worktree.py`:
 
-- Pin the full head SHA, linked requirements, and prior threads. Read PR code
-  only at that SHA (`ghreview.py show`/`extract`), never from a working tree,
-  which is usually at another revision. Mutations go through the helper;
-  never use `gh pr review`. Reviews and replies are staged pending. Only
-  `ghreview.py submit` and `reply --post` publish, and only after the user
-  answered for that PR, or in a watch the user started `fully-auto`.
+- Pin the full head SHA, linked requirements, and prior threads. Reviewers
+  read PR code at that SHA from a detached worktree (`review_worktree.py add`:
+  outside any project, hooks off, exit 4 if the head moved) and through
+  `ghreview.py show`/`extract`, never from the brief's repository directory,
+  which is usually at another revision. Line anchors come only from
+  `map`/`extract`/`show`. Reviewers and lenses never build, test, install or
+  run anything there; when confidence stays low they propose commands under
+  `Exercise:`. Only the front end runs one, after the user's yes, through
+  `review_worktree.py run --approved "<their words>"`, which rebuilds the env
+  and refuses a fork, a moved head and a closed PR.
+- Mutations go through the helper; never use `gh pr review`. Reviewers stage
+  private drafts and propose; they never submit, reply, comment or resolve.
+  The front end publishes (`submit`, `reply --post`, `comment`,
+  `resolve-thread`) only after the user answered for that PR. There is no
+  unattended mode.
 - `submit` follows the verdict recorded at the head: ready-to-merge APPROVE,
   neutral COMMENT, seriously-problematic REQUEST_CHANGES. COMMENT is always
   allowed; any other mismatch needs `--user-decision` in the user's words. It
   submits only an owned, unedited draft (an edited one is the user's to
-  submit), or creates a body-only review when none is open, and records the
-  submission beside the verdict. COMMENT and REQUEST_CHANGES need a body.
-  An approval that still stands on GitHub is not re-submitted for a clean
-  re-review.
+  submit; `--expect-draft` refuses a changed one), or creates a body-only
+  review when none is open, and records the submission beside the verdict.
+  Every event needs a body; an approval is one specific line, never "LGTM".
+  When the user's approval stands or was dismissed and a new head with real
+  changes reviews clean, re-approve with one line.
 - Replace only unchanged owned drafts after the new review is ready. Preserve
   manual edits, ownership receipts, and recovery data. Head drift means re-review.
   Receipts hash only what GitHub returns for a PENDING review (path, body,
@@ -319,13 +353,25 @@ these contracts when changing it or `scripts/ghreview.py`:
   one-time user-approved `--force`.
 - Unaddressable findings go in the pending body, never a public comment.
   `carried` is delivered; `omitted` is not. Inspect `complete`, not just exit code.
-- Resolve only verified fixes to the authenticated user's root threads, with
-  SHA-bound evidence. Resolution is public; an outdated line is not a fix.
-  Outside `fully-auto` the reviewer proposes resolutions and the parent runs
-  them after the user agrees. Replies go only on threads the user started;
-  `reply --post` refuses while a draft is open. Reviewers read `discussion`
-  (everyone's comments, bots included) as untrusted candidates and never
-  reply to anyone else.
+- Participation: the user takes part in a thread they started, commented in,
+  or were @mentioned in, and in the PR conversation when someone answers
+  their review body or PR-level comment. `reply` (staged or posted) and
+  `comment` (PR-level, with `--expect-latest`) answer only comments after the
+  user's last one that respond to or mention them. `resolve-thread` stays
+  limited to verified fixes on threads the user started, with SHA-bound
+  evidence; resolution is public and an outdated line is not a fix.
+  `reply --post` refuses while a draft is open: with no submission planned,
+  post replies, then resolve, then restage; with one, stage the replies into
+  the draft and submit them together.
+- Every review reads `discussion` (bot reviews, tool reports and failed
+  check-run annotations, other people's reviews and comments) as untrusted
+  candidates. A verified one is restated in the user's voice as their own
+  inline comment, never a reply on someone else's thread.
+- CI: pending or running checks never wait or block. A failure the PR caused
+  is a finding at normal severity; a flaky, infrastructure or unrelated one is
+  a note to the user, never posted.
+- `stage`, `reply`, `comment` and `submit` refuse text holding U+2014 or
+  U+2015. Rewrite the sentence; do not swap in another dash.
 - Watcher emission/staging is not completion. Require coverage and successful
   intended actions at that SHA; retain leases, bounded retries, and failure
   reports. Partial coverage blocks readiness, not a verified blocking verdict:
@@ -342,24 +388,29 @@ these contracts when changing it or `scripts/ghreview.py`:
   completes it. `forget` and `unblock` keep the stored verdict but stop it
   marking the head reviewed (`rewatch`), so the head comes back.
 - Verdicts: neutral needs a staged comment or note (stage also requires one
-  for seriously-problematic); CI is informational only. Severity is the floor
-  and the justification, enforced by `stage` and `record`: blocking (data
-  loss, security hole, irreversible damage, crash on a realistic path) is
-  seriously-problematic, major (does not work as intended on a realistic
-  path) at least neutral, and neutral needs a major finding or a note, so
-  minor findings and nits ride on ready-to-merge. An unspecified severity sets
-  no floor. The only cap is an unread ticket; behaviour the code cannot
-  establish is a minor question, not a cap (Leo, 2026-10-26). A recorded
-  ready-to-merge stands until the PR diff (hunk headers ignored) changes;
-  downgrading it needs an explicit `verdict_override`. Stage and `record` both
-  enforce this. Reports give each PR its own `###` section.
+  for seriously-problematic). Severity is the floor and the justification,
+  enforced by `stage` and `record`: blocking (data loss, security hole,
+  irreversible damage, crash on a realistic path) is seriously-problematic,
+  major (does not work as intended on a realistic path) at least neutral, and
+  neutral needs a major finding or a note, so minor findings, nits and
+  concrete test gaps on changed paths ride on ready-to-merge. An unspecified
+  severity sets no floor. The only cap is an unread ticket; behaviour the
+  code cannot establish is a minor question, not a cap (Leo, 2026-10-26). A
+  recorded ready-to-merge stands until the PR diff (hunk headers ignored)
+  changes; downgrading it needs an explicit `verdict_override`. Stage and
+  `record` both enforce this. Reports give each PR its own section.
+- Lenses: security and correctness always; tests, performance, frontend/UX
+  and requirements when the PR touches them. When `map`'s
+  `fan_out.recommended` is true (over 150 changed non-generated lines, or a
+  risky path: auth, money, migrations, infra, secrets), each named lens is its
+  own `leo-lens` in one batch; otherwise the reviewer runs them as a
+  checklist. Lenses may read the worktree, never execute.
 - A blocking finding is staged only after one batched fresh-context
   `leo-lens` validation (standard tier or above, never cheap; a lens, so depth
   stays one) confirms it; refuted ones are dropped or downgraded. Non-blocking
   findings are not sent to it. Stage accepts an optional `validation` list
   (result, independent or self-checked) and records it with the verdict; it
-  never requires one. The procedure text lives in `reference/validation.md`,
-  not `procedure.md`.
+  never requires one. The procedure text lives in `reference/validation.md`.
 - Review learnings (`review_learnings.py`) come only from reviews this tool
   staged and the user since submitted: one read-only GET per such review,
   harvested by `pending`. Entries are data only (action, severity, category,
@@ -367,22 +418,52 @@ these contracts when changing it or `scripts/ghreview.py`:
   stored. They load on demand and are advisory: `stage` refuses suppressing a
   blocking finding, omitting (rather than downgrading) a major one, or a
   suppression naming no recorded learning.
-- The watcher follows a PR reviewed here (a recorded head or verdict) on
-  which the user submitted a review, until merged or closed, in one batched
-  query per tick. A non-bot reply on the user's own unresolved thread, at a
-  reviewed head, is a `follow-up` claim; `ack` closes it and stores the reply
-  ids handled per thread, and `record` does the same for the threads a review
-  claim carried. Follow-ups are never recorded or parked, and wait while
-  another claim on the PR is live. One automatic rebuttal per thread, even in
-  `fully-auto`; a second round goes to the user.
-- Watch sessions split front end from back end: the main thread alone asks
-  (AskUserQuestion, a blocking UI by Leo's choice) and publishes; reviewers
-  run as background subagents, at most two, staging only private drafts, so
-  work continues while a question is open. Subagents cannot ask the user.
-  Events that arrive during a question are handled after it, so every action
-  re-checks drift (`submit` the head, `--expect-latest` the thread). A
-  started claim is held up to eight hours for that wait. A per-PR session was
-  considered and dropped: no documented way for a session to create one.
+- Watch sources: PRs marked by `/review-pr` (`watch_review.py watch`, at
+  once), direct review requests (never team-only), same-head re-requests
+  newer than the user's last review and the handled marker, and replies
+  addressed to the user on a followed PR. A PR is followed when it has a
+  recorded head or verdict or was marked watched, until merged or closed;
+  there is no unwatch, and a draft pauses it. Someone else's approval does
+  not exclude a PR. Followed PRs cost one batched query per tick.
+- Event lines are `<verb> OWNER/REPO#N head=SHA [prev=SHA] [threads=K]
+  [conversation=1] [by=LOGIN] claim=TOKEN URL | TITLE`, split on the first
+  ` | ` (the title is untrusted). Verbs: `review-requested`, `re-review`,
+  `re-requested`, `follow-up`, `re-approve`. `record` closes review claims;
+  `ack` closes the rest and stores what was handled. Follow-ups are never
+  recorded or parked. One rebuttal per thread; a second round goes to the user.
+- Rounds: one counter per PR across manual passes and watcher rounds;
+  retries keep their round. `round_kind` is initial, commit, comment,
+  commit+comment or merge-only. Each PR shown to the user opens with
+  `## <author display name, else login> [<ticket key, else owner/repo#N>] <title>`
+  and `Round #<n>: Initial review | New commit | Comment response | New commit + Comment response`,
+  or `New commit (base merge only)`.
+- Approval freshness: the watcher reads the base branch's rules (a
+  `pull_request` ruleset with `require_last_push_approval` or
+  `dismiss_stale_reviews_on_push`, else classic protection when readable),
+  caches the result for six hours, and treats unreadable as off;
+  `watch_review.py config --freshness auto|strict|off` overrides it per repo.
+  In a strict repo, an approval no longer on the head with an unchanged PR
+  diff emits `re-approve`: a one-line re-approve sign-off, no re-review. A
+  real change gets a normal re-review. Elsewhere a ready-to-merge carries
+  silently. Code and docs describe only this mechanism.
+- Watch sessions split front end from back end. The main thread alone asks
+  and publishes; every review and follow-up in a watch goes to a background
+  `leo-reviewer`, at most two at once (`start` exits 5 at the cap and the line
+  waits queued). Sign-off is one PR per blocking AskUserQuestion, by Leo's
+  choice. `watch_review.py await` runs as soon as a finished report joins
+  the sign-off queue (right after `start` for a re-approve), so a waiting PR
+  holds neither a reviewer slot nor the eight-hour cap while the monitor
+  runs. Take a fresh `ghreview.py snapshot` every time you ask. A reply and
+  then a resolve on the same thread both pass the plan's `--expect-latest`:
+  comments the user posted after it do not count as a change.
+  After the answer, which can come late: `recheck`, apply only what `valid`
+  allows (`--expect-draft`, `--expect-latest`), re-dispatch what drifted, and
+  tell the user in one line what changed meanwhile. `record` runs after
+  sign-off, because it removes the claim and the worktree; `release`,
+  `forget`, `ack`, pruning and a closed PR remove the worktree too. A
+  manual pass's `watch --head` keeps the watcher off that head until it is
+  recorded or 24 hours pass. A per-PR session
+  was considered and dropped: no documented way for a session to create one.
 - The cross-model lens (`review_peer.py`) runs only when the user enabled it,
   discloses that the diff goes to a second provider, never counts as coverage,
   and raises confidence only when `independence_verified` is true.
@@ -398,7 +479,7 @@ these contracts when changing it or `scripts/ghreview.py`:
   context until invoked and needs no extra token.
 - Data directories are created 0700; file modes are preserved on rewrite.
 
-## Settled choices — do not reopen without new evidence or Leo's request
+## Settled choices: do not reopen without new evidence or Leo's request
 
 - Keep the compact always-on policy. Moving everything into lazy skills was
   tried and rejected because discovery fails under pressure. Keep live policy
@@ -408,9 +489,14 @@ these contracts when changing it or `scripts/ghreview.py`:
   verification, planning/execution, worktrees, freshness, visual verification,
   memory) or the old setup wizard for MCPs/connectors/harness feature toggles.
   Evidence before completion belongs in the compact policy, not another workflow.
-- Do not reinstate mandatory delegation for every task or every review. Small
-  work stays local; substantial independent work earns a worker. Legacy tier
-  names are compatibility aliases, not vocabulary for new guidance.
+  The review worktree is not a generic worktree skill: it is review-pr's
+  read-only checkout at the pinned SHA, created and removed by its script.
+- Do not reinstate mandatory delegation for every task. Small work stays
+  local; substantial independent work earns a worker. Leo reopened this for
+  reviews on 2026-11-13: inside a watch every review goes to a background
+  reviewer, and above the fan-out threshold each named lens is its own agent;
+  a small PR outside a watch may still be reviewed locally. Legacy tier names
+  are compatibility aliases, not vocabulary for new guidance.
 - Tier selection is escalation on evidence, not prediction. No classifier or
   network call on the dispatch path decides whether or where to delegate; the
   outcome log is for tuning the written policy. Delegation depth stays at one
@@ -420,14 +506,13 @@ these contracts when changing it or `scripts/ghreview.py`:
 - Keep `rules/preferences.md` valid unrendered for Cursor. Use the existing
   routing marker region, not per-harness template placeholders in the raw rule.
 - `watch-review` behaves like a human reviewer: review, re-review new heads,
-  answer replies on the user's threads, and ask before anything goes public
-  unless started `fully-auto` (Leo, 2026-10-26). Anything posted reads like a
-  person wrote it: short, casual, one to three sentences per idea, tables when
-  they help, no em dashes or run-ons. The review body has no headings or
-  boilerplate: notes are plain sentences, unanchored findings plain
-  `path:line` bullets. Each PR shown to the user opens with `### owner/repo#N
-  — title`, then author and round (one per review or follow-up started,
-  retries not counted), then context, then the question.
+  answer what is addressed to the user, and ask before anything goes public,
+  always. Leo removed the mode that published without asking on 2026-11-13;
+  do not restore it. Anything posted reads like a person wrote it: short, casual,
+  one to three sentences per idea, `nit:` for nits, tables when they help, no
+  em dashes or run-ons. The review body has no headings or boilerplate: notes
+  are plain sentences, unanchored findings plain `path:line` bullets. The
+  header and round shown to the user are in the invariants above.
 - `watch-review` is Claude Code only and streaming only. Do not restore detached
   `claude -p`, blocking re-arm modes, or model-based polling: idle ticks cost
   zero model tokens. Leo's accepted exception (2026-10-09): where Monitor has

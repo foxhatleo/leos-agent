@@ -32,20 +32,54 @@ LIMITS = {
 	# Command descriptions are listed alongside skills in Claude Code and Cursor,
 	# so they are always-loaded context on the same terms as skill metadata.
 	"command_description_bytes": 0,
-	"review_dispatch_bytes": 1_800,
+	"review_dispatch_bytes": 2_200,
 	# Deferred, but every review reads it: the reviewer worker's brief names it.
-	"review_procedure_bytes": 20_000,
+	"review_procedure_bytes": 23_600,
 	# Deferred and conditional: read only before staging a blocking finding, and
 	# only when the repository has recorded review learnings.
-	"review_validation_bytes": 2_600,
+	"review_validation_bytes": 2_900,
 	"review_learnings_bytes": 2_200,
 	# Read by the parent once a review is staged, to show it and ask; and by a
 	# watcher's follow-up round, or a reviewer judging pushback on a thread.
-	"review_submit_bytes": 3_000,
-	"review_followup_bytes": 2_800,
+	"review_submit_bytes": 5_450,
+	"review_followup_bytes": 3_900,
+	# Read when a pass marks its PR watched, a lens runs, a check is proposed or
+	# run, or the cross-model lens is considered.
+	"review_watch_bytes": 1_360,
+	"review_lenses_bytes": 5_300,
+	"review_execution_bytes": 2_500,
+	"review_cross_model_bytes": 4_200,
 	# Claude-only skill bodies, one budget each; a new skill there needs one.
 	"attach_pr_body_bytes": 11_200,
-	"watch_review_body_bytes": 9_600,
+	"watch_review_body_bytes": 10_200,
+	# Portable skill bodies and their references, each limited to its current size plus about 15%.
+	"doctor_skill_body_bytes": 4_450,
+	"handoff_skill_body_bytes": 4_800,
+	"handon_skill_body_bytes": 3_400,
+	"install_skill_body_bytes": 4_750,
+	"review_usage_skill_body_bytes": 4_000,
+	"review_usage_sources_reference_bytes": 5_100,
+	"tune_routing_advisor_reference_bytes": 5_750,
+	"tune_routing_harnesses_reference_bytes": 3_200,
+	"tune_routing_skill_body_bytes": 3_950,
+}
+
+# Portable skills whose bodies load when the skill is invoked.
+PORTABLE_BODY_SKILLS = ("doctor", "install", "handoff", "handon", "review-usage", "tune-routing")
+# Every skills/*/reference/*.md file needs an entry here and a ceiling above.
+REFERENCE_FILES = {
+	"review_procedure_bytes": "skills/review-pr/reference/procedure.md",
+	"review_validation_bytes": "skills/review-pr/reference/validation.md",
+	"review_learnings_bytes": "skills/review-pr/reference/learnings.md",
+	"review_submit_bytes": "skills/review-pr/reference/submit.md",
+	"review_followup_bytes": "skills/review-pr/reference/followup.md",
+	"review_watch_bytes": "skills/review-pr/reference/watch.md",
+	"review_lenses_bytes": "skills/review-pr/reference/lenses.md",
+	"review_execution_bytes": "skills/review-pr/reference/execution.md",
+	"review_cross_model_bytes": "skills/review-pr/reference/cross-model.md",
+	"tune_routing_advisor_reference_bytes": "skills/tune-routing/reference/advisor.md",
+	"tune_routing_harnesses_reference_bytes": "skills/tune-routing/reference/harnesses.md",
+	"review_usage_sources_reference_bytes": "skills/review-usage/reference/sources.md",
 }
 
 
@@ -58,8 +92,22 @@ def frontmatter(path):
 
 
 def field(text, name):
-	match = re.search(rf"(?m)^{re.escape(name)}:\s*(.+?)\s*$", text)
-	return match.group(1).strip() if match else ""
+	"""A frontmatter value; a folded or literal block (>, >-, |, |-) is joined to one line."""
+	lines = text.splitlines()
+	for index, line in enumerate(lines):
+		match = re.match(rf"{re.escape(name)}:[ \t]*(.*?)\s*$", line)
+		if not match:
+			continue
+		value = match.group(1)
+		if re.fullmatch(r"[>|][+-]?", value):
+			block = []
+			for following in lines[index + 1:]:
+				if following and not following[0].isspace():
+					break
+				block.append(following.strip())
+			return " ".join(part for part in block if part)
+		return value.strip()
+	return ""
 
 
 def byte_len(text):
@@ -77,7 +125,7 @@ def skill_metadata_bytes(paths, implicit):
 
 def codex_implicit(path, _frontmatter):
 	policy = path.parent / "agents" / "openai.yaml"
-	return not policy.is_file() or "allow_implicit_invocation: false" not in policy.read_text(encoding="utf-8")
+	return not policy.is_file() or re.search(r"(?m)^\s*allow_implicit_invocation:\s*false\b", policy.read_text(encoding="utf-8")) is None
 
 
 def claude_implicit(_path, fm):
@@ -127,6 +175,19 @@ def rendered_policy():
 	return sizes
 
 
+def plugin_name():
+	"""The plugin's name: plugin.json, else package.json (the npm file set ships no
+	.claude-plugin), else "leos-agent"."""
+	for rel in (".claude-plugin/plugin.json", "package.json"):
+		try:
+			name = json.loads((ROOT / rel).read_text(encoding="utf-8")).get("name")
+		except (OSError, ValueError, AttributeError):
+			continue
+		if isinstance(name, str) and name:
+			return name.rsplit("/", 1)[-1]
+	return "leos-agent"
+
+
 def measurements():
 	portable = sorted((ROOT / "skills").glob("*/SKILL.md"))
 	claude_only = sorted((ROOT / "skills-claude").glob("*/SKILL.md"))
@@ -137,7 +198,7 @@ def measurements():
 	agent_paths = sorted((ROOT / "payload" / "codex-agents").glob("*.toml"))
 	# Claude Code lists every plugin agent in the parent's always-loaded agent
 	# roster, so each entry is part of the static footprint too.
-	plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["name"]
+	plugin = plugin_name()
 	claude_agent_bytes = sum(byte_len(claude_agent_listing(path, plugin))
 		for path in sorted((ROOT / "agents").glob("*.md")))
 	command_paths = sorted((ROOT / "commands").glob("*.md")) + sorted((ROOT / "commands-claude").glob("*.md"))
@@ -146,6 +207,9 @@ def measurements():
 		fm, _ = frontmatter(path)
 		command_bytes += byte_len(field(fm, "description"))
 	claude_bodies = {f"{path.parent.name.replace('-', '_')}_body_bytes": body_bytes(path) for path in claude_only}
+	skill_bodies = {f"{name.replace('-', '_')}_skill_body_bytes": body_bytes(ROOT / "skills" / name / "SKILL.md")
+		for name in PORTABLE_BODY_SKILLS}
+	reference_bytes = {key: body_bytes(ROOT / rel) for key, rel in REFERENCE_FILES.items()}
 	return {
 		"global_policy_bytes": byte_len(policy_body.strip()),
 		"rendered_policy_bytes": max(rendered_policy().values()),
@@ -156,20 +220,21 @@ def measurements():
 		"claude_agent_description_bytes": claude_agent_bytes,
 		"command_description_bytes": command_bytes,
 		"review_dispatch_bytes": byte_len(review_body.strip()),
-		"review_procedure_bytes": body_bytes(ROOT / "skills" / "review-pr" / "reference" / "procedure.md"),
-		"review_validation_bytes": body_bytes(ROOT / "skills" / "review-pr" / "reference" / "validation.md"),
-		"review_learnings_bytes": body_bytes(ROOT / "skills" / "review-pr" / "reference" / "learnings.md"),
-		"review_submit_bytes": body_bytes(ROOT / "skills" / "review-pr" / "reference" / "submit.md"),
-		"review_followup_bytes": body_bytes(ROOT / "skills" / "review-pr" / "reference" / "followup.md"),
 		**claude_bodies,
+		**skill_bodies,
+		**reference_bytes,
 	}
 
 
-def main(argv=None):
+def build_parser():
 	parser = argparse.ArgumentParser(description=__doc__)
 	parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
 	parser.add_argument("--check", action="store_true", help="fail when a committed ceiling is exceeded")
-	args = parser.parse_args(argv)
+	return parser
+
+
+def main(argv=None):
+	args = build_parser().parse_args(argv)
 
 	values = measurements()
 	# A measurement without a ceiling (a new Claude-only skill) fails --check

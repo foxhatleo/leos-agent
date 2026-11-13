@@ -113,9 +113,9 @@ class AttachTarget(unittest.TestCase):
         self.assertEqual((code, out["pr_number"], out["head_owner"]), (0, 7, "leo"))
 
     def test_ticket_search_sets_fork_prs_aside(self):
-        prs = [pr(9, "stranger", True, head="other-DOCS-12", title="DOCS-12 fix"),
-               pr(4, "leo", False, head="leo-docs-12", title="DOCS-12 fix")]
-        code, out = self.resolve("DOCS-12", "leo/repo", prs)
+        prs = [pr(9, "stranger", True, head="other-ABC-12", title="ABC-12 fix"),
+               pr(4, "leo", False, head="leo-abc-12", title="ABC-12 fix")]
+        code, out = self.resolve("ABC-12", "leo/repo", prs)
         self.assertEqual((code, out["pr_number"]), (0, 4))
 
     def test_an_explicit_number_for_a_fork_pr_resolves_with_a_warning(self):
@@ -200,9 +200,50 @@ class AttachCommand(unittest.TestCase):
                         self.assertEqual((result.returncode, result.stdout), (0, url + "\n"), result.stderr)
 
 
+class TicketAndBranchMatching(unittest.TestCase):
+    def test_ticket_keys_match_on_token_boundaries(self):
+        m = resolver.mentions_ticket
+        self.assertFalse(m("ABC-12", "abc-123-foo"))
+        self.assertFalse(m("ABC-12", "xabc-12-foo"))
+        self.assertTrue(m("ABC-12", "abc-12-foo"))
+        self.assertTrue(m("ABC-12", "fix/ABC-12"))
+        self.assertTrue(m("ABC-12", "[ABC-12] Fix the thing"))
+
+    def test_remote_branch_lookup_is_an_exact_name(self):
+        seen = []
+
+        def fake_run(cmd, cwd=None):
+            seen.append(cmd)
+            return 0, "aaa\trefs/heads/feature\nbbb\trefs/heads/x/feat", ""
+
+        original = resolver.run
+        resolver.run = fake_run
+        try:
+            self.assertTrue(resolver.branch_exists_remote("feature"))
+            self.assertFalse(resolver.branch_exists_remote("feat"))
+            self.assertFalse(resolver.branch_exists_remote("x/feature"))
+        finally:
+            resolver.run = original
+        self.assertEqual(seen[0], ["git", "ls-remote", "--heads", "origin", "refs/heads/feature"])
+
+    def test_a_workdir_with_a_single_quote_is_quoted_for_the_shell(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workdir = os.path.join(tmp, "it's here")
+            os.mkdir(workdir)
+            url = "https://github.com/o/r/pull/7"
+            command = resolver.build_attach_command(workdir, url, "main", "b")
+            result = subprocess.run(["/bin/bash", "-c", command], env={"PATH": "/usr/bin:/bin", "HOME": tmp},
+                                    capture_output=True, text=True)
+        self.assertEqual((result.returncode, result.stdout), (0, url + "\n"), result.stderr)
+
+    def test_the_suggested_worktree_is_dashed_branch_plus_ten_hex(self):
+        path = resolver.suggested_worktree("/r", "fix/a")
+        self.assertRegex(os.path.basename(path), r"^fix-a-[0-9a-f]{10}$")
+
+
 class Ownership(unittest.TestCase):
     def test_remote_owner_forms(self):
-        cases = {"git@github.com:leo/repo.git": "leo", "github-work:leo/repo.git": "leo",
+        cases = {"git@github.com:leo/repo.git": "leo", "gh-alias:leo/repo.git": "leo",
                  "https://github.com/leo/repo.git": "leo", "https://github.com/leo/repo": "leo",
                  "ssh://git@github.com:22/leo/repo.git": "leo", "https://u:t@github.com/leo/repo/": "leo",
                  "/srv/git/repo.git": None, "file:///srv/leo/repo.git": None}

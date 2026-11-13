@@ -1,5 +1,5 @@
 interface:
   display_name: "Install preferences"
-  short_description: "Install Leo's harness preferences"
+  short_description: "Install harness preferences"
 policy:
   allow_implicit_invocation: false

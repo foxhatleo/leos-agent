@@ -1,17 +1,17 @@
 ---
 name: handoff
 disable-model-invocation: true
-description: Write the current session's context to a leos-agent handoff document so a later session — in this harness or another — can pick the work up with the handon skill.
+description: Write the current session's context to a leos-agent handoff document so a later session, in this harness or another, can pick the work up with the handon skill.
 argument-hint: "[what to emphasise]"
 ---
 
-# /handoff — write a handoff document
+# /handoff: write a handoff document
 
 A handoff is what survives when this session does not. It is read cold, by a
 model with no memory of anything that happened here, possibly in a different
 harness on a different day. Write for that reader.
 
-`$ARGUMENTS`, when present, says what to **emphasise while writing** — "focus on
+`$ARGUMENTS`, when present, says what to **emphasise while writing**: "focus on
 the caching work", "the installer is a dead end, say why". It steers this
 document and is not stored; the handoff must stand alone without it.
 
@@ -24,7 +24,7 @@ That path is fixed and needs no plugin root.
 
 ## Steps
 
-1. **Pick a slug** — 2–4 words, kebab-case, naming the *work* and not the act of
+1. **Pick a slug**: 2–4 words, kebab-case, naming the *work* and not the act of
    handing it off: `cache-aware-preferences`, `flaky-auth-retry`, not
    `session-handoff-2`. Then claim it:
 
@@ -35,7 +35,7 @@ That path is fixed and needs no plugin root.
    It atomically reserves a private file holding only `created:`, then prints
    the de-collided name on the first line, the path to write on the
    second, and the `created:` timestamp on the third. Use the name it printed,
-   not the slug you asked for — it may have appended a suffix — and copy the
+   not the slug you asked for (it may have appended a suffix), and copy the
    timestamp verbatim rather than composing one.
 
    If the helper is unavailable, report the missing root/script. Do not use a
@@ -51,7 +51,7 @@ That path is fixed and needs no plugin root.
    gh repo view --json nameWithOwner -q .nameWithOwner
    ```
 
-   `repo` may be absent (not a GitHub repo) — omit the key rather than guessing.
+   `repo` may be absent (not a GitHub repo); omit the key rather than guessing.
    `harness` is the one you are running in: `claude`, `codex`, `cursor`,
    `hermes`, `pi`, or `opencode`.
 
@@ -63,7 +63,7 @@ That path is fixed and needs no plugin root.
    created: <the timestamp step 1 printed>
    harness: claude
    repo: foxhatleo/leos-agent
-   cwd: /Users/leoliang/workspace/leos-agent
+   cwd: /Users/<you>/workspace/leos-agent
    branch: main
    head: 16a724e
    ---
@@ -79,14 +79,14 @@ That path is fixed and needs no plugin root.
 
    Sections, and what each is for:
 
-   - **Goal** — what Leo is trying to achieve and why. Two or three sentences.
-   - **Done** — what actually landed, with paths. Claims here need the same
+   - **Goal**: what the user is trying to achieve and why. Two or three sentences.
+   - **Done**: what actually landed, with paths. Claims here need the same
      evidence a completion claim needs; "probably works" is a Gotcha, not a Done.
-   - **Next** — the real next steps, in order, specific enough to start on.
-   - **Key files** — path plus why it matters. Not a directory listing.
-   - **Decisions** — settled calls and the reason, so the next session does not
+   - **Next**: the real next steps, in order, specific enough to start on.
+   - **Key files**: path plus why it matters. Not a directory listing.
+   - **Decisions**: settled calls and the reason, so the next session does not
      relitigate them.
-   - **Gotchas** — traps, approaches already tried and rejected, and anything
+   - **Gotchas**: traps, approaches already tried and rejected, and anything
      that only works in one harness.
 
 4. **Report** the name and that the handon skill resumes it (`/handon <name>` on Claude Code).
@@ -99,7 +99,7 @@ anyone commits, and it costs a fresh context to load something it could have
 read itself.
 
 **Harness-portable.** The reader may be on Codex or OpenCode. Anything that only
-works here — the `Monitor` tool, `attach-pr`, a Claude-only skill — gets said
+works here (the `Monitor` tool, `attach-pr`, a Claude-only skill) gets said
 out loud as harness-specific rather than assumed.
 
 Keep the body under about 100 lines. A handoff longer than that is a session

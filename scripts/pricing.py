@@ -138,16 +138,26 @@ def cache_path():
     return Path(_data_root()) / "model-prices.json"
 
 
+def _stamp(data):
+    value = data.get("fetched_at")
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else float("-inf")
+
+
 def load():
-    """Read without creating files. Corrupt caches fall back to the snapshot."""
+    """Read without creating files: the cache or the bundled snapshot, whichever
+    has the newer fetched_at. A corrupt copy is skipped."""
+    best = None
     for path in (cache_path(), BUNDLED):
         try:
             data = json.loads(path.read_text())
             if data.get("schema") == 1 and isinstance(data.get("models"), list):
                 snapshot({"data": data["models"]})
-                return data
+                if best is None or _stamp(data) > _stamp(best):
+                    best = data
         except (OSError, ValueError, TypeError, AttributeError):
             continue
+    if best is not None:
+        return best
     return {"schema": 1, "source": SOURCE, "fetched_at": None, "models": []}
 
 
@@ -423,12 +433,16 @@ def refresh_background(force=False):
         pass
 
 
-def main():
+def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("refresh", "show", "resolve"))
     parser.add_argument("model", nargs="?")
     parser.add_argument("--force", action="store_true")
-    args = parser.parse_args()
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
     try:
         if args.command == "refresh":
             print("refreshed" if refresh(args.force) else "fresh or refresh already running")

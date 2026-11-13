@@ -5,7 +5,7 @@ description: Inspect observed local usage by model and main/subagent work over a
 argument-hint: "[a time window like 7d, or what to diagnose]"
 ---
 
-# Review usage — leos-agent
+# Review usage | leos-agent
 
 Resolve the absolute plugin root from `LEOS_AGENT_ROOT`, `CLAUDE_PLUGIN_ROOT`,
 `PLUGIN_ROOT`, or, when those are unset in the shell, the nearest ancestor of
@@ -13,8 +13,11 @@ this skill file containing `rules/preferences.md`.
 Run the mechanical scanner; do not read transcripts into your context:
 
 ```
-python3 "<plugin-root>/scripts/usage_scan.py" --since 7d --json
+python3 "<plugin-root>/scripts/usage_scan.py" --since 7d
 ```
+
+The default output is text and is what you read first. Add `--json` only to
+drill into one number the text does not show.
 
 Use the user's window or default to 7d. `--harness NAME` narrows both usage and
 guard records. Read `reference/sources.md` when interpreting schema details.
@@ -46,8 +49,12 @@ something to send to the maintainer, run the bundler and hand back the path
 it prints:
 
 ```
-python3 "<plugin-root>/scripts/usage_bundle.py" --since 7d --out <path.zip>
+python3 "<plugin-root>/scripts/usage_bundle.py" --since 7d --out "<abs-temp-dir>/leos-agent-usage.zip"
 ```
+
+`--out` must be an absolute path to a new file in a temp directory outside the
+repository (the parent must exist and the file must not); the bundler refuses
+an existing path.
 
 Use the same window as the report. The zip is self-contained for a reader
 who does not have this codebase: the scan as JSON and text from one run, a

@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parent.parent
 EMITTER = ROOT / "scripts" / "emit_payload.py"
 
 sys.path.insert(0, str(ROOT / "scripts"))
+import payload  # noqa: E402
 import routing  # noqa: E402
 
 CONFIG_OVERRIDES = ("CLAUDE_CONFIG_DIR", "CODEX_HOME", "HERMES_HOME", "PI_CODING_AGENT_DIR",
@@ -226,6 +227,66 @@ class TestFailsOpen(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             self.assertEqual(result.stdout, "")
             self.assertNotIn("Traceback", result.stdout)
+
+
+class TestClaudePolicyRender(unittest.TestCase):
+    """Claude's own Agent tool guidance covers some policy lines; only Claude drops them."""
+
+    DROPPED = ("Do not repeat finished investigation to hand it off.",
+               "Pass large briefs and diffs as file paths, not inline.",
+               "Do not copy history or repeat returned work.",
+               "parallel work must justify its integration cost")
+
+    @staticmethod
+    def flat(text):
+        return " ".join(text.split())
+
+    def test_claude_render_omits_the_dropped_sentences(self):
+        out = self.flat(emit(ROOT, {"LEOS_AGENT_HARNESS": "claude"}).stdout)
+        for sentence in self.DROPPED:
+            with self.subTest(sentence=sentence):
+                self.assertNotIn(sentence, out)
+
+    def test_every_other_harness_keeps_them(self):
+        for harness in routing.HARNESSES:
+            if harness == "claude":
+                continue
+            out = self.flat(emit(ROOT, {"LEOS_AGENT_HARNESS": harness}).stdout)
+            for sentence in self.DROPPED:
+                with self.subTest(harness=harness, sentence=sentence):
+                    self.assertIn(sentence, out)
+
+    def test_the_rules_that_must_stay_are_still_there(self):
+        out = self.flat(emit(ROOT, {"LEOS_AGENT_HARNESS": "claude"}).stdout)
+        for kept in ("Result: escalate", "Escalation from <tier>:", "Never deliberately choose a child more expensive",
+                     "Verify the final result yourself", "name the check that proves the result"):
+            with self.subTest(kept=kept):
+                self.assertIn(kept, out)
+
+    def test_removal_leaves_well_formed_prose(self):
+        out = emit(ROOT, {"LEOS_AGENT_HARNESS": "claude"}).stdout
+        for line in out.splitlines():
+            self.assertNotIn("  ", line.lstrip(" "))
+        self.assertNotIn(" .", out)
+        self.assertNotIn(";.", out)
+        self.assertNotIn(" \n", out)
+        self.assertNotIn("\n\n\n", out)
+
+    def test_claude_render_is_deterministic_and_smaller_by_the_dropped_bytes(self):
+        config = {}
+        first = payload.payload_body(ROOT, "claude", config)
+        self.assertEqual(first, payload.payload_body(ROOT, "claude", config))
+        raw = payload.payload_body(ROOT, "codex", config)
+        stanza = len(routing.stanza("codex", config)) - len(routing.stanza("claude", config))
+        expected = 0
+        for entry in payload.CLAUDE_DROP:
+            expected += len(payload._drop_pattern(entry).search(raw).group(0))
+        self.assertGreater(expected, 150)
+        self.assertEqual(len(raw) - len(first), expected + stanza)
+
+    def test_a_drop_that_no_longer_matches_fails_loudly(self):
+        with self.assertRaises(payload.PayloadError):
+            payload.drop_claude_redundant("A policy that lost its sentences.")
 
 
 if __name__ == "__main__":

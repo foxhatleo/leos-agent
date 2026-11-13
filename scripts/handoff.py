@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """handoff: machine-local session handoff documents for leos-agent.
 
-A handoff is a markdown file one session writes and another session — in this
-harness or a different one — reads to pick the work back up. This script owns
+A handoff is a markdown file one session writes and another session, in this
+harness or a different one, reads to pick the work back up. This script owns
 naming, paths, and listing only. It never composes prose: the model writes the
 body, because summarising a session is the one part of this that needs a model.
 
 DATA lives under the same root as state.py, ${LEOS_AGENT_LOCAL_PATH:-
-$HOME/.leos-agent-local}, never derived from this file's own location — a
+$HOME/.leos-agent-local}, never derived from this file's own location: a
 plugin update can wipe or relocate the code, and must never take handoffs with
 it. Files land at <root>/handoffs/<name>.md.
 
@@ -21,6 +21,7 @@ Nothing is ever pruned automatically; `rm` is the only way a handoff goes away.
 --all is passed; when that leaves nothing it falls back to showing all of them
 rather than sending the caller away to re-run. Exit codes: 0 ok, non-zero on error.
 """
+import argparse
 import datetime as dt
 import os
 import re
@@ -30,12 +31,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from state import _data_root  # noqa: E402  same data root, deliberately shared
 
 SLUG = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
+# A lookup may be a prefix that stops at a hyphen ("cache-").
+PREFIX = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 
 def handoff_dir():
     # 0700 on creation, matching state.py: handoffs carry project context that
     # is nobody else's business on a shared machine. The root is created first
-    # so it gets the mode too — makedirs applies mode to the leaf only.
+    # so it gets the mode too: makedirs applies mode to the leaf only.
     root = _data_root()
     os.makedirs(root, mode=0o700, exist_ok=True)
     path = os.path.join(root, "handoffs")
@@ -73,7 +76,7 @@ def frontmatter(path):
 
 
 def title_of(path):
-    """The first `# ` heading — after the frontmatter when there is one, from
+    """The first `# ` heading: after the frontmatter when there is one, from
     the top of the file when there is not."""
     try:
         with open(path) as fh:
@@ -120,15 +123,20 @@ def entries():
 
 
 def resolve(name):
-    exact = file_for(name)
-    if os.path.isfile(exact):
-        return name, exact
+    """An exact name wins, then a unique prefix. Input is lowercased."""
+    name = name.lower() if isinstance(name, str) else name
+    if isinstance(name, str) and SLUG.fullmatch(name):
+        exact = file_for(name)
+        if os.path.isfile(exact):
+            return name, exact
+    if not isinstance(name, str) or not PREFIX.fullmatch(name):
+        raise ValueError("handoff name must contain only lowercase letters, digits and hyphens")
     matches = [row for row in entries() if row[0].startswith(name)]
     if len(matches) == 1:
         return matches[0][0], matches[0][1]
     if not matches:
         sys.exit(f"handoff: no handoff named {name!r}. `handoff.py list --all` shows what exists.")
-    sys.exit("handoff: {!r} is ambiguous — {}".format(name, ", ".join(row[0] for row in matches)))
+    sys.exit("handoff: {!r} is ambiguous: {}".format(name, ", ".join(row[0] for row in matches)))
 
 
 def cmd_new(argv):
@@ -160,7 +168,7 @@ def cmd_new(argv):
         break
     print(name)
     print(file_for(name))
-    # The `created:` value, ready to copy verbatim — a model asked to invent
+    # The `created:` value, ready to copy verbatim; a model asked to invent
     # "now" gets it wrong often enough to matter.
     print(created)
 
@@ -225,10 +233,23 @@ def cmd_rm(argv):
     print(f"removed {argv[0]}")
 
 
+def build_parser():
+    parser = argparse.ArgumentParser(prog="handoff.py", description="machine-local session handoff documents")
+    sub = parser.add_subparsers(dest="command")
+    sub.add_parser("new", help="print the de-collided name and its path").add_argument("slug")
+    sub.add_parser("path", help="resolve a name (exact, else unique prefix)").add_argument("name")
+    listing = sub.add_parser("list", help="recent handoffs, newest first")
+    listing.add_argument("--all", action="store_true")
+    listing.add_argument("--limit", type=int)
+    sub.add_parser("rm", help="delete one (exact name only)").add_argument("name")
+    return parser
+
+
 def main(argv):
     commands = {"new": cmd_new, "path": cmd_path, "list": cmd_list, "rm": cmd_rm}
     if not argv or argv[0] not in commands:
         sys.exit(__doc__.strip())
+    build_parser().parse_args(argv)
     commands[argv[0]](argv[1:])
 
 
