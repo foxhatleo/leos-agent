@@ -2,7 +2,7 @@
 """state: machine-local JSON state for leos-agent skills and agents.
 
 CODE ships inside the plugin (possibly a versioned cache that a plugin update
-can wipe or relocate) — this file must never derive the data root from its own
+can wipe or relocate), so this file must never derive the data root from its own
 __file__ location. DATA always lives under
 ${LEOS_AGENT_LOCAL_PATH:-$HOME/.leos-agent-local}, independent of where this
 script itself happens to run from, so a plugin update can never lose state.

@@ -13,6 +13,7 @@ Prints a single JSON object to stdout:
 Exit code is 0 for "ok" and 1 otherwise, so callers can branch on it directly.
 """
 
+import argparse
 import json
 import os
 import re
@@ -458,15 +459,28 @@ def resolve_workdir(branch, root):
     return None, "not_checked_out"
 
 
+USAGE = "usage: resolve_attach_target.py <pr-number|pr-url|branch|TICKET-123>"
+
+
+def build_parser():
+    # No -h: every argument is an identifier to resolve, as it always was.
+    parser = argparse.ArgumentParser(prog="resolve_attach_target.py", add_help=False,
+                                     description=__doc__.splitlines()[0])
+    parser.add_argument("identifier", help="pr-number, pr-url, branch, or TICKET-123")
+    return parser
+
+
 def main():
     if len(sys.argv) != 2 or not sys.argv[1].strip():
-        die("usage: resolve_attach_target.py <pr-number|pr-url|branch|TICKET-123>")
+        die(USAGE)
+    # `--` keeps an identifier that starts with a dash an identifier.
+    identifier = build_parser().parse_args(["--", sys.argv[1]]).identifier
 
     root = repo_root()
     require_gh()
     repo = name_with_owner()
 
-    pr, note = resolve(sys.argv[1], repo)
+    pr, note = resolve(identifier, repo)
     branch = pr.get("headRefName")
     base_ref = pr.get("baseRefName") or "main"
     pr_url = pr.get("url")

@@ -676,7 +676,7 @@ def opencode_payload(src, root, rename_install=False):
 	"""An OpenCode copy's content: the plugin root baked in, optionally renamed.
 
 	OpenCode reads the copies out of ~/.config/opencode, far from the scripts
-	they invoke, and sets none of the resolution env vars — so the placeholder
+	they invoke, and sets none of the resolution env vars, so the placeholder
 	is resolved here, at install time, where the root is known for certain.
 	The install skill is additionally renamed to match the leo-install/
 	directory it is copied into, keeping directory and frontmatter in

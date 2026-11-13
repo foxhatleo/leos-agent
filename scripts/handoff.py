@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """handoff: machine-local session handoff documents for leos-agent.
 
-A handoff is a markdown file one session writes and another session — in this
-harness or a different one — reads to pick the work back up. This script owns
+A handoff is a markdown file one session writes and another session, in this
+harness or a different one, reads to pick the work back up. This script owns
 naming, paths, and listing only. It never composes prose: the model writes the
 body, because summarising a session is the one part of this that needs a model.
 
 DATA lives under the same root as state.py, ${LEOS_AGENT_LOCAL_PATH:-
-$HOME/.leos-agent-local}, never derived from this file's own location — a
+$HOME/.leos-agent-local}, never derived from this file's own location: a
 plugin update can wipe or relocate the code, and must never take handoffs with
 it. Files land at <root>/handoffs/<name>.md.
 
@@ -76,7 +76,7 @@ def frontmatter(path):
 
 
 def title_of(path):
-    """The first `# ` heading — after the frontmatter when there is one, from
+    """The first `# ` heading: after the frontmatter when there is one, from
     the top of the file when there is not."""
     try:
         with open(path) as fh:

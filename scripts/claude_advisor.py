@@ -149,7 +149,7 @@ def change(args, model):
     return report
 
 
-def main(argv=None):
+def build_parser():
     parser = argparse.ArgumentParser(prog="claude_advisor.py", description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("show")
@@ -161,7 +161,11 @@ def main(argv=None):
         command.add_argument("--apply", action="store_true", help="write the change; without it nothing is written")
     restore = sub.add_parser("restore")
     restore.add_argument("backup")
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
     try:
         if args.command == "show":
             import doctor
