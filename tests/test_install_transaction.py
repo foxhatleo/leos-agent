@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -52,6 +53,29 @@ class Transactions(unittest.TestCase):
                 tx.commit()
             self.assertEqual(a.read_text(), "original")
             self.assertFalse(b.exists())
+
+    def test_rollback_of_a_malformed_backup_entry_is_a_clean_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            a = root / "a"
+            a.write_text("original")
+            tx = transaction.Transaction(root / "backup.json")
+            tx.stage(a, b"replacement")
+            tx.commit()
+            good = json.loads((root / "backup.json").read_text())
+            for key in ("path", "before", "after_sha256", "mode"):
+                with self.subTest(missing=key):
+                    broken = json.loads(json.dumps(good))
+                    del broken["files"][0][key]
+                    (root / "backup.json").write_text(json.dumps(broken))
+                    with self.assertRaisesRegex(ValueError, "backup entry malformed"):
+                        transaction.rollback(root / "backup.json")
+            broken = json.loads(json.dumps(good))
+            broken["files"][0]["before"] = "!!not base64!!"
+            (root / "backup.json").write_text(json.dumps(broken))
+            with self.assertRaisesRegex(ValueError, "backup entry malformed"):
+                transaction.rollback(root / "backup.json")
+            self.assertEqual(a.read_text(), "replacement")
 
     def test_rollback_preserves_permissions_and_refuses_later_edits(self):
         with tempfile.TemporaryDirectory() as tmp:

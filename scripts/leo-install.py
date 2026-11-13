@@ -22,8 +22,8 @@ hashes of earlier releases' copies, or this release's own copy. A header saying
 "Managed by leos-agent" is never enough on its own.
 
 Usage:
-    leo-install.py <harness> [--dry-run | --uninstall | --check | --rollback] [--force [PATH ...]]
-    leo-install.py claude --statusline [--force PATH]    (opt in to the cost status line launcher)
+    leo-install.py <harness> [--dry-run | --uninstall | --check | --rollback] [--force] [--force-path PATH]...
+    leo-install.py claude --statusline [--force-path PATH]    (opt in to the cost status line launcher)
 
 Harnesses: claude, codex, cursor, hermes, pi, opencode
 """
@@ -568,22 +568,33 @@ KEPT = {
 }
 
 
+def force_paths(args):
+	"""The paths --force-path names (a list --force, from older callers, counts too)."""
+	paths = []
+	force = getattr(args, "force", None)
+	if isinstance(force, (list, tuple)):
+		paths.extend(force)
+	paths.extend(getattr(args, "force_path", None) or [])
+	return paths
+
+
+def force_all(args):
+	"""Whether a bare --force asks to replace every conflict."""
+	force = getattr(args, "force", None)
+	return force is True or (isinstance(force, (list, tuple)) and not force)
+
+
 def forced(args, dest, state):
 	"""Whether --force lets this install replace `dest`, a copy in `state`.
 
-	`--force PATH` names the files to replace, conflicts or preserved older
+	`--force-path PATH` names the files to replace, conflicts or preserved older
 	copies alike. A bare --force replaces conflicts only: an edited copy from an
 	older release is replaced only when its path is named.
 	"""
-	force = getattr(args, "force", None)
-	if force is True:
-		force = []
-	if force is None or force is False:
-		return False
-	if not force:
-		return state in ("edited", "foreign")
 	target = os.path.realpath(dest)
-	return any(os.path.realpath(os.path.abspath(os.path.expanduser(path))) == target for path in force)
+	if any(os.path.realpath(os.path.abspath(os.path.expanduser(path))) == target for path in force_paths(args)):
+		return True
+	return force_all(args) and state in ("edited", "foreign")
 
 
 def install_file_copy(dest, payload, args, receipt=None, label=None, model=None):
@@ -621,11 +632,11 @@ def install_file_copy(dest, payload, args, receipt=None, label=None, model=None)
 		if current != payload:
 			state = ownership(dest, raw, receipt, model=model)
 			if state == "legacy" and not forced(args, dest, state):
-				return Result(label, "preserved", KEPT[state] + f"; delete it, or re-run with --force {dest}, "
+				return Result(label, "preserved", KEPT[state] + f"; delete it, or re-run with --force-path {dest}, "
 					"to take this release's copy")
 			if state in ("edited", "foreign") and not forced(args, dest, state):
 				return Result(label, "conflict", KEPT[state] + "; move your changes elsewhere, or re-run with "
-					f"--force {dest} to replace it")
+					f"--force-path {dest} to replace it")
 	if receipt is not None:
 		receipt.record(dest, payload)
 	return write_if_changed(dest, payload, current, existed, False, args, label)
@@ -1038,11 +1049,8 @@ def statusline_value(shim):
 
 def names_path(args, path):
 	"""Whether --force names `path` explicitly. A bare --force never covers a statusLine."""
-	force = getattr(args, "force", None)
-	if not force or force is True:
-		return False
 	target = os.path.realpath(path)
-	return any(os.path.realpath(os.path.abspath(os.path.expanduser(named))) == target for named in force)
+	return any(os.path.realpath(os.path.abspath(os.path.expanduser(named))) == target for named in force_paths(args))
 
 
 def manage_shim(shim, text, record, args):
@@ -1066,7 +1074,7 @@ def manage_shim(shim, text, record, args):
 			remove_file(shim)
 		return Result(label, "removed"), None
 	if existed and not mine and not names_path(args, shim):
-		return Result(label, "conflict", f"leos-agent did not write it; move it, or re-run with --force {shim}"), None
+		return Result(label, "conflict", f"leos-agent did not write it; move it, or re-run with --force-path {shim}"), None
 	sha = digest(encode(text))
 	if existed and current == text:
 		return Result(label, "unchanged"), sha
@@ -1135,7 +1143,7 @@ def manage_statusline(root, cfg, args, receipt):
 		ours = record is not None and value == record["value"]
 		if present and value != wanted and not ours and not names_path(args, path):
 			return [Result(label, "conflict", "settings.json already sets a different statusLine; re-run with "
-				f"--force {path} to replace it (uninstall puts it back)")]
+				f"--force-path {path} to replace it (uninstall puts it back)")]
 		shim_result, sha = manage_shim(shim, shim_text(root, cfg), record, args)
 		extra.append(shim_result)
 		new = {"value": wanted}
@@ -1383,7 +1391,7 @@ def rollback_source(harness):
 	return next((path for path in candidates if path.is_file()), None)
 
 
-def main(argv=None):
+def build_parser():
 	parser = argparse.ArgumentParser(
 		prog="leo-install.py",
 		description=(
@@ -1399,13 +1407,58 @@ def main(argv=None):
 	)
 	mode.add_argument("--check", action="store_true", help="exit 1 if anything would change")
 	mode.add_argument("--rollback", action="store_true", help="undo the last install or uninstall if files have not since changed")
-	parser.add_argument("--force", nargs="*", metavar="PATH", default=None,
-		help="on install, replace the named files (a conflict, or a preserved older copy); "
-		"with no PATH, replace every conflicting file but no preserved copy")
+	parser.add_argument("--force", action="store_true",
+		help="on install, replace every conflicting file (not a preserved older copy)")
+	parser.add_argument("--force-path", action="append", default=[], metavar="PATH",
+		help="on install, replace this file (a conflict, or a preserved older copy); repeatable")
 	parser.add_argument("--statusline", action="store_true",
 		help="claude only: also set Claude Code's statusLine to leos-agent's cost line; "
-		"never done without this flag, and a different statusLine needs --force <settings.json>")
-	args = parser.parse_args(argv)
+		"never done without this flag, and a different statusLine needs --force-path <settings.json>")
+	return parser
+
+
+def rewrite_legacy_force(argv):
+	"""Accept the old `--force [PATH ...] <harness>` spelling.
+
+	Tokens after --force that are not flags and not a harness name are paths:
+	they become --force-path PATH, and a --force that only carried paths is
+	dropped so it keeps meaning "just those files".
+	"""
+	out = []
+	i = 0
+	argv = list(argv)
+	while i < len(argv):
+		tok = argv[i]
+		if tok != "--force":
+			out.append(tok)
+			i += 1
+			continue
+		i += 1
+		paths = []
+		while i < len(argv) and not argv[i].startswith("-") and argv[i] not in HARNESSES:
+			paths.append(argv[i])
+			i += 1
+		if paths:
+			for path in paths:
+				out.extend(["--force-path", path])
+		else:
+			out.append("--force")
+	return out
+
+
+NEXT_STEPS = {
+	"claude": "Nothing else to install; the plugin supplies hooks, agents and skills. Start a new session.",
+	"codex": "Rerun $leos-agent:install after every upgrade and review /hooks, including when only scripts changed.",
+	"opencode": "Restart OpenCode.",
+	"cursor": "Reload the plugin.",
+	"hermes": "Start a new session.",
+	"pi": "Start a new session.",
+}
+
+
+def main(argv=None):
+	parser = build_parser()
+	args = parser.parse_args(rewrite_legacy_force(sys.argv[1:] if argv is None else argv))
 	if args.statusline and (args.harness != "claude" or args.uninstall or args.rollback):
 		parser.error("--statusline applies to a claude install, --dry-run or --check; "
 			"--uninstall and --rollback put the previous statusLine back on their own")
@@ -1442,7 +1495,7 @@ def main(argv=None):
 		verb = "installing"
 	else:
 		verb = "would install"
-	print(f"leos-agent {version} — {verb} {args.harness}")
+	print(f"leos-agent {version} | {verb} {args.harness}")
 	for res in results:
 		print(res.line(pending=not args.writes))
 		if res.diff:
@@ -1464,7 +1517,7 @@ def main(argv=None):
 		if preserved:
 			# Not "up to date": each preserved file still serves an older payload.
 			print(f"\nnot current: {len(preserved)} preserved file(s) keep an older payload; delete each, "
-				f"or rerun leo-install.py {args.harness} --force <path> for the ones to replace")
+				f"or rerun leo-install.py {args.harness} --force-path <path> for the ones to replace")
 			return CHECK_PRESERVED
 		print("\nup to date")
 		return 0
@@ -1472,6 +1525,8 @@ def main(argv=None):
 		print(f"\n{len(changed)} target(s) would change; nothing written")
 	else:
 		print(f"\n{len(changed)} target(s) changed")
+		if not args.uninstall:
+			print(f"Next steps ({args.harness}): {NEXT_STEPS[args.harness]}")
 		if not args.uninstall and os.environ.get("LEOS_AGENT_PRICE_REFRESH") != "off":
 			import pricing
 			pricing.refresh_background(force=True)

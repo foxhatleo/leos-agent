@@ -74,9 +74,9 @@ export function answerFor(e, result) {
 
 /** Spawns the routing policy covers: the model's own Agent calls and teammates. */
 export function routable(e, origin) {
-  // A fork inherits the parent and ignores `model`; a workflow agent's content
-  // cannot be rewritten; another plugin's own $.agent.spawn was never routed.
-  return !e.fork && !e.workflow && origin?.plugin === 'engine';
+  // A fork inherits the parent and ignores `model`; a resumed agent keeps the
+  // model it started on; a workflow agent's content cannot be rewritten; another plugin's own $.agent.spawn was never routed.
+  return !e.fork && !e.workflow && !e.resume && origin?.plugin === 'engine';
 }
 
 async function decide($, e) {
@@ -137,9 +137,9 @@ export const register = (on) => {
 
   on('agent.spawn', async ($, e, next) => {
     if (!routable(e, next.origin)) return next(e);
-    if ((await $.env.get('LEOS_AGENT_CLAUDE_SPAWN_MOD')) !== $.plugin.root) return next(e);
     let answer = {};
     try {
+      if ((await $.env.get('LEOS_AGENT_CLAUDE_SPAWN_MOD')) !== $.plugin.root) return next(e);
       answer = answerFor(e, await decide($, e));
     } catch (error) {
       $.ui.log(`routing bridge failed; spawn allowed without a price check: ${error?.message ?? error}`, { to: 'debug' });

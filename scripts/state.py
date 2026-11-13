@@ -69,9 +69,9 @@ def load(path):
     except FileNotFoundError:
         return {}
     except json.JSONDecodeError as e:
-        sys.exit(f"state: {path} is corrupt ({e}) — fix or delete it")
+        sys.exit(f"state: {path} is corrupt ({e}); fix or delete it")
     if not isinstance(data, dict):
-        sys.exit(f"state: {path} is corrupt (top level is {type(data).__name__}, expected object) — fix or delete it")
+        sys.exit(f"state: {path} is corrupt (top level is {type(data).__name__}, expected object); fix or delete it")
     return data
 
 

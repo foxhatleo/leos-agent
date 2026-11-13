@@ -216,6 +216,35 @@ class TestStaticPromptBudget(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_measure_context_runs_from_the_npm_file_set(self):
+        import json
+        import shutil
+        import tempfile
+        files = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["files"]
+        include = [f for f in files if not f.startswith("!")]
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp)
+            shutil.copy(ROOT / "package.json", dest / "package.json")
+            for entry in include:
+                src = ROOT / entry
+                if src.is_dir():
+                    shutil.copytree(src, dest / entry, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+                elif src.is_file():
+                    shutil.copy(src, dest / entry)
+            self.assertFalse((dest / ".claude-plugin").exists())
+            result = subprocess.run(
+                [sys.executable, str(dest / "scripts" / "measure_context.py"), "--check"],
+                cwd=dest, capture_output=True, text=True, timeout=60,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_field_reads_folded_and_literal_descriptions(self):
+        measure = self.load_measure()
+        for marker in (">", ">-", "|", "|-"):
+            fm = "name: x\ndescription: %s\n  first part\n  second part\nother: y" % marker
+            self.assertEqual(measure.field(fm, "description"), "first part second part", marker)
+        self.assertEqual(measure.field("description: plain one", "description"), "plain one")
+
     def load_measure(self):
         spec = importlib.util.spec_from_file_location(
             "measure_budget_test", ROOT / "scripts" / "measure_context.py"

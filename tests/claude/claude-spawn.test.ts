@@ -95,6 +95,14 @@ test('without a live marker the spawn is left to the command guard', async ($, o
   expect(w.runs.length).toBe(0)
 })
 
+test('a resumed spawn is never routed', async ($, on) => {
+  const w = world(on, CORRECT)
+  await $.session.start(START as any)
+  await $.agent.spawn({ ...SPAWN, resume: 'agent-7' } as any)
+  expect(w.runs.length).toBe(0)
+  expect(w.spawned.length).toBe(1)
+})
+
 test('a fork is never routed', async ($, on) => {
   const w = world(on, CORRECT)
   await $.session.start(START as any)

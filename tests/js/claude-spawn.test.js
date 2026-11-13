@@ -272,6 +272,37 @@ test('forks, workflow agents and other plugins\' spawns pass through without run
   assert.equal(cc.rows().length, 0);
 });
 
+test('a resumed spawn passes through untouched without running the guard', async () => {
+  const cc = claudeCode();
+  await cc.start();
+  const base = { tool_use_id: 'toolu_r', prompt: 'x', description: 'x', subagentType: 'general-purpose',
+    provider: { plugin: 'engine', tier: 'core' }, parentModel: 'claude-sonnet-5', permissionMode: 'default',
+    background: true, fork: false, model: 'opus', resume: 'agent-7' };
+  assert.deepEqual(await cc.spawn(base), { child: 'opus' });
+  assert.equal(cc.runs.length, 0);
+  assert.equal(cc.rows().length, 0);
+});
+
+test('an env.get that throws lets the spawn through with an error row and releases the command guard', async () => {
+  const hooks = {};
+  register((event, matcher, hook) => { (hooks[event] ??= []).push(hook ?? matcher); return { catch() {} }; }, {});
+  const calls = [];
+  const $ = {
+    plugin: { name: 'leos-agent', root },
+    session: { id: async () => 's', cwd: async () => sandbox },
+    env: { get: async () => { throw new Error('env unavailable'); }, set: async (name, value) => { calls.push(['set', name, value]); } },
+    process: { run: async (argv) => { calls.push(['run', argv]); return { exitCode: 0, stdout: '{}', stderr: '' }; } },
+    ui: { log: () => {} },
+  };
+  const e = { tool_use_id: 't', prompt: 'x', description: 'x', subagentType: 'general-purpose', model: 'opus' };
+  const next = async (input) => ({ passed: input });
+  next.origin = { plugin: 'engine', tier: 'core' };
+  const result = await hooks['agent.spawn'][0]($, e, next);
+  assert.deepEqual(result, { passed: e });
+  assert.ok(calls.some((c) => c[0] === 'set' && c[2] === undefined), 'marker cleared');
+  assert.ok(calls.some((c) => c[0] === 'run' && c[1].includes('--spawn-mod-failed')), 'error row written');
+});
+
 test('a teammate is routed like any other Agent call', async () => {
   const cc = claudeCode();
   await cc.start();

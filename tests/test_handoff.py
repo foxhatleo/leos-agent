@@ -69,6 +69,23 @@ class HandoffSafety(unittest.TestCase):
         self.assertNotEqual(self.run_cli("new", "outside").returncode, 0)
         self.assertEqual(list((self.root / "external").iterdir()), [])
 
+    def test_exact_name_beats_prefix_and_lookup_is_lowercased(self):
+        short = Path(self.run_cli("new", "cache").stdout.splitlines()[1])
+        longer = Path(self.run_cli("new", "cache-fix").stdout.splitlines()[1])
+        self.assertEqual(self.run_cli("path", "cache").stdout.strip(), str(short))
+        self.assertEqual(self.run_cli("path", "CACHE-FIX").stdout.strip(), str(longer))
+
+    def test_hyphen_ending_prefix_resolves_when_unique(self):
+        created = Path(self.run_cli("new", "cache-fix").stdout.splitlines()[1])
+        found = self.run_cli("path", "cache-")
+        self.assertEqual(found.returncode, 0, found.stderr)
+        self.assertEqual(found.stdout.strip(), str(created))
+        self.run_cli("new", "cache-other")
+        ambiguous = self.run_cli("path", "cache-")
+        self.assertNotEqual(ambiguous.returncode, 0)
+        self.assertNotIn("\u2014", ambiguous.stderr)
+        self.assertNotEqual(self.run_cli("path", "../x").returncode, 0)
+
     def test_rm_deletes_only_an_exactly_named_handoff(self):
         """`path` resolves a unique prefix for reading; `rm f` must not delete
         flaky-auth-retry just because it is the only name starting with f."""
@@ -80,3 +97,4 @@ class HandoffSafety(unittest.TestCase):
         removed = self.run_cli("rm", "flaky-auth-retry")
         self.assertEqual(removed.returncode, 0, removed.stderr)
         self.assertFalse(created.exists())
+

@@ -16,6 +16,9 @@ this skill file containing `rules/preferences.md`.
 python3 "<plugin-root>/scripts/doctor.py" --harness <harness> --json
 ```
 
+Exit codes: 1 means issues were found and the JSON is still the report; 0
+means clean; 2 means the run itself failed.
+
 The helper checks installed artifacts, routing.json as the guard loads it
 (invalid sections are reported ignored), the effective dispatch-guard mode,
 policy rendering, tier references, and price freshness of the catalog actually

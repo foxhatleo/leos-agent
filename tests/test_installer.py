@@ -433,6 +433,47 @@ class TestPreReceiptUpgrade(InstallerCase):
         self.assertEqual(results.returncode, 0, results.stdout + results.stderr)
         self.assertNotIn("mine", (agents / "leo-standard.toml").read_text())
 
+    def test_bare_force_before_the_harness_still_parses(self):
+        agents = self.cfg("codex") / "agents"
+        agents.mkdir(parents=True)
+        (agents / "leo-cheap.toml").write_text('name = "mine"\n')
+        done = self.cli("codex", "--force")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("mine", (agents / "leo-cheap.toml").read_text())
+        (agents / "leo-cheap.toml").write_text('name = "mine"\n')
+        old = subprocess.run([sys.executable, str(ROOT / "scripts" / "leo-install.py"), "--force", "codex"],
+                             env={**os.environ, "HOME": str(self.home), "LEOS_AGENT_PRICE_REFRESH": "off",
+                                  "LEOS_AGENT_LOCAL_PATH": str(self.home / ".leos-agent-local")},
+                             capture_output=True, text=True, cwd=str(self.home), timeout=60)
+        self.assertEqual(old.returncode, 0, old.stdout + old.stderr)
+        self.assertNotIn("mine", (agents / "leo-cheap.toml").read_text())
+
+    def test_force_path_before_the_harness_and_old_force_path_spelling(self):
+        agents = self.cfg("codex") / "agents"
+        agents.mkdir(parents=True)
+        for name in ("leo-cheap", "leo-standard"):
+            (agents / f"{name}.toml").write_text('name = "mine"\n')
+        parser = self.installer.build_parser()
+        ns = parser.parse_args(self.installer.rewrite_legacy_force(["--force", str(agents / "x"), "codex"]))
+        self.assertEqual((ns.harness, ns.force, ns.force_path), ("codex", False, [str(agents / "x")]))
+        ns = parser.parse_args(self.installer.rewrite_legacy_force(["codex", "--force"]))
+        self.assertTrue(ns.force)
+        done = self.cli("--force-path", str(agents / "leo-cheap.toml"), "--force-path",
+                        str(agents / "leo-standard.toml"), "codex")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("mine", (agents / "leo-cheap.toml").read_text())
+
+    def test_install_prints_next_steps_per_harness(self):
+        for harness in ("claude", "codex", "opencode", "cursor", "hermes", "pi"):
+            with self.subTest(harness=harness):
+                if not (self.cfg(harness)).is_dir():
+                    self.cfg(harness).mkdir(parents=True)
+                done = self.cli(harness)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertIn(f"Next steps ({harness})", done.stdout)
+        dry = self.cli("codex", "--dry-run")
+        self.assertNotIn("Next steps", dry.stdout)
+
     def test_a_stale_receipt_entry_is_taken_back_only_when_unchanged(self):
         self.run_harness("codex")
         receipt_path = self.cfg("codex") / "leos-agent-paths.json"

@@ -46,6 +46,24 @@ LIMITS = {
 	# Claude-only skill bodies, one budget each; a new skill there needs one.
 	"attach_pr_body_bytes": 11_200,
 	"watch_review_body_bytes": 9_600,
+	# Portable skill bodies and their references, each limited to its current size plus about 15%.
+	"doctor_skill_body_bytes": 4_450,
+	"handoff_skill_body_bytes": 4_800,
+	"handon_skill_body_bytes": 3_400,
+	"install_skill_body_bytes": 4_750,
+	"review_usage_skill_body_bytes": 4_000,
+	"review_usage_sources_reference_bytes": 5_100,
+	"tune_routing_advisor_reference_bytes": 5_750,
+	"tune_routing_harnesses_reference_bytes": 3_200,
+	"tune_routing_skill_body_bytes": 3_950,
+}
+
+# Portable skills whose bodies load when the skill is invoked.
+PORTABLE_BODY_SKILLS = ("doctor", "install", "handoff", "handon", "review-usage", "tune-routing")
+REFERENCE_FILES = {
+	"tune_routing_advisor_reference_bytes": "skills/tune-routing/reference/advisor.md",
+	"tune_routing_harnesses_reference_bytes": "skills/tune-routing/reference/harnesses.md",
+	"review_usage_sources_reference_bytes": "skills/review-usage/reference/sources.md",
 }
 
 
@@ -58,8 +76,22 @@ def frontmatter(path):
 
 
 def field(text, name):
-	match = re.search(rf"(?m)^{re.escape(name)}:\s*(.+?)\s*$", text)
-	return match.group(1).strip() if match else ""
+	"""A frontmatter value; a folded or literal block (>, >-, |, |-) is joined to one line."""
+	lines = text.splitlines()
+	for index, line in enumerate(lines):
+		match = re.match(rf"{re.escape(name)}:[ \t]*(.*?)\s*$", line)
+		if not match:
+			continue
+		value = match.group(1)
+		if re.fullmatch(r"[>|][+-]?", value):
+			block = []
+			for following in lines[index + 1:]:
+				if following and not following[0].isspace():
+					break
+				block.append(following.strip())
+			return " ".join(part for part in block if part)
+		return value.strip()
+	return ""
 
 
 def byte_len(text):
@@ -77,7 +109,7 @@ def skill_metadata_bytes(paths, implicit):
 
 def codex_implicit(path, _frontmatter):
 	policy = path.parent / "agents" / "openai.yaml"
-	return not policy.is_file() or "allow_implicit_invocation: false" not in policy.read_text(encoding="utf-8")
+	return not policy.is_file() or re.search(r"(?m)^\s*allow_implicit_invocation:\s*false\b", policy.read_text(encoding="utf-8")) is None
 
 
 def claude_implicit(_path, fm):
@@ -127,6 +159,19 @@ def rendered_policy():
 	return sizes
 
 
+def plugin_name():
+	"""The plugin's name: plugin.json, else package.json (the npm file set ships no
+	.claude-plugin), else "leos-agent"."""
+	for rel in (".claude-plugin/plugin.json", "package.json"):
+		try:
+			name = json.loads((ROOT / rel).read_text(encoding="utf-8")).get("name")
+		except (OSError, ValueError, AttributeError):
+			continue
+		if isinstance(name, str) and name:
+			return name.rsplit("/", 1)[-1]
+	return "leos-agent"
+
+
 def measurements():
 	portable = sorted((ROOT / "skills").glob("*/SKILL.md"))
 	claude_only = sorted((ROOT / "skills-claude").glob("*/SKILL.md"))
@@ -137,7 +182,7 @@ def measurements():
 	agent_paths = sorted((ROOT / "payload" / "codex-agents").glob("*.toml"))
 	# Claude Code lists every plugin agent in the parent's always-loaded agent
 	# roster, so each entry is part of the static footprint too.
-	plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["name"]
+	plugin = plugin_name()
 	claude_agent_bytes = sum(byte_len(claude_agent_listing(path, plugin))
 		for path in sorted((ROOT / "agents").glob("*.md")))
 	command_paths = sorted((ROOT / "commands").glob("*.md")) + sorted((ROOT / "commands-claude").glob("*.md"))
@@ -146,6 +191,9 @@ def measurements():
 		fm, _ = frontmatter(path)
 		command_bytes += byte_len(field(fm, "description"))
 	claude_bodies = {f"{path.parent.name.replace('-', '_')}_body_bytes": body_bytes(path) for path in claude_only}
+	skill_bodies = {f"{name.replace('-', '_')}_skill_body_bytes": body_bytes(ROOT / "skills" / name / "SKILL.md")
+		for name in PORTABLE_BODY_SKILLS}
+	reference_bytes = {key: body_bytes(ROOT / rel) for key, rel in REFERENCE_FILES.items()}
 	return {
 		"global_policy_bytes": byte_len(policy_body.strip()),
 		"rendered_policy_bytes": max(rendered_policy().values()),
@@ -162,6 +210,8 @@ def measurements():
 		"review_submit_bytes": body_bytes(ROOT / "skills" / "review-pr" / "reference" / "submit.md"),
 		"review_followup_bytes": body_bytes(ROOT / "skills" / "review-pr" / "reference" / "followup.md"),
 		**claude_bodies,
+		**skill_bodies,
+		**reference_bytes,
 	}
 
 

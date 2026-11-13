@@ -66,7 +66,8 @@ class BundleCase(unittest.TestCase):
         return run
 
     def build(self, *args, results=None):
-        out = self.root / "bundle.zip"
+        self.builds = getattr(self, "builds", 0) + 1
+        out = self.root / ("bundle%d.zip" % self.builds)
         with mock.patch.object(self.bundle, "run", self.fake_run(results or {})), \
                 mock.patch("sys.stdout", new=io.StringIO()) as printed, \
                 mock.patch("sys.stderr", new=io.StringIO()):
@@ -147,6 +148,45 @@ class TestContents(BundleCase):
         for name, data in report["harnesses"].items():
             if data.get("status") not in ("ok", "partial"):
                 self.assertIn("- %s: %s" % (name, data["status"]), readme)
+
+
+class TestArguments(BundleCase):
+    def run_main(self, *args):
+        with mock.patch.object(self.bundle, "run", self.fake_run({})), \
+                mock.patch.object(self.bundle, "build", side_effect=AssertionError("scanned")) as built, \
+                mock.patch("sys.stdout", new=io.StringIO()), mock.patch("sys.stderr", new=io.StringIO()):
+            try:
+                self.bundle.main(list(args))
+            except SystemExit as exc:
+                return exc.code, built
+            except AssertionError:
+                return "scanned", built
+        return 0, built
+
+    def test_bad_since_existing_out_and_missing_parent_fail_before_any_scan(self):
+        existing = self.root / "there.zip"
+        existing.write_text("keep")
+        for args in (("--since", "soon", "--out", str(self.root / "a.zip")),
+                     ("--out", str(existing)),
+                     ("--out", str(self.root / "no" / "such" / "a.zip"))):
+            with self.subTest(args=args):
+                code, built = self.run_main(*args)
+                self.assertNotIn(code, (0, "scanned"))
+                built.assert_not_called()
+        self.assertEqual(existing.read_text(), "keep")
+
+    def test_since_case_is_normalized_in_member_names(self):
+        archive = self.build("--since", "24H")
+        names = archive.namelist()
+        self.assertIn("usage-24h.json", names)
+        self.assertFalse(any("24H" in n for n in names))
+
+    def test_a_relative_out_is_written_where_it_was_resolved(self):
+        with mock.patch.object(self.bundle, "run", self.fake_run({})), \
+                mock.patch("sys.stdout", new=io.StringIO()) as printed, mock.patch("sys.stderr", new=io.StringIO()):
+            self.assertEqual(self.bundle.main(["--out", "rel.zip"]), 0)
+        self.assertTrue(os.path.isabs(printed.getvalue().strip()))
+        self.assertTrue((self.root / "work" / "rel.zip").is_file())
 
 
 class TestFidelity(BundleCase):

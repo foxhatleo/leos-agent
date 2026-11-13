@@ -416,14 +416,25 @@ def diagnose(harness, root=None):
     return report
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser():
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog="Exit codes: 0 means clean; 1 means issues were found and the JSON is still the report; "
+               "2 means the run itself failed.")
     parser.add_argument("--harness", choices=routing.HARNESSES, required=True)
     # Output is always JSON; the flag stays accepted so a skill copy from an
     # earlier release keeps working rather than failing on an unknown argument.
     parser.add_argument("--json", action="store_true", help="accepted for compatibility; output is always JSON")
-    args = parser.parse_args()
-    report = diagnose(args.harness)
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
+    try:
+        report = diagnose(args.harness)
+    except Exception as exc:
+        print(f"doctor: the run failed: {exc}", file=sys.stderr)
+        return 2
     print(json.dumps(report, indent=2))
     return 1 if report["issues"] else 0
 

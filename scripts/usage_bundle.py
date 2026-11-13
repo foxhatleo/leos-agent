@@ -244,13 +244,26 @@ def default_out(since):
     return os.path.join(os.getcwd(), "leos-agent-usage-%s-%s.zip" % (since, stamp))
 
 
-def main(argv=None):
+def build_parser():
     parser = argparse.ArgumentParser(prog="usage_bundle.py", description=__doc__.splitlines()[0])
     parser.add_argument("--since", default="7d", help="window, e.g. 24h, 7d, 2w (default 7d)")
     parser.add_argument("--harness", choices=sorted(usage_scan.SOURCES), help="only this harness")
     parser.add_argument("--out", help="zip path (default: ./leos-agent-usage-<since>-<stamp>.zip)")
+    return parser
+
+
+def main(argv=None):
+    parser = build_parser()
     args = parser.parse_args(argv)
-    out = args.out or default_out(args.since)
+    # Member names embed the window, so normalize its case and validate it with
+    # the scanner's own parser before any scan runs.
+    args.since = args.since.strip().lower()
+    usage_scan.parse_since(args.since)
+    out = os.path.abspath(args.out or default_out(args.since))
+    if os.path.lexists(out):
+        parser.error("%s already exists; pick a new --out path" % out)
+    if not os.path.isdir(os.path.dirname(out)):
+        parser.error("the directory for --out does not exist: %s" % os.path.dirname(out))
     members, failures = build(args)
     write_zip(out, members)
     print(out)
