@@ -1,4 +1,4 @@
-# Cross-model review lens — leos-agent
+# Cross-model review lens | leos-agent
 
 An optional adversarial lens run by a second provider's model, through that
 provider's own CLI. It is off by default and costs nothing until used.
@@ -26,7 +26,7 @@ It sends nothing. It attests the host from its environment (Claude Code sets
 `CLAUDECODE=1`, Codex sets `CODEX_THREAD_ID`), picks the other family (a Claude
 host uses `codex`, a Codex host uses `claude`), and checks that the CLI is
 installed and that its own status command reports a login. Anything else is a
-skip with a `reason`: report "cross-model lens: not run — <reason>" and go on.
+skip with a `reason`: report "cross-model lens: not run: <reason>" and go on.
 Pass `--user-enabled` only when the brief says the user enabled it for this
 review. A `note` about a Codex sandbox without network means the run needs the
 user's approved escalation; ask, never bypass.
@@ -36,8 +36,11 @@ foreground with a 10-minute Bash timeout:
 
 ```
 python3 "<plugin-root>/scripts/review_peer.py" run -R OWNER/REPO -n N --commit SHA \
-  --out /private/scratch/peer.json [--context requirements.txt] [--user-enabled]
+  --out "$SCRATCH/peer.json" [--context "$SCRATCH/requirements.txt"] [--user-enabled]
 ```
+
+`SCRATCH` is an absolute temp directory outside the repository. A relative or
+in-repo `--out` is refused (exit 2) before anything is sent.
 
 It re-checks the head, sends only the non-generated patches that fit its input
 cap (the rest are listed under `not_sent`), in a fenced untrusted block, to a

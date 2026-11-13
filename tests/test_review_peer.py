@@ -263,6 +263,72 @@ class TestClaudeRoute(PeerCase):
         self.assertEqual(artifact["findings"][0]["severity"], "blocking")
 
 
+class TestOutPath(PeerCase):
+    def run_main(self, out):
+        argv = ["run", "-R", "owner/repo", "-n", "1", "--commit", SHA, "--out", out, "--user-enabled"]
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as raised:
+                peer.main(argv)
+        return raised.exception.code
+
+    def test_a_relative_out_is_refused_before_any_subprocess(self):
+        with mock.patch.object(subprocess, "run") as run, mock.patch.object(subprocess, "Popen") as popen:
+            self.assertEqual(self.run_main("peer.json"), 2)
+        run.assert_not_called()
+        popen.assert_not_called()
+        self.assertEqual(self.calls(), [])
+
+    def test_an_out_inside_the_repository_or_without_a_parent_is_refused(self):
+        self.install("codex")
+        repo = self.tmp / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", str(repo)], check=True, capture_output=True,
+                       env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")})
+        (repo / "sub").mkdir()
+        old = os.getcwd()
+        os.chdir(str(repo))
+        self.addCleanup(os.chdir, old)
+        self.assertEqual(self.run_main(str(repo / "sub" / "peer.json")), 2)
+        self.assertEqual(self.run_main(str(self.tmp / "missing" / "peer.json")), 2)
+        self.assertEqual(self.calls(), [])
+        self.assertFalse((repo / "sub" / "peer.json").exists())
+
+
+def alive(pid):
+    try:
+        with open("/proc/%d/stat" % pid) as fh:
+            return fh.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except (OSError, IndexError):
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False
+        return True
+
+
+class TestProcessGroup(PeerCase):
+    def overrun(self, script, grace):
+        pidfile = self.tmp / "grandchild.pid"
+        argv = ["/bin/sh", "-c", script % str(pidfile)]
+        with mock.patch.object(peer, "KILL_GRACE", grace):
+            with self.assertRaises(TimeoutError):
+                peer.invoke(argv, "", str(self.tmp), 1, dict(os.environ))
+        pid = int(pidfile.read_text())
+        deadline = time.time() + 5
+        while alive(pid) and time.time() < deadline:
+            time.sleep(0.05)
+        self.addCleanup(lambda: alive(pid) and os.kill(pid, 9))
+        return pid
+
+    def test_a_timeout_kills_the_peers_grandchildren(self):
+        pid = self.overrun("sleep 60 & echo $! > %s; wait", 5)
+        self.assertFalse(alive(pid))
+
+    def test_a_peer_that_ignores_sigterm_is_killed_after_the_grace(self):
+        pid = self.overrun("trap '' TERM; (trap '' TERM; exec sleep 60) & echo $! > %s; wait", 1)
+        self.assertFalse(alive(pid))
+
+
 class TestDetect(PeerCase):
     def test_detect_reports_the_route_without_sending_anything(self):
         self.install("codex")
