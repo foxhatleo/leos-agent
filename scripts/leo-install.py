@@ -68,7 +68,7 @@ PROVENANCE = "leos-agent"
 # model resolves the root once. OpenCode copies live apart from the scripts,
 # and OpenCode sets no resolution env var, so their copies are installed with
 # the token already replaced by this machine's absolute plugin root. Installing
-# alternately from a checkout and a cache re-bakes the root each time — last
+# alternately from a checkout and a cache re-bakes the root each time: the last
 # install wins, and --check reports a stale root as out of date.
 PLUGIN_ROOT_TOKEN = "<plugin-root>"
 

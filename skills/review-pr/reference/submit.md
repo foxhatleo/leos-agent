@@ -33,14 +33,16 @@ owner/repo#N at 1a2b3c4; two commits since round 1 fix the page size and add tes
 
 ## Ask
 
-Before asking, snapshot what the plan rests on (`$SCRATCH` is an absolute
-temporary directory outside the repository):
+Take a fresh snapshot of what the plan rests on every time you ask,
+including again after "Run checks first", an edit or a re-dispatch
+(`$SCRATCH` is an absolute temporary directory outside the repository):
 
 ```
 python3 "<plugin-root>/scripts/ghreview.py" snapshot -R OWNER/REPO -n N --commit SHA --out "$SCRATCH/snap-N.json"
 ```
 
-In a watch, also `watch_review.py await` the claim (watch-review's skill).
+In a watch, the claim was `await`ed when the reviewer's report joined the
+sign-off queue (watch-review's skill), not at its turn.
 
 Ask about one PR per call: a blocking AskUserQuestion, header `#N` (12
 characters at most); without the tool, ask in plain text and wait. Options:
@@ -58,8 +60,10 @@ The answer can come long after the question: proceed only where safe.
    - `valid.submit`: `python3 "<plugin-root>/scripts/ghreview.py" submit -R OWNER/REPO -n N --commit SHA --event EVENT --body-file "$SCRATCH/body.txt" --expect-draft FP`,
      with FP the snapshot's `draft.fingerprint`, or `none` without a draft. Exit 3
      means the user edited the draft or it changed: it is theirs to submit.
-   - each thread in `valid.replies`: `reply ... --post --expect-latest ID`, ID
-     being that thread's entry in the snapshot's `threads`.
+   - each reply the plan posts (not one staged into the draft, which goes out
+     with the submission), only if its thread is in `valid.replies`:
+     `reply ... --post --expect-latest ID`, ID being that thread's entry in
+     the snapshot's `threads`.
    - each thread in `valid.resolves`: `python3 "<plugin-root>/scripts/ghreview.py" resolve-thread -R OWNER/REPO -n N --thread-id PRRT_… --commit SHA --evidence-file FILE --expect-latest ID`.
    - `valid.comments`: `comment ... --body-file FILE --expect-latest ID|none [--in-reply-to ID]`,
      ID being the snapshot's `latest_conversation`.
@@ -67,7 +71,9 @@ The answer can come long after the question: proceed only where safe.
    reviewer for just that, then ask again.
 4. A merge or close, or the user's own GitHub actions (`my_new_reviews`): one
    line, "Since you were asked: ...", and skip what it overtook.
-5. Then the next PR.
+5. Outside a watch, remove the review worktree:
+   `python3 "<plugin-root>/scripts/review_worktree.py" remove -R OWNER/REPO -n N --all-heads`.
+6. Then the next PR.
 
 "Run checks first": run each proposed command through
 `review_worktree.py run ... --approved "<their words>" -- CMD...` as

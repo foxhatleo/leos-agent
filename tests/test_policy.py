@@ -317,5 +317,21 @@ class TestStaticPromptBudget(unittest.TestCase):
                 self.assertLessEqual(len(match.group(1).encode("utf-8")), 260)
 
 
+class TestRemovedModes(unittest.TestCase):
+    SHIPPED = ("skills", "skills-claude", "agents", "payload", "scripts", "hooks", "rules")
+
+    def test_fully_auto_publishing_is_gone_from_everything_shipped(self):
+        # The review skills publish only after the user answers; no mode skips that.
+        found = []
+        for top in self.SHIPPED:
+            for path in sorted((ROOT / top).rglob("*")):
+                if not path.is_file() or "__pycache__" in path.parts:
+                    continue
+                text = path.read_text(encoding="utf-8", errors="ignore").lower()
+                found += ["%s: %s" % (path.relative_to(ROOT), word)
+                          for word in ("fully-auto", "actions: auto") if word in text]
+        self.assertEqual(found, [])
+
+
 if __name__ == "__main__":
     unittest.main()

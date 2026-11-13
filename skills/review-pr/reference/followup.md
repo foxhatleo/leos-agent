@@ -39,8 +39,9 @@ breaks when `total % size == 0`, see `sync.ts:88`."
 - No submission planned: after the user's yes, post replies first
   (`reply --post --expect-latest ID`, and for the conversation
   `python3 "<plugin-root>/scripts/ghreview.py" comment -R OWNER/REPO -n N --commit SHA --body-file FILE --expect-latest ID --in-reply-to ID`),
-  then resolve, and only then restage anything. `reply --post` refuses while a
-  draft is open.
+  then resolve (the same `--expect-latest`: the user's own comments never
+  count as a change), and only then restage anything. `reply --post` refuses
+  while a draft is open.
 - A submission planned (what stands changed, or a draft is open): stage the
   replies into the draft (`reply` without `--post`) and submit them together.
 
@@ -48,12 +49,20 @@ breaks when `total % size == 0`, see `sync.ts:88`."
 
 1. The front end `start`s the claim and dispatches a background reviewer with
    the threads, `conversation`, round and claim from `start`.
-2. The reviewer plans each reply as above. If what stands changed (the only
-   major finding conceded, the blocking one fixed), it restages the verdict at
-   this head with `stage --since <head>`, no comments, and a note only when a
-   reservation remains, then stages the replies into that draft.
+2. The reviewer writes each planned reply to `$SCRATCH/reply-K.txt`. With no
+   submission planned it stages none, and reports each thread id, the
+   thread's latest comment id (the snapshot's) and the file. If what stands
+   changed (the only major finding conceded, the blocking one fixed), it
+   restages the verdict at this head with `stage --since <head>`, no
+   comments, a note only when a reservation remains, and stages the replies
+   into that draft.
 3. The front end shows it as `reference/submit.md` does (what they said, what
    the code shows, the plan), asks, and carries out the answer in the order
    above, through `submit.md`'s recheck.
 4. `python3 "<plugin-root>/scripts/watch_review.py" ack -C <repo-dir> N --claim TOKEN`, also when the user
    chose to do nothing: the round is handled until someone replies again.
+
+A re-request round is a fresh look at the same head (threads plus anything
+changed in the discussion), staged per the usual rules. It closes with `ack`,
+even after restaging a verdict: `stage` stored it, and `record` refuses a
+follow-up claim.

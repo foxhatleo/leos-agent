@@ -1852,6 +1852,27 @@ class TestWatchAndParticipation(HostCase):
         self.assertEqual(self.w.summary("o/r")["rounds"], {"1": 3})
 
 
+class TestWatchedHeadExpiry(HostCase):
+    def test_an_announced_head_is_held_for_a_day_and_cleared_when_that_head_is_recorded(self):
+        self.github.add(1, H1)
+        self.w.watch("o/r", 1, H1, 0)
+        out, _ = self.drive(3)
+        self.assertEqual([parse(line) for line in out if parse(line)], [])  # the user's pass has it
+        out, _ = self.drive(3, start=self.w.WATCHED_HEAD_TTL + 60)
+        self.assertEqual([(e["verb"], e["head"]) for e in map(parse, out) if e], [("review-requested", H1)], out)
+
+    def test_record_of_the_announced_head_ends_the_pass(self):
+        self.github.add(1, H1)
+        self.w.watch("o/r", 1, H1, 0)
+        self.w.watch("o/r", 2, H1, 0)
+        self.w.record("o/r", 1, H1)
+        self.w.record("o/r", 2, H2)  # another head: the pass still has H1
+        watched = self.w.load_entry("o/r")["watched"]
+        self.assertNotIn("head", watched["1"])
+        self.assertEqual(watched["2"]["head"], H1)
+        self.assertEqual(self.w.watched_heads(self.w.load_entry("o/r"), 60), {2: [H1]})
+
+
 class TestClaimLimits(HostCase):
     def emitted(self, numbers):
         for number in numbers:
@@ -1910,6 +1931,11 @@ class TestWorktreeCleanup(HostCase):
             self.assertEqual(cleanup.call_args_list[-1], mock.call("o/r", 2))
             self.cli("forget", "2")
             self.assertEqual(cleanup.call_args_list[-1], mock.call("o/r", 2))
+            self.github.thread(2, "PRRT_1", latest_id=41)
+            token = self.w.claim_review("o/r", 2, H1, 0, kind=self.w.FOLLOW_UP, threads={"PRRT_1": 41})
+            cleanup.reset_mock()
+            self.cli("ack", "2", "--claim", token)
+            self.assertEqual(cleanup.call_args_list, [mock.call("o/r", 2)])
             now = TestPruning.NOW
             self.github.prs[1].update(state="closed", closed_at=TestPruning.iso(now - 40 * TestPruning.DAY))
             cleanup.reset_mock()
@@ -1965,6 +1991,24 @@ class TestFreshness(HostCase):
         self.assertEqual((started["reason"], started["round_kind"]), ("re-approve", "merge-only"))
         self.cli("ack", "1", "--claim", events[0]["claim"])
         self.assertEqual(self.events(ticks=3, start=600)[0], [])
+
+    def test_a_dismissed_approval_asks_for_a_re_approve_but_a_dismissed_request_for_changes_does_not(self):
+        self.github.rules = self.STRICT_RULES
+        self.approved()
+        self.github.prs[1]["reviews"][1]["state"] = "DISMISSED"  # the approval, dismissed on push
+        self.github.push(1, H2)
+        events, out = self.events(ticks=3)
+        self.assertEqual([(e["verb"], e["prev"]) for e in events], [("re-approve", H1)], out)
+        # The same dismissal, when the user had submitted REQUEST_CHANGES at H1.
+        self.w.ghreview.note_submission("o/r", 1, {"event": "REQUEST_CHANGES", "head": H1, "at": 0})
+        self.cli("release", "1", "--claim", events[0]["claim"])
+        self.assertEqual(self.events(ticks=3, start=600)[0], [])
+        verdict = {"verdict": "ready-to-merge", "head": H1, "carried_to": H2}
+        self.assertFalse(self.w.dismissed_approval(H1, dict(verdict, submitted={"event": "REQUEST_CHANGES",
+                                                                                "head": H1})))
+        self.assertTrue(self.w.dismissed_approval(H1, verdict))
+        self.assertFalse(self.w.dismissed_approval(H1, dict(verdict, verdict="neutral")))
+        self.assertFalse(self.w.dismissed_approval("3" * 40, verdict))
 
     def test_strict_and_a_real_change_is_a_normal_re_review(self):
         self.github.rules = self.STRICT_RULES

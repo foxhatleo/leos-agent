@@ -46,7 +46,9 @@ Subcommands:
                  --evidence-file FILE [--expect-latest ID] [--dry-run]
                  mark a thread resolved (immediate, not staged): only a thread
                  the current user started, on an open PR at SHA; the evidence
-                 file is a JSON object {thread_id, head_sha, explanation}
+                 file is a JSON object {thread_id, head_sha, explanation}.
+                 --expect-latest (here and on reply) refuses when anyone but
+                 the user commented in the thread after that comment
   reply          -R OWNER/REPO -n PR --commit SHA --thread-id PRRT_...
                  --body-file FILE [--post] [--expect-latest ID] [--dry-run]
                  STAGE a reply into the current user's pending review (created
@@ -59,7 +61,7 @@ Subcommands:
                  --expect-latest ID|none [--in-reply-to ISSUE_COMMENT_ID]
                  [--dry-run]
                  post a PR-level conversation comment now. Refused unless the PR
-                 is open at SHA and the newest conversation comment is still
+                 is open at SHA and nobody but the user commented after
                  --expect-latest (none: there was none). --in-reply-to answers a
                  non-bot comment by someone else, posted after the user's last
                  PR-level comment or review, that @mentions the user, quotes
@@ -2237,11 +2239,28 @@ def cmd_discussion(a):
     print(json.dumps(report, indent=1))
 
 
+def only_mine_after(comments, expected, login):
+    """Whether everything in a thread after comment `expected` is the user's own.
+
+    The plan answered the thread as it stood at `expected`. The user's own
+    later comments (the reply the same plan just posted, or one staged into
+    their draft) do not make it stale; anyone else's do. An `expected` that is
+    no longer in the thread counts as a change.
+    """
+    ids = [c.get("databaseId") for c in comments]
+    if expected not in ids:
+        return False
+    later = comments[ids.index(expected) + 1:]
+    return bool(login) and all(login_of(c).lower() == login.lower() for c in later)
+
+
 def require_thread(repo, pr, thread_id, own=None, expect_latest=None):
     """The thread, checked; with `expect_latest`, also unchanged since the plan.
 
     A plan the user approved answers the thread as it was then. A comment
-    added while they were deciding ("wait, pushing a fix") makes it stale.
+    someone else added while they were deciding ("wait, pushing a fix") makes
+    it stale; the user's own newer comments, such as the reply this plan just
+    posted before resolving, do not.
 
     own="started": the user wrote its posted root comment (resolving).
     own="participated": the user took part in it, as participation() says
@@ -2256,16 +2275,20 @@ def require_thread(repo, pr, thread_id, own=None, expect_latest=None):
     thread = next((t for t in fetch_threads(repo, pr) if t["id"] == thread_id), None)
     if thread is None:
         raise ValueError("thread does not belong to the specified repository and PR")
+    login = None
     if expect_latest is not None:
-        latest = (thread.get("comments", {}).get("nodes") or [{}])[-1].get("databaseId")
+        nodes = thread.get("comments", {}).get("nodes") or [{}]
+        latest = nodes[-1].get("databaseId")
         if latest != expect_latest:
-            raise ValueError("the thread changed since the plan (latest comment %s, expected %s); "
-                             "re-read it and ask again" % (latest, expect_latest))
+            login = current_login()
+            if not only_mine_after(nodes, expect_latest, login):
+                raise ValueError("the thread changed since the plan (latest comment %s, expected %s); "
+                                 "re-read it and ask again" % (latest, expect_latest))
     if own:
         comments = thread.get("comments", {}).get("nodes", [])
         if comments and draft_comment(comments[0]):
             raise ValueError("cannot resolve or answer a pending draft thread")
-        login = current_login()
+        login = login or current_login()
         if own == "started":
             if not comments or login_of(comments[0]).lower() != login.lower():
                 raise ValueError("resolving is limited to threads started by the authenticated user")
@@ -2441,8 +2464,9 @@ def conversation_reply_refusal(target, login, comments, reviews):
 def cmd_comment(a):
     """Post a PR-level conversation comment the user approved.
 
-    The plan saw the conversation up to --expect-latest; anything newer means
-    someone spoke while the user was deciding, so the plan is stale.
+    The plan saw the conversation up to --expect-latest; anything newer from
+    someone else means they spoke while the user was deciding, so the plan is
+    stale. The user's own newer comments (posted by this same plan) are not.
     """
     require_open(a.repo, a.pr)
     require_head(a.repo, a.pr, a.commit)
@@ -2451,7 +2475,12 @@ def cmd_comment(a):
     comments = conversation_items(a.repo, a.pr)
     latest = latest_id(comments)
     expected = None if a.expect_latest == "none" else a.expect_latest
-    if latest != expected:
+    # The user's own newer PR-level comments (an earlier `comment` of this same
+    # plan) do not make it stale; anyone else's do.
+    newer = [c for c in comments if isinstance(c.get("id"), int) and not isinstance(c.get("id"), bool)
+             and (expected is None or c["id"] > expected)]
+    gone = expected is not None and all(c.get("id") != expected for c in comments)
+    if latest != expected and (gone or any(login_of(c, "user").lower() != login.lower() for c in newer)):
         raise ValueError("the conversation changed since the plan (latest comment %s, expected %s); "
                          "re-read it and ask again" % (latest if latest is not None else "none", a.expect_latest))
     if a.in_reply_to is not None:
@@ -2941,8 +2970,8 @@ def build_parser():
             sp.add_argument("--since", metavar="ISO", help="only what was said at or after this date or time")
         if name in ("resolve-thread", "reply"):
             sp.add_argument("--expect-latest", type=int, metavar="COMMENT_ID",
-                            help="refuse if the thread's latest comment is no longer this one: someone "
-                                 "replied after the plan was made")
+                            help="refuse if anyone but the current user commented in the thread after "
+                                 "this one: someone replied after the plan was made")
         if name == "resolve-thread":
             sp.add_argument("--evidence-file", required=True, help="JSON object: thread_id, head_sha, explanation")
             sp.add_argument("--thread-id", required=True, help="PRRT_... thread node id")

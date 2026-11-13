@@ -63,7 +63,9 @@ explicit `forget`. A head that waits on the user's decision is parked with
 
 Rounds: one counter per pull request covers the watcher's starts and manual
 passes announced with `watch --head`; a retry at the same head and kind
-reuses its round.
+reuses its round. The announced head is not emitted while that pass has it:
+until `record` at that head or WATCHED_HEAD_TTL (24 hours) after the
+announcement, whichever comes first.
 
 Emission is not completion. A head is recorded only when every changed
 non-generated file was reviewed and every finding is covered: anchored in
@@ -156,6 +158,8 @@ INITIAL, COMMIT, COMMENT, COMMIT_COMMENT, MERGE_ONLY = (
 STRICT, AUTO, OFF = "strict", "auto", "off"
 FRESHNESS = (AUTO, STRICT, OFF)
 FRESHNESS_TTL = 6 * 3600
+# How long a head announced by `watch --head` stays with the user's manual pass.
+WATCHED_HEAD_TTL = 24 * 3600
 
 
 def fail(message):
@@ -213,7 +217,8 @@ def eligible(listing, login):
 REQUEST_FIELDS = "requestedReviewer { __typename ... on User { login } }"
 PAGE_FIELDS = "pageInfo { hasNextPage endCursor }"
 # The user's side of a pull request: their latest submitted review, their
-# latest approval (or its dismissal) with its commit, and the latest review
+# latest approval (or a dismissal, which may have been a request for changes:
+# dismissed_approval tells them apart) with its commit, and the latest review
 # requests, so a same-head re-request can be told from the request answered.
 MINE_FIELDS = """reviewed: reviews(author:$login,states:[APPROVED,CHANGES_REQUESTED,COMMENTED,DISMISSED],last:1) { nodes { state submittedAt } }
  approved: reviews(author:$login,states:[APPROVED,DISMISSED],last:1) { nodes { state commit { oid } } }
@@ -631,6 +636,11 @@ def record(repo, number, head, claim_token=None, result=None):
 				result["verdict"], head, result.get("diff_fingerprint"), result)}
 		entry.setdefault("claims", {}).pop(str(number), None)
 		entry.setdefault("blocked", {}).pop(str(number), None)
+		# A manual pass that announced this head is over once the head is recorded.
+		announced = (entry.get("watched") or {}).get(str(number))
+		if isinstance(announced, dict) and announced.get("head") == head:
+			announced.pop("head", None)
+			announced.pop("head_at", None)
 		if "verdicts" in patch:
 			# Replace, never merge: a stale override reason must not survive.
 			entry.setdefault("verdicts", {}).pop(str(number), None)
@@ -832,6 +842,7 @@ def ack(repo, number, token):
 		close_round(entry, number, round_number=claim.get("round"))
 		entry["claims"].pop(str(number))
 		state_mod.atomic_write(path, data)
+	cleanup_worktrees(repo, number)
 
 
 def due(matches, known, first_seen, emitted, now, settle, covered=None):
@@ -897,16 +908,37 @@ def follow_due(matches, known, seen, first_seen, now, settle, covered=None, hand
 	return out
 
 
+def dismissed_approval(commit, verdict, reapproved_head=None):
+	"""Whether the user's DISMISSED review at `commit` was an approval.
+
+	GitHub reports a dismissed review as DISMISSED whatever it was, and both an
+	approval and a request for changes can be dismissed. It counts as an
+	approval only when what this machine knows of that commit says so: the
+	submission recorded beside the verdict, when it was made at that commit;
+	otherwise a ready-to-merge verdict recorded (or re-approved) there.
+	"""
+	if not commit or not isinstance(verdict, dict):
+		return False
+	submitted = verdict.get("submitted")
+	if isinstance(submitted, dict) and submitted.get("head") == commit and submitted.get("event"):
+		return submitted["event"] == "APPROVE"
+	return verdict.get("verdict") == ghreview.READY and commit in (
+		verdict.get("head"), verdict.get("carried_to"), reapproved_head)
+
+
 def reapprove_due(pr, verdict, handled_head=None):
 	"""Whether the user's approval should be renewed on this head without a review.
 
 	The user's latest approval is not on the head (or was dismissed), and a
 	ready-to-merge verdict was carried to this head because the PR diff is
-	unchanged since the reviewed head. Pure; the caller checks freshness.
+	unchanged since the reviewed head. A dismissed review counts only when it
+	was an approval (dismissed_approval). Pure; the caller checks freshness.
 	"""
 	head = pr.get("headRefOid") or ""
 	approval = pr.get("approval") or {}
 	if not head or approval.get("state") not in ("APPROVED", "DISMISSED"):
+		return False
+	if approval.get("state") == "DISMISSED" and not dismissed_approval(approval.get("commit"), verdict, handled_head):
 		return False
 	if approval.get("state") == "APPROVED" and approval.get("commit") == head:
 		return False
@@ -1264,7 +1296,7 @@ def watch(repo, number, head, now):
 		record_.setdefault("since", int(now))
 		record_["via"] = "review-pr" if head else record_.get("via") or "watch"
 		if head:
-			record_["head"] = head
+			record_.update(head=head, head_at=int(now))
 		watched[key] = record_
 		claim = (entry.get("claims") or {}).get(key)
 		live = (isinstance(claim, dict) and claim.get("expires", 0) > now
@@ -1283,10 +1315,23 @@ def watch(repo, number, head, now):
 	return {"repo": repo, "number": number, "watched": True, "round": number_round, "round_kind": kind}
 
 
-def watched_heads(entry):
-	"""{number: [head]} for heads a manual pass announced with `watch --head`."""
-	return {n: [w["head"]] for n, w in watched_of(entry).items()
-		if isinstance(w.get("head"), str) and re.fullmatch(SHA_RE, w["head"])}
+def watched_heads(entry, now=None):
+	"""{number: [head]} for heads a manual pass announced with `watch --head`.
+
+	A pass has its head until `record` at that head clears it or WATCHED_HEAD_TTL
+	after it was announced, so an abandoned pass does not hide the head for good.
+	With `now` None nothing expires.
+	"""
+	out = {}
+	for n, w in watched_of(entry).items():
+		head = w.get("head")
+		if not (isinstance(head, str) and re.fullmatch(SHA_RE, head)):
+			continue
+		at = w.get("head_at", w.get("since"))
+		if now is not None and (not isinstance(at, (int, float)) or now - at > WATCHED_HEAD_TTL):
+			continue
+		out[n] = [head]
+	return out
 
 
 def config_of(entry):
@@ -1558,7 +1603,7 @@ def monitor(args):
 				for pr in matches}
 			first_seen = {key: stamp for key, stamp in first_seen.items() if key in active}
 			# A head the user's own pass announced (watch --head) is theirs: not emitted.
-			in_hand = merge_heads(covered, watched_heads(entry))
+			in_hand = merge_heads(covered, watched_heads(entry, time.time()))
 			for verb, pr, previous in due(matches, known, first_seen, set(), time.time(), settle, in_hand):
 				number, head = pr["number"], pr.get("headRefOid") or ""
 				key = (number, head)

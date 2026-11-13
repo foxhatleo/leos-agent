@@ -47,4 +47,4 @@ Outside a watch, the front end removes the worktree once the user has
 answered and the answer is applied:
 `python3 "<plugin-root>/scripts/review_worktree.py" remove -R OWNER/REPO -n N --all-heads`.
 It also stops any server started with `--serve`. In a watch, the watcher's
-`record`, `release`, `forget` and the PR closing remove it.
+`record`, `ack`, `release`, `forget` and the PR closing remove it.

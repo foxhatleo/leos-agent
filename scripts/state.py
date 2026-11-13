@@ -43,7 +43,7 @@ def state_file(name):
     if "/" in name or "\\" in name or ".." in name or os.path.isabs(name):
         sys.exit(f"state: {name!r} is not a valid state name (no slashes, no .., not absolute)")
     root = _data_root()
-    # 0700: the root holds handoffs and per-repo state — project context that
+    # 0700: the root holds handoffs and per-repo state, project context that
     # is nobody else's business on a shared machine. Applies on creation only;
     # an existing directory keeps whatever Leo set on it.
     os.makedirs(root, mode=0o700, exist_ok=True)

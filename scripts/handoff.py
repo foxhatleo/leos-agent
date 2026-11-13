@@ -38,7 +38,7 @@ PREFIX = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 def handoff_dir():
     # 0700 on creation, matching state.py: handoffs carry project context that
     # is nobody else's business on a shared machine. The root is created first
-    # so it gets the mode too — makedirs applies mode to the leaf only.
+    # so it gets the mode too: makedirs applies mode to the leaf only.
     root = _data_root()
     os.makedirs(root, mode=0o700, exist_ok=True)
     path = os.path.join(root, "handoffs")

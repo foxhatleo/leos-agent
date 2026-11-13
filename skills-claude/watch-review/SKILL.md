@@ -87,9 +87,11 @@ private drafts and propose. Never review in this thread.
   once; `start` exits 5 when two are already started: keep that line queued
   (its claim waits while the monitor runs) and start it when one finishes.
 - Keep a sign-off queue of finished PRs and ask about ONE PR per blocking
-  AskUserQuestion call. Before each question, dispatch what waits (up to two)
-  and run `await` for that PR's claim, so the monitor holds it while the user
-  decides:
+  AskUserQuestion call. Run `await` for a claim as soon as its reviewer's
+  report is accepted into the queue (right after `start` for a re-approve
+  line), not at its turn: an awaiting claim no longer counts toward the two
+  running reviews, and the monitor holds it without the eight-hour cap.
+  Before each question, dispatch what waits (up to two).
 
   ```
   python3 "<plugin-root>/scripts/watch_review.py" await -C <repo> N --claim TOKEN
@@ -123,8 +125,8 @@ private drafts and propose. Never review in this thread.
    is staged), or whose verdict breaks the review rules. `complete: false`
    means a finding reached neither the diff nor the body: have it restaged,
    or pass `--acknowledge-omitted "<reason>"` to `record` after reading the
-   report.
-4. At its turn, `await`, show and ask per `submit.md`, and apply the answer.
+   report. Once you accept it, `await` its claim and queue it.
+4. At its turn, show and ask per `submit.md`, and apply the answer.
 5. Then record the reviewer's stage report at the SHA actually reviewed,
    never after failed replies or staging:
 
@@ -155,16 +157,18 @@ private drafts and propose. Never review in this thread.
 `start` it as above, then dispatch a background reviewer to judge it per
 `<plugin-root>/skills/review-pr/reference/followup.md`: replies addressed to
 the user, or a fresh look at the same head for a re-request. Sometimes a
-reply is all that is needed. Queue it, `await`, ask, apply, then close the
-round with `watch_review.py ack -C <repo> N --claim TOKEN`, also when the user
-chose to do nothing. A later reply comes back as a new follow-up. A follow-up
-is never recorded or parked; release it on failure.
+reply is all that is needed. When its reviewer reports, `await` the claim and
+queue it; at its turn ask, apply, then close the round with
+`watch_review.py ack -C <repo> N --claim TOKEN`, also when the user chose to
+do nothing. A later reply comes back as a new follow-up. A follow-up is never
+recorded or parked; release it on failure.
 
 ## On a re-approve line
 
-`start` it; no reviewer. Queue a sign-off that offers `submit.md`'s ready
-one-liner, round label `New commit (base merge only)`. On a yes, submit
-APPROVE with it through `submit.md`'s recheck; then `ack` as above.
+`start` it, then `await` it at once; no reviewer. Queue a sign-off that
+offers `submit.md`'s ready one-liner, round label `New commit (base merge
+only)`. On a yes, submit APPROVE with it through `submit.md`'s recheck; then
+`ack` as above.
 
 ## What is watched
 

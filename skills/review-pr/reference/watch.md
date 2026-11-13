@@ -12,8 +12,9 @@ python3 "<plugin-root>/scripts/watch_review.py" watch -R OWNER/REPO N --head SHA
 ```
 
 It prints `{"repo","number","watched","round","round_kind"}`. With `--head`,
-the watcher does not emit that head while this pass has it, and the pass
-counts as a round. A retry at the same head and kind keeps its round.
+the pass counts as a round, and the watcher does not emit that head until it
+is recorded at that head or 24 hours pass (a verdict this pass stages with
+complete coverage marks the head reviewed anyway). A retry at the same head and kind keeps its round.
 
 Pass `round` and `round_kind` to the reviewer in its brief, and use them in
 the PR's header (`reference/submit.md`). `round_kind` is `initial`,

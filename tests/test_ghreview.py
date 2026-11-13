@@ -786,13 +786,22 @@ class FakeGitHub:
             return json.dumps(review)
         match = re.fullmatch(r"/pulls/\d+/comments/(\d+)/replies", sub)
         if match and method == "POST":
-            self.replies.append((int(match.group(1)), json.loads(payload)["body"]))
+            body = json.loads(payload)["body"]
+            self.replies.append((int(match.group(1)), body))
             self.next_comment += 1
+            # The reply joins its thread, as GitHub shows it on the next read.
+            for thread in self.threads:
+                if thread["root_id"] == int(match.group(1)):
+                    thread.setdefault("replies", []).append(
+                        {"id": self.next_comment, "author": self.login, "body": body})
             return json.dumps({"id": self.next_comment, "html_url": "https://github.com/x#%d" % self.next_comment})
         if re.fullmatch(r"/issues/\d+/comments", sub):
             if method == "POST":
                 self.commented.append(json.loads(payload)["body"])
                 self.next_comment += 1
+                self.conversation.append({"id": self.next_comment, "user": {"login": self.login, "type": "User"},
+                                          "created_at": "2026-06-01T00:00:00Z",
+                                          "body": json.loads(payload)["body"]})
                 return json.dumps({"id": self.next_comment, "html_url": "https://github.com/x#c%d" % self.next_comment})
             return self.lines(self.conversation)
         match = re.fullmatch(r"/pulls/\d+/reviews/(\d+)", sub)
@@ -834,6 +843,10 @@ class FakeGitHub:
                 "line": None, "side": None, "start_line": None, "in_reply_to_id": thread["root_id"]})
             return json.dumps({"data": {"addPullRequestReviewThreadReply": {
                 "comment": {"id": "PRRC_%d" % self.next_comment}}}})
+        if "resolveReviewThread" in query:
+            thread = next(t for t in self.threads if t["id"] == fields["thread"])
+            thread["resolved"] = True
+            return json.dumps({"data": {"resolveReviewThread": {"thread": {"id": thread["id"], "isResolved": True}}}})
         assert "reviewThreads" in query, query
         # A thread's later comments: {"id", "author", "body", "created_at"?, "bot"?, "review_state"?}.
         nodes = [{"id": t["id"], "isResolved": t.get("resolved", False), "isOutdated": False, "path": t["path"],
@@ -1933,6 +1946,32 @@ class TestPostedReplies(GitHubCase):
         code, _, err = self.reply("PRRT_mine", "--expect-latest", "555")
         self.assertEqual(code, 0, err)
 
+    def test_the_plans_own_reply_does_not_stop_resolving_with_the_same_expect_latest(self):
+        fake = self.fake()
+        code, _, err = self.reply("PRRT_mine", "--expect-latest", "555")
+        self.assertEqual(code, 0, err)
+        evidence = Path(self.tmp.name) / "evidence.json"
+        evidence.write_text(json.dumps({"thread_id": "PRRT_mine", "head_sha": self.H1, "explanation": "fixed"}))
+        resolve = ("resolve-thread", "-R", "Owner/Repo", "-n", "1", "--commit", self.H1,
+                   "--thread-id", "PRRT_mine", "--evidence-file", str(evidence), "--expect-latest", "555")
+        code, out, err = self.main(*resolve)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(json.loads(out)["resolved"], {"id": "PRRT_mine", "isResolved": True})
+        fake.threads[0]["resolved"] = False
+        # Someone else answering after the user's reply is still a change.
+        fake.threads[0]["replies"].append({"id": 20_000, "author": "bob", "body": "wait, one more push"})
+        code, _, err = self.main(*resolve)
+        self.assertEqual(code, 2)
+        self.assertIn("thread changed since the plan", err)
+        self.assertEqual(len(fake.replies), 1)
+
+    def test_an_expected_comment_that_is_gone_counts_as_a_change(self):
+        fake = self.fake()
+        code, _, err = self.reply("PRRT_mine", "--expect-latest", "999")
+        self.assertEqual(code, 2)
+        self.assertIn("thread changed since the plan", err)
+        self.assertEqual(fake.replies, [])
+
     def test_an_open_draft_stops_a_posted_reply(self):
         fake = self.fake()
         code, _, err = self.stage("Owner/Repo", {"verdict": "neutral", "reviewed": ["a.py"], "comments": [
@@ -2202,6 +2241,19 @@ class TestConversationComment(GitHubCase):
                 self.assertEqual(code, 2, err)
                 self.assertIn(message, err)
                 self.assertEqual(fake.commented, [])
+
+    def test_a_second_comment_of_the_same_plan_keeps_the_original_expect_latest(self):
+        fake = self.fake([self.said(10, "bob", "2026-01-01T00:00:00Z", "Pushed.")])
+        code, _, err = self.comment("10", text="Thanks, looks good.")
+        self.assertEqual(code, 0, err)
+        code, _, err = self.comment("10", text="One more: the changelog entry.")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(fake.commented, ["Thanks, looks good.", "One more: the changelog entry."])
+        fake.conversation.append(self.said(30_000, "bob", "2026-07-01T00:00:00Z", "hold on"))
+        code, _, err = self.comment("10", text="And a third.")
+        self.assertEqual(code, 2)
+        self.assertIn("conversation changed since the plan", err)
+        self.assertEqual(len(fake.commented), 2)
 
     def test_an_em_dash_is_refused(self):
         fake = self.fake()

@@ -22,7 +22,7 @@ _WRAP = "*_`~ \t"
 # The token must end the word: an echoed contract template such as
 # `Result: done|partial|blocked|escalate` is not a `done`.
 # A colon, hyphen, en or em dash, or equals sign separates the label from its
-# value: `Result — done` is as common in model prose as `Result: done`.
+# value: `Result`, an em dash, then `done` is as common in model prose as `Result: done`.
 _SEP = r"[*_`]*\s*[:=\-–—]"
 _RESULT_RE = re.compile(r"^result" + _SEP + r"[\s*_`]*([a-z]+)(?=$|[\s.,;!)*_`~])", re.IGNORECASE)
 _VERIFIED_RE = re.compile(r"^verified" + _SEP + r"(.*)$", re.IGNORECASE)

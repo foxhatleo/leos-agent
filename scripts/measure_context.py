@@ -41,17 +41,17 @@ LIMITS = {
 	"review_learnings_bytes": 2_200,
 	# Read by the parent once a review is staged, to show it and ask; and by a
 	# watcher's follow-up round, or a reviewer judging pushback on a thread.
-	"review_submit_bytes": 5_200,
-	"review_followup_bytes": 3_500,
+	"review_submit_bytes": 5_450,
+	"review_followup_bytes": 3_900,
 	# Read when a pass marks its PR watched, a lens runs, a check is proposed or
 	# run, or the cross-model lens is considered.
-	"review_watch_bytes": 1_300,
+	"review_watch_bytes": 1_360,
 	"review_lenses_bytes": 5_300,
 	"review_execution_bytes": 2_500,
 	"review_cross_model_bytes": 4_200,
 	# Claude-only skill bodies, one budget each; a new skill there needs one.
 	"attach_pr_body_bytes": 11_200,
-	"watch_review_body_bytes": 9_800,
+	"watch_review_body_bytes": 10_200,
 	# Portable skill bodies and their references, each limited to its current size plus about 15%.
 	"doctor_skill_body_bytes": 4_450,
 	"handoff_skill_body_bytes": 4_800,

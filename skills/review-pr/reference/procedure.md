@@ -324,14 +324,18 @@ watcher whatever the verdict, unless the watcher handed that head out itself.
 On failure preserve the report and recovery path, and apply no further
 mutations.
 
-Stage each reply into the draft (never `--post`):
+Write each reply to `$SCRATCH/reply-K.txt`. When the round also submits a
+review, stage it into that draft (never `--post`):
 
 ```
 python3 "<plugin-root>/scripts/ghreview.py" reply -R OWNER/REPO -n N \
   --thread-id PRRT_… --commit SHA --body-file "$SCRATCH/reply-1.txt"
 ```
 
-It refuses a thread the user never took part in. A replaced draft takes its
+When no submission is planned, do not stage replies: report each one's thread
+id, the thread's `latest_comment_id` you answered (the front end's snapshot
+holds the same id) and its file path; the front end posts it after the user
+agrees. `reply` refuses a thread the user never took part in. A replaced draft takes its
 replies with it (a failed replacement restores them), so re-add every reply
 still needed. Stop on any failure. A reply to a PR-level comment cannot be
 staged: write it to a scratch file and propose it with the comment id it
