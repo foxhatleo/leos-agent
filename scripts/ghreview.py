@@ -76,9 +76,9 @@ Subcommands:
                  [--user-decision TEXT] [--expect-draft FINGERPRINT|none]
                  [--dry-run]
                  submit the pending review this script staged (or, with none
-                 open, a body-only review) once the user said so. Every event
-                 needs --body-file, APPROVE too (a one-line message). The event
-                 follows the verdict recorded at SHA: ready-to-merge APPROVE,
+                 open, a body-only review) once the user said so. COMMENT and
+                 REQUEST_CHANGES need --body-file; APPROVE may go without one
+                 (a bare approval) or with a short note. The event follows the verdict recorded at SHA: ready-to-merge APPROVE,
                  neutral COMMENT, seriously-problematic REQUEST_CHANGES; COMMENT
                  is always allowed, and any other mismatch needs --user-decision
                  naming the user's choice. --expect-draft refuses (exit 3) when
@@ -106,6 +106,9 @@ Subcommands:
 
 -R is canonicalised once to GitHub's full_name, so receipts and verdicts do not
 depend on how the repository was spelled.
+
+The user never reviews their own pull request: map, delta, stage, submit,
+reply, comment and resolve-thread refuse one the authenticated user authored.
 
 stage --input file: {"verdict": "ready-to-merge"|"neutral"|"seriously-problematic",
                      "reviewed": [changed paths actually read],
@@ -2298,6 +2301,17 @@ def require_thread(repo, pr, thread_id, own=None, expect_latest=None):
     return thread
 
 
+# Commands that review, or speak as the reviewer on, a pull request. None of
+# them runs on one the user authored: the user never reviews their own PR.
+REVIEWING = frozenset(("map", "delta", "stage", "submit", "reply", "comment", "resolve-thread"))
+
+
+def require_not_own(repo, pr):
+    author = gh(["api", f"repos/{repo}/pulls/{pr}", "--jq", ".user.login"]).strip()
+    if author and author.lower() == current_login().lower():
+        raise ValueError("%s#%s is your own pull request; it is never reviewed here" % (repo, pr))
+
+
 def require_open(repo, pr):
     """Nothing is published on a pull request that was closed or merged meanwhile."""
     state = gh(["api", f"repos/{repo}/pulls/{pr}", "--jq", ".state"]).strip().lower()
@@ -2670,8 +2684,8 @@ def cmd_submit(a):
     Only a draft this script staged and nobody edited since: one the user
     changed is theirs to submit. Without an open draft, a review with only a
     body is created and submitted in one call, which is how a later round
-    approves after the author answered every finding. Every event carries a
-    message, an approval too. Never retried.
+    approves after the author answered every finding. COMMENT and
+    REQUEST_CHANGES carry a message; an approval may be bare. Never retried.
     """
     require_open(a.repo, a.pr)
     require_head(a.repo, a.pr, a.commit)
@@ -2680,11 +2694,11 @@ def cmd_submit(a):
     if refusal:
         raise ValueError(refusal)
     summary = Path(a.body_file).read_text().strip() if a.body_file else ""
-    if not summary:
-        raise ValueError("APPROVE needs a one-line message; pass --body-file" if a.event == "APPROVE" else
-                         "%s needs a review body; pass --body-file with a one- or two-sentence summary"
+    if not summary and a.event != "APPROVE":
+        raise ValueError("%s needs a review body; pass --body-file with a one- or two-sentence summary"
                          % a.event)
-    lint_text(summary, "the review summary")
+    if summary:
+        lint_text(summary, "the review summary")
     review = pending_review(a.repo, a.pr)
     comments = review_comments(a.repo, a.pr, review["id"]) if review is not None else []
     expect = getattr(a, "expect_draft", None)
@@ -2705,7 +2719,8 @@ def cmd_submit(a):
         if review.get("commit_id") != a.commit:
             raise ValueError("the pending review is anchored to another head; re-review before submitting")
         body = "\n\n".join(part for part in (summary, (review.get("body") or "").strip()) if part)
-    lint_text(body, "the review body")
+    if body:
+        lint_text(body, "the review body")
     payload = {"event": a.event}
     if body:
         payload["body"] = body
@@ -3005,8 +3020,9 @@ def build_parser():
         if name == "submit":
             sp.add_argument("--commit", required=True, help="full reviewed head SHA the verdict was recorded at")
             sp.add_argument("--event", required=True, choices=tuple(EVENTS.values()))
-            sp.add_argument("--body-file", help="file holding a short review summary (required for every "
-                                                "event), placed above anything the draft's body carries")
+            sp.add_argument("--body-file", help="file holding a short review summary (required for COMMENT "
+                                                "and REQUEST_CHANGES, optional for APPROVE), placed above "
+                                                "anything the draft's body carries")
             sp.add_argument("--user-decision", help="the user's own choice, when the event differs from "
                                                     "the verdict's and is not COMMENT")
             sp.add_argument("--expect-draft", metavar="FINGERPRINT|none",
@@ -3033,6 +3049,8 @@ def main():
     a = build_parser().parse_args()
     try:
         a.repo = canonical_repo(a.repo)
+        if a.cmd in REVIEWING:
+            require_not_own(a.repo, a.pr)
         COMMANDS[a.cmd](a)
     except subprocess.TimeoutExpired:
         print("gh timed out; inspect remote state before retrying a mutation", file=sys.stderr)

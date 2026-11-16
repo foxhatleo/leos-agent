@@ -366,8 +366,9 @@ one would settle it, not a cap. No cap overrides a standing ready-to-merge
 (§1); only a newly verified defect does, via `verdict_override`.
 
 Propose the review body the front end submits with: one or two plain
-sentences; for APPROVE one short line saying what you checked, never a bare
-"LGTM".
+sentences. For APPROVE, propose none or one short line saying what you
+checked (never "LGTM"); a line earns its place on a first look at a
+substantial change, rarely on a trivial one or a later round.
 
 ## 6. Return a report
 
