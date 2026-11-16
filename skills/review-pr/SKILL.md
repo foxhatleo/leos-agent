@@ -11,8 +11,11 @@ Resolve the plugin root to the absolute directory containing
 `PLUGIN_ROOT`, or the nearest ancestor of this skill containing that file.
 Pass the resolved path, never an unexpanded placeholder.
 
+Never review the user's own pull request: if they authored it, say so and
+stop (`ghreview.py` and `watch_review.py watch` refuse it anyway).
+
 First follow `reference/watch.md`: every pass marks its PR watched and gets the
-round to show.
+round to show. That overrides the author blacklist below.
 
 Inside a watch (a `watch-review` monitor runs in this session), always
 dispatch a background **leo-reviewer**; never review in the main thread.

@@ -91,10 +91,12 @@ The event follows the verdict: ready-to-merge APPROVE, neutral COMMENT,
 seriously-problematic REQUEST_CHANGES. An event the verdict does not map to,
 other than COMMENT, needs `--user-decision "<the user's words>"`.
 
-- APPROVE always carries a short, specific one-line body, never "LGTM".
-  Minor findings and concrete test gaps may ride on it as minor or `nit:`.
+- APPROVE may be bare (no `--body-file`) or carry one short, specific line,
+  never "LGTM". Use judgment: a note helps on a first look at a substantial
+  change; a trivial change or a later round rarely needs one. Minor findings
+  and concrete test gaps may ride on it as minor or `nit:`.
 - The user's approval still stands (`gh pr view N -R OWNER/REPO --json latestReviews`)
   or was dismissed, and a new head with real changes reviewed clean:
-  re-approve with one line.
-- A `re-approve` event: no re-review. Offer a ready line such as
-  "Re-approving after the base merge, diff unchanged." and submit it on a yes.
+  re-approve, bare unless a line adds something.
+- A `re-approve` event: no re-review. Offer it bare or with a ready line such
+  as "Re-approving after the base merge, diff unchanged." and submit on a yes.

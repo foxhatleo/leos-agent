@@ -649,8 +649,9 @@ class FakeGitHub:
     path is `gh: Not Found (HTTP 404)` on stderr.
     """
 
-    def __init__(self, head, files, full_name="Owner/Repo", base="c" * 40, login="me"):
+    def __init__(self, head, files, full_name="Owner/Repo", base="c" * 40, login="me", author="alice"):
         self.heads = [head]
+        self.author = author
         self.files = files
         self.full_name = full_name
         self.base = base
@@ -755,6 +756,8 @@ class FakeGitHub:
                 return "%d\n" % (self.changed_files if self.changed_files is not None else len(self.files))
             if jq == ".state":
                 return self.state + "\n"
+            if jq == ".user.login":
+                return self.author + "\n"
             if jq is None:
                 return json.dumps({"state": self.state, "merged": self.merged, "head": {"sha": self.head()},
                                    "base": {"sha": self.base}})
@@ -1844,15 +1847,24 @@ class TestSubmit(GitHubCase):
         self.assertTrue(json.loads(out)["refused"])
         self.assertEqual(fake.submitted, [])
 
-    def test_an_approval_without_a_message_is_refused(self):
-        fake = self.staged(verdict="ready-to-merge", comments=[])
-        for extra in ((), ("--dry-run",)):
-            code, _, err = self.submit("APPROVE", *extra)
-            self.assertEqual(code, 2)
-            self.assertIn("APPROVE needs a one-line message", err)
+    def test_an_approval_may_be_bare(self):
+        fake = self.staged(verdict="ready-to-merge",
+                           comments=[{"path": "a.py", "line": 2, "body": "nit: name it retries", "severity": "nit"}])
+        code, out, err = self.submit("APPROVE", "--dry-run")
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("body", json.loads(out))
         code, _, err = self.submit("APPROVE", body="  \n")
-        self.assertEqual(code, 2)
-        self.assertEqual((fake.posted, fake.submitted), ([], []))
+        self.assertEqual(code, 0, err)
+        review_id, sent = fake.submitted[0]
+        self.assertEqual(sent, {"event": "APPROVE"})
+        self.assertEqual(fake.reviews[review_id]["state"], "APPROVED")
+
+    def test_with_no_draft_open_a_bare_approval_is_created_and_submitted(self):
+        fake = self.staged(verdict="ready-to-merge", comments=[])
+        self.assertEqual(fake.reviews, {})
+        code, _, err = self.submit("APPROVE")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(fake.posted[-1], {"event": "APPROVE", "commit_id": self.H1})
 
     def test_with_no_draft_open_a_body_only_approval_carries_its_line(self):
         fake = self.staged(verdict="ready-to-merge", comments=[])
@@ -2277,8 +2289,36 @@ class TestStageLint(GitHubCase):
                 self.assertEqual(code, 2)
                 self.assertIn("em dash in", err)
                 self.assertIn(where, err)
-                # Nothing past the repository-name lookup: no listing, no draft.
-                self.assertEqual([c["args"][1] for c in fake.calls if c["args"][1] != "repos/Owner/Repo"], [])
+                # Nothing past the repository-name and own-PR lookups: no listing, no draft.
+                self.assertEqual([c["args"][1] for c in fake.calls if c["args"][1] != "repos/Owner/Repo"
+                                  and "--jq" not in c["args"] and c["args"][1] != "user"], [])
+
+
+class TestOwnPullRequest(GitHubCase):
+    """The user never reviews their own pull request."""
+
+    FILES = [text_file("a.py", "@@ -1,1 +1,3 @@\n ctx\n+one\n+two")]
+
+    def test_every_reviewing_command_refuses_the_users_own_pull_request(self):
+        fake = self.github(self.H1, self.FILES, author="Me")
+        body = Path(self.tmp.name) / "body.txt"
+        body.write_text("Looks fine.")
+        for argv in (("map", "--commit", self.H1),
+                     ("submit", "--commit", self.H1, "--event", "APPROVE"),
+                     ("comment", "--commit", self.H1, "--body-file", str(body), "--expect-latest", "none")):
+            with self.subTest(argv[0]):
+                code, _, err = self.main(argv[0], "-R", "Owner/Repo", "-n", "1", *argv[1:])
+                self.assertEqual(code, 2)
+                self.assertIn("your own pull request", err)
+        code, _, err = self.stage("Owner/Repo", {"verdict": "ready-to-merge", "reviewed": ["a.py"]}, self.H1)
+        self.assertEqual(code, 2)
+        self.assertIn("your own pull request", err)
+        self.assertEqual((fake.posted, fake.submitted, fake.commented), ([], [], []))
+
+    def test_someone_elses_pull_request_is_reviewed_as_usual(self):
+        self.github(self.H1, self.FILES)
+        code, _, err = self.main("map", "-R", "Owner/Repo", "-n", "1", "--commit", self.H1)
+        self.assertEqual(code, 0, err)
 
 
 class TestSnapshotRecheck(GitHubCase):

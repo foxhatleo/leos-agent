@@ -503,8 +503,10 @@ nothing goes public until you answer for that PR.
   finding; a flaky or unrelated one is a note to you, never posted.
 - **Verdict.** Data loss, a security hole or a crash on a realistic path
   requests changes; something that does not work as intended comments; minor
-  findings, nits and concrete test gaps ride on an approval. Every review
-  carries a body, and an approval is one specific line, never "LGTM". A
+  findings, nits and concrete test gaps ride on an approval. Comments and
+  change requests carry a body; an approval may be bare or carry one specific
+  line (never "LGTM"), the line usually on a first look at a substantial
+  change. Your own PRs are never reviewed. A
   ready-to-merge verdict stands until the PR diff changes, hunk line numbers
   aside. The repository's own CLAUDE.md, AGENTS.md and REVIEW.md rules count
   only when quoted.
@@ -551,14 +553,18 @@ a second provider's CLI.
 | A re-request at a head already reviewed | Looked at again |
 | A new head on a followed PR | Re-reviewed |
 | A reply or comment addressed to you | Judged against the code and answered |
-| Your approval gone stale where the repo wants a fresh one | Offered a one-line re-approval |
+| Your approval gone stale where the repo wants a fresh one | Offered a re-approval |
+| A PR you authored | Never reviewed or followed |
+| A PR by a blacklisted author | Ignored until you run `/review-pr` on it |
 
 A PR stays followed until merged or closed; there is no unwatch, and a draft
 pauses it. Up to two background reviewers work while you are asked about one
 PR at a time in a blocking question. A head waiting on a decision only you
 can make is parked without spending retries. Approval freshness is read from
 the base branch's rules (`watch_review.py config --freshness auto|strict|off`
-overrides it). Each piece of work is one line:
+overrides it). `watch_review.py blacklist --add LOGIN` (and `--remove`)
+keeps the author blacklist, one list for every repository, under
+`~/.leos-agent-local`. Each piece of work is one line:
 
 ```
 <verb> OWNER/REPO#N head=SHA [prev=SHA] [threads=K] [conversation=1] [by=LOGIN] claim=TOKEN URL | TITLE

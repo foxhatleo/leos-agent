@@ -89,8 +89,9 @@ class FakeGitHub:
         self.rules, self.protection = None, None
 
     def add(self, number, head, title="Fix the retry backoff", requested=True, team_only=False,
-            draft=False, state="open", closed_at=None, patch=PATCH):
+            draft=False, state="open", closed_at=None, patch=PATCH, author="alice"):
         self.prs[number] = {"head": head, "title": title, "requested": requested, "team_only": team_only,
+                            "author": author,
                             "draft": draft, "state": state, "closed_at": closed_at, "patch": patch,
                             "stale": 0, "old": None, "reviews": {}, "threads": [], "requests": [],
                             "conversation": []}
@@ -138,7 +139,7 @@ class FakeGitHub:
                    for t in pr["threads"]]
         return dict({"id": f"PR_{number}", "number": number, "title": pr["title"], "isDraft": pr["draft"],
                      "state": state, "url": f"https://github.com/{self.full_name}/pull/{number}",
-                     "headRefOid": pr["head"], "author": {"login": "alice"},
+                     "headRefOid": pr["head"], "author": {"login": pr["author"]},
                      "comments": {"nodes": pr["conversation"][-20:]},
                      "reviewThreads": {"nodes": threads, "pageInfo": {"hasNextPage": False, "endCursor": None}}},
                     **self.mine(pr))
@@ -185,7 +186,7 @@ class FakeGitHub:
         requester = {"__typename": "Team"} if pr["team_only"] else {"__typename": "User", "login": self.login}
         return dict({"id": f"PR_{number}", "number": number, "title": pr["title"], "isDraft": pr["draft"],
                      "url": f"https://github.com/{self.full_name}/pull/{number}", "headRefOid": pr["head"],
-                     "author": {"login": "alice"},
+                     "author": {"login": pr["author"]},
                      "reviewRequests": {"nodes": [{"requestedReviewer": requester}],
                                         "pageInfo": {"hasNextPage": False, "endCursor": None}},
                      "latestReviews": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}},
@@ -251,6 +252,8 @@ class FakeGitHub:
         jq = args[args.index("--jq") + 1]
         if jq == ".head.sha":
             return pr["head"] + "\n"
+        if jq == ".user.login":
+            return pr["author"] + "\n"
         if jq == "[.state, .closed_at]":
             return json.dumps([pr["state"], pr["closed_at"]])
         raise AssertionError("unhandled gh call %r" % (args,))
@@ -1850,6 +1853,39 @@ class TestWatchAndParticipation(HostCase):
         live = json.loads(self.cli("watch", "1", "--head", H2))
         self.assertEqual((live["round"], live["round_kind"]), (3, "commit+comment"))
         self.assertEqual(self.w.summary("o/r")["rounds"], {"1": 3})
+
+
+class TestAuthorFilters(HostCase):
+    """The user's own pull requests never; a blacklisted author's only through review-pr."""
+
+    def events(self, ticks=1, **kwargs):
+        out, _ = self.drive(ticks, **kwargs)
+        return [(e["verb"], e["pr"]) for e in map(parse, out) if e]
+
+    def test_the_users_own_pull_request_is_never_emitted_nor_watched(self):
+        self.github.add(1, H1, author="Leo")
+        self.github.add(2, H1)
+        self.assertEqual(self.events(), [("review-requested", 2)])
+        with self.assertRaisesRegex(ValueError, "your own pull request"):
+            self.cli("watch", "1", "--head", H1)
+        self.assertNotIn("1", self.w.load_entry("o/r").get("watched") or {})
+
+    def test_a_blacklisted_author_waits_for_review_pr(self):
+        self.assertEqual(json.loads(self.cli("blacklist", "--add", "Bob", "dependabot[bot]")),
+                         {"blacklist": ["Bob", "dependabot[bot]"]})
+        self.github.add(1, H1, author="bob")
+        self.github.add(2, H1, author="alice")
+        self.assertEqual(self.events(), [("review-requested", 2)])
+        # A manual review-pr pass names it with `watch`; from then on it is followed.
+        self.cli("watch", "1")
+        self.assertIn(("review-requested", 1), self.events(start=600))
+
+    def test_the_blacklist_is_one_case_insensitive_list(self):
+        self.cli("blacklist", "--add", "bob", "BOB", "carol")
+        self.assertEqual(json.loads(self.cli("blacklist", "--remove", "Carol")), {"blacklist": ["bob"]})
+        self.assertEqual(json.loads(self.cli("blacklist")), {"blacklist": ["bob"]})
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            self.cli("blacklist", "--add", "not a login")
 
 
 class TestWatchedHeadExpiry(HostCase):

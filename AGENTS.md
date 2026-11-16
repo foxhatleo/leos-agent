@@ -342,9 +342,15 @@ front end's steps are in `submit.md`, `followup.md`, `execution.md` and
   submits only an owned, unedited draft (an edited one is the user's to
   submit; `--expect-draft` refuses a changed one), or creates a body-only
   review when none is open, and records the submission beside the verdict.
-  Every event needs a body; an approval is one specific line, never "LGTM".
-  When the user's approval stands or was dismissed and a new head with real
-  changes reviews clean, re-approve with one line.
+  COMMENT and REQUEST_CHANGES need a body. APPROVE may be bare; nothing in a
+  script requires a note. A note is one specific line, never "LGTM", and the
+  model decides when it helps (usually a first look at a substantial change,
+  rarely a trivial one or a later round; Leo, 2026-11-16). When the user's
+  approval stands or was dismissed and a new head with real changes reviews
+  clean, re-approve.
+- Never review the user's own PR. `ghreview.py` map, delta, stage, submit,
+  reply, comment and resolve-thread refuse one the authenticated user
+  authored; `watch_review.py watch` refuses it and discovery drops it.
 - Replace only unchanged owned drafts after the new review is ready. Preserve
   manual edits, ownership receipts, and recovery data. Head drift means re-review.
   Receipts hash only what GitHub returns for a PENDING review (path, body,
@@ -423,7 +429,11 @@ front end's steps are in `submit.md`, `followup.md`, `execution.md` and
   newer than the user's last review and the handled marker, and replies
   addressed to the user on a followed PR. A PR is followed when it has a
   recorded head or verdict or was marked watched, until merged or closed;
-  there is no unwatch, and a draft pauses it. Someone else's approval does
+  there is no unwatch, and a draft pauses it. A blacklisted author's PRs
+  (`watch_review.py blacklist`, one global list in `review-blacklist.json`
+  under `~/.leos-agent-local`, case-insensitive) are dropped from discovery
+  unless `watch` named them, so `/review-pr` overrides it and the PR is then
+  followed as usual; previously followed ones stop. Someone else's approval does
   not exclude a PR. Followed PRs cost one batched query per tick.
 - Event lines are `<verb> OWNER/REPO#N head=SHA [prev=SHA] [threads=K]
   [conversation=1] [by=LOGIN] claim=TOKEN URL | TITLE`, split on the first

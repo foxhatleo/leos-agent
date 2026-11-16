@@ -166,8 +166,8 @@ recorded or parked; release it on failure.
 ## On a re-approve line
 
 `start` it, then `await` it at once; no reviewer. Queue a sign-off that
-offers `submit.md`'s ready one-liner, round label `New commit (base merge
-only)`. On a yes, submit APPROVE with it through `submit.md`'s recheck; then
+offers a re-approve as `submit.md` says, round label `New commit (base merge
+only)`. On a yes, submit APPROVE through `submit.md`'s recheck; then
 `ack` as above.
 
 ## What is watched
@@ -176,7 +176,9 @@ Sources: PRs marked by `/review-pr` (at once), direct review requests (never
 team-only), same-head re-requests, replies addressed to the user on a followed
 PR, and approvals gone stale where approval freshness applies. A followed PR
 stays followed until merged or closed, whether or not it still requests
-review; a draft pauses it. Bots' replies never count. A head a manual
+review; a draft pauses it. Bots' replies never count. The user's own PRs are
+never picked up, and a blacklisted author's only once `/review-pr` marked
+them. A head a manual
 `review-pr` pass staged with complete coverage counts as reviewed, whatever
 the verdict. Emission never marks anything done: only `record` and `ack` do.
 State for PRs closed over 30 days ago is pruned.
@@ -185,6 +187,7 @@ State for PRs closed over 30 days ago is pruned.
 python3 "<plugin-root>/scripts/watch_review.py" state -C <repo>
 python3 "<plugin-root>/scripts/watch_review.py" forget -C <repo> N
 python3 "<plugin-root>/scripts/watch_review.py" config -C <repo> --freshness auto
+python3 "<plugin-root>/scripts/watch_review.py" blacklist --add LOGIN
 ```
 
 `state` shows reviewed heads, verdicts (with any carry, coverage and
@@ -192,4 +195,6 @@ submission), watched PRs, rounds and parked heads. `forget` clears a PR's
 reviewed head, attempts, handled replies and any block; its stored verdict
 stays but no longer marks a head reviewed, so the PR comes back. `config`
 shows or sets approval freshness: `auto` (the default) reads the base branch's
-rules, `strict` and `off` override it.
+rules, `strict` and `off` override it. `blacklist` shows the author
+blacklist (one list for every repository, on this machine); `--add` and
+`--remove` change it.

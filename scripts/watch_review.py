@@ -18,6 +18,7 @@ batched query for the pull requests the user is following here.
   watch_review.py unblock [-C DIR] <n>
   watch_review.py state|forget [-C DIR] [numbers...]
   watch_review.py config [-C DIR] [--freshness auto|strict|off]
+  watch_review.py blacklist [--add LOGIN ...] [--remove LOGIN ...]
 
 Each event is one line, machine fields first and the attacker-written title
 last, after the first " | ":
@@ -85,7 +86,11 @@ last-push approval means strict; anything unreadable means off), cached for
 six hours. Any other new push is eligible again. On a head the watcher has
 spent an attempt on, only `record` completes it, whatever stage recorded;
 forget and unblock hand a stored verdict back, so its head is emitted again.
-Drafts and team-only requests are excluded.
+Drafts and team-only requests are excluded, and so is every pull request the
+user authored: `watch` refuses one too. A blacklisted author's pull requests
+(`blacklist`, one list for every repository, kept in the machine-local data
+directory) are not emitted unless `watch` named them, which a manual
+review-pr pass does; that pull request is then followed as usual.
 
 Intended for Claude Code's Monitor tool, which turns each stdout line into a
 session notification. Any `read`-driven shell loop works the same way. Where
@@ -122,6 +127,7 @@ import ghreview  # noqa: E402
 import state as state_mod  # noqa: E402
 
 STATE_NAME = "review-watcher"
+BLACKLIST_NAME = "review-blacklist"
 SHA_RE = r"[0-9a-f]{40}"
 TOKEN_RE = r"[0-9a-f]{32}"  # uuid4().hex, as claim_review mints it
 LEASE = 1800  # seconds a started review holds its claim after `start` or `renew`
@@ -245,6 +251,7 @@ MORE_THREADS_QUERY = """query($id:ID!,$cursor:String) { node(id:$id) { ... on Pu
  reviewThreads(first:100,after:$cursor) { nodes { %s } %s } } } }""" % (THREAD_FIELDS, PAGE_FIELDS)
 
 _IDENTITY = {}
+_LOGIN = {}
 _CANONICAL = {}
 # Pull requests seen merged or closed, per repository: never queried again by
 # this process. prune_closed drops their state once retention passes.
@@ -260,11 +267,18 @@ def identity(cwd):
 	key = os.path.realpath(cwd)
 	if key not in _IDENTITY:
 		repo = json.loads(gh(["repo", "view", "--json", "nameWithOwner"], cwd))["nameWithOwner"]
+		_IDENTITY[key] = (repo, viewer_login(cwd))
+	return _IDENTITY[key]
+
+
+def viewer_login(cwd):
+	"""The authenticated user's login, asked once per process."""
+	if "login" not in _LOGIN:
 		login = gh(["api", "user", "--jq", ".login"], cwd).strip()
 		if not login:
 			raise GhError("gh api user returned no login; is gh authenticated?")
-		_IDENTITY[key] = (repo, login)
-	return _IDENTITY[key]
+		_LOGIN["login"] = login
+	return _LOGIN["login"]
 
 
 def canonical_repo(name, cwd):
@@ -340,7 +354,43 @@ def discover(cwd):
 			for r in connection_nodes(item["reviewRequests"], more)]
 		annotate(item, item, login)
 		listing.append(item)
-	return repo, login, candidates(eligible(listing, login), followed(repo, login, cwd))
+	found = candidates(eligible(listing, login), followed(repo, login, cwd))
+	return repo, login, wanted(found, login, blacklisted(), watched_of(load_entry(repo)))
+
+
+def author_of(pr):
+	return str((pr.get("author") or {}).get("login") or "")
+
+
+def wanted(prs, login, blocked, watched):
+	"""Drop the user's own pull requests, and a blacklisted author's unless
+	`watch` named it (a manual review-pr pass overrides the blacklist)."""
+	blocked = {a.lower() for a in blocked}
+	return [pr for pr in prs if not same_login(author_of(pr), login)
+		and (author_of(pr).lower() not in blocked or pr["number"] in watched)]
+
+
+def blacklisted():
+	"""The blacklisted author logins, one list for every repository."""
+	authors = state_mod.load(state_mod.state_file(BLACKLIST_NAME)).get("authors")
+	return [a for a in authors if isinstance(a, str)] if isinstance(authors, list) else []
+
+
+def set_blacklist(add=(), remove=()):
+	"""Add and remove authors (case-insensitive, GitHub logins); returns the list."""
+	path = state_mod.state_file(BLACKLIST_NAME)
+	with state_mod._locked(path):
+		data = state_mod.load(path)
+		authors = [a for a in data.get("authors") or [] if isinstance(a, str)]
+		drop = {a.lower() for a in remove}
+		authors = [a for a in authors if a.lower() not in drop]
+		for login in add:
+			if login.lower() not in {a.lower() for a in authors}:
+				authors.append(login)
+		if add or remove:
+			data["authors"] = sorted(authors, key=str.lower)
+			state_mod.atomic_write(path, data)
+	return {"blacklist": sorted(authors, key=str.lower)}
 
 
 def nodes_of(connection):
@@ -1693,6 +1743,13 @@ def claim_view(repo, number, claim):
 		"attempt": claim.get("attempts", 0), "of": ATTEMPTS, "expires": int(claim.get("expires", 0))}
 
 
+def github_login(value):
+	# Bots are spelled "name[bot]" in author fields.
+	if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?", value or ""):
+		raise argparse.ArgumentTypeError("expected a GitHub login")
+	return value
+
+
 def owner_repo(value):
 	if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value or ""):
 		raise argparse.ArgumentTypeError("expected OWNER/REPO")
@@ -1765,11 +1822,18 @@ def build_parser():
 	directory(config)
 	config.add_argument("--freshness", choices=FRESHNESS,
 		help="approval freshness: auto detects from branch rules (default), strict or off override it")
+	black = sub.add_parser("blacklist", help="show or change the authors whose pull requests are never "
+		"picked up unless review-pr named them (every repository)")
+	black.add_argument("--add", nargs="+", type=github_login, metavar="LOGIN")
+	black.add_argument("--remove", nargs="+", type=github_login, metavar="LOGIN")
 	return parser
 
 
 def main(argv):
 	args = build_parser().parse_args(argv)
+	if args.mode == "blacklist":
+		print(json.dumps(set_blacklist(args.add or (), args.remove or ()), indent=1))
+		return 0
 	if args.directory is None:
 		args.directory = "."
 	if not os.path.isdir(args.directory):
@@ -1789,6 +1853,9 @@ def main(argv):
 				raise ValueError(f"GitHub does not know {args.repo}")
 		else:
 			repo, _ = identity(args.directory)
+		author = gh(["api", f"repos/{repo}/pulls/{args.number}", "--jq", ".user.login"], args.directory).strip()
+		if same_login(author, viewer_login(args.directory)):
+			raise ValueError(f"{repo}#{args.number} is your own pull request; it is never reviewed or watched")
 		print(json.dumps(watch(repo, args.number, args.head, time.time())))
 		return 0
 
