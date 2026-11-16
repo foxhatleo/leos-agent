@@ -195,6 +195,6 @@ submission), watched PRs, rounds and parked heads. `forget` clears a PR's
 reviewed head, attempts, handled replies and any block; its stored verdict
 stays but no longer marks a head reviewed, so the PR comes back. `config`
 shows or sets approval freshness: `auto` (the default) reads the base branch's
-rules, `strict` and `off` override it. `blacklist` shows the author
+rules, `strict` and `off` override it. `blacklist` (also `/review-blacklist`) shows the author
 blacklist (one list for every repository, on this machine); `--add` and
 `--remove` change it.

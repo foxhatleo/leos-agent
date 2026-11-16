@@ -52,6 +52,7 @@ LIMITS = {
 	# Claude-only skill bodies, one budget each; a new skill there needs one.
 	"attach_pr_body_bytes": 11_200,
 	"watch_review_body_bytes": 10_200,
+	"review_blacklist_body_bytes": 1_300,
 	# Portable skill bodies and their references, each limited to its current size plus about 15%.
 	"doctor_skill_body_bytes": 4_450,
 	"handoff_skill_body_bytes": 4_800,

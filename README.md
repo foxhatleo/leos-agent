@@ -426,6 +426,7 @@ require investigation of actual execution.
 | handoff / handon | Save concise context pointers and resume after checking drift. |
 | watch-review | Claude Monitor watcher that reviews, re-reviews and answers what is addressed to you like a human reviewer; code polls GitHub, models run only when there is work. |
 | attach-pr | Claude-specific attachment of an existing PR to the desktop session. |
+| review-blacklist | Claude-specific: show or change the authors watch-review never picks up on its own. |
 
 Only small routing instructions and necessary metadata are always present.
 Detailed review procedures remain in deferred reference files. Duplicate
@@ -562,8 +563,8 @@ pauses it. Up to two background reviewers work while you are asked about one
 PR at a time in a blocking question. A head waiting on a decision only you
 can make is parked without spending retries. Approval freshness is read from
 the base branch's rules (`watch_review.py config --freshness auto|strict|off`
-overrides it). `watch_review.py blacklist --add LOGIN` (and `--remove`)
-keeps the author blacklist, one list for every repository, under
+overrides it). `/review-blacklist add LOGIN` (or `watch_review.py blacklist
+--add LOGIN`, and `remove`) keeps the author blacklist, one list for every repository, under
 `~/.leos-agent-local`. Each piece of work is one line:
 
 ```
